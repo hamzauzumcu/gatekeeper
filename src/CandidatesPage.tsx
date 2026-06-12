@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check,
-  Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus,
+  Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus, Sparkles,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -68,6 +68,21 @@ function FitBadge({ status }: { status: string | null }) {
   return (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${s.badge}`}>
       {s.label}
+    </span>
+  )
+}
+
+function ScoreBadge({ score }: { score: number | null | undefined }) {
+  if (score == null) return <span className="text-muted-foreground">—</span>
+  const cls =
+    score >= 75
+      ? 'bg-green-50 text-green-700 border-green-200'
+      : score >= 50
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : 'bg-red-50 text-red-700 border-red-200'
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls}`}>
+      {score}
     </span>
   )
 }
@@ -293,7 +308,8 @@ function ColumnPicker({
             <div className="max-h-80 overflow-y-auto">
               {Object.entries(byPosition).map(([posTitle, qs]) => (
                 <div key={posTitle}>
-                  <div className="sticky top-0 bg-muted/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div className="sticky top-0 bg-muted/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                    {posTitle === 'AI Analysis' && <Sparkles className="size-3 text-violet-500" />}
                     {posTitle}
                   </div>
                   {qs.map((q) => {
@@ -542,7 +558,7 @@ export default function CandidatesPage() {
   }
 
   function clearFilters() {
-    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [], answerFilters: [] }
+    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
     setFilters(cleared)
     saveFilters(cleared)
   }
@@ -661,7 +677,8 @@ export default function CandidatesPage() {
     (filters.countries.length > 0 ? 1 : 0) +
     (filters.position ? 1 : 0) +
     (filters.fit_statuses.length > 0 ? 1 : 0) +
-    filters.answerFilters.length
+    filters.answerFilters.length +
+    (filters.min_score || filters.max_score ? 1 : 0)
 
   const allSelected = candidates.length > 0 && selectedIds.size === candidates.length
   const someSelected = selectedIds.size > 0 && !allSelected
@@ -673,7 +690,7 @@ export default function CandidatesPage() {
     .map((id) => questionColumns.find((q) => q.id === id))
     .filter(Boolean) as QuestionColumn[]
 
-  const totalCols = 8 + visibleQuestions.length
+  const totalCols = 9 + visibleQuestions.length
 
   return (
     <Card>
@@ -729,6 +746,36 @@ export default function CandidatesPage() {
               placeholder="All statuses"
               minWidth="min-w-36"
             />
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                placeholder="min"
+                value={filters.min_score}
+                onChange={(e) => updateFilter('min_score', e.target.value)}
+                className={[
+                  'h-9 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  filters.min_score ? 'font-medium text-foreground' : 'text-muted-foreground',
+                ].join(' ')}
+              />
+              <span className="text-xs text-muted-foreground">–</span>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                placeholder="max"
+                value={filters.max_score}
+                onChange={(e) => updateFilter('max_score', e.target.value)}
+                className={[
+                  'h-9 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                  filters.max_score ? 'font-medium text-foreground' : 'text-muted-foreground',
+                ].join(' ')}
+              />
+            </div>
             <ColumnPicker
               questionColumns={questionColumns}
               visibleIds={visibleQuestionIds}
@@ -762,8 +809,8 @@ export default function CandidatesPage() {
           </div>
         )}
 
-        {/* Active filter tags (country, position, fit_status) */}
-        {(filters.countries.length > 0 || filters.position || filters.fit_statuses.length > 0) && (
+        {/* Active filter tags (country, position, fit_status, score) */}
+        {(filters.countries.length > 0 || filters.position || filters.fit_statuses.length > 0 || filters.min_score || filters.max_score) && (
           <div className="mt-1 flex flex-wrap gap-1.5">
             {filters.countries.map((c) => (
               <Badge key={c} variant="secondary" className="gap-1 pr-1">
@@ -803,6 +850,17 @@ export default function CandidatesPage() {
                 </Badge>
               ) : null
             })}
+            {(filters.min_score || filters.max_score) && (
+              <Badge variant="secondary" className="gap-1 pr-1">
+                Score {filters.min_score || '0'}–{filters.max_score || '100'}
+                <button
+                  onClick={() => { updateFilter('min_score', ''); updateFilter('max_score', '') }}
+                  className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
+                >
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            )}
           </div>
         )}
       </CardHeader>
@@ -835,6 +893,12 @@ export default function CandidatesPage() {
               <TableHead>Position</TableHead>
               <TableHead>Salary Expectation</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="w-20 text-center">
+                <span className="inline-flex items-center gap-1">
+                  <Sparkles className="size-3 text-muted-foreground" />
+                  Score
+                </span>
+              </TableHead>
               <TableHead>Last application</TableHead>
               {visibleQuestions.map((q) => (
                 <TableHead key={q.id} className="max-w-40">
@@ -920,6 +984,9 @@ export default function CandidatesPage() {
                       </TableCell>
                       <TableCell>
                         <FitBadge status={cand.fit_status} />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <ScoreBadge score={cand.ai_score} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {formatDate(cand.latest_submitted_at)}
@@ -1251,13 +1318,21 @@ function CandidateDetailView({
               <div key={app.id} className="overflow-hidden rounded-xl border">
                 <div className="flex items-start justify-between bg-muted/40 px-5 py-4">
                   <div>
-                    <div className="font-semibold">{app.position_title ?? 'Position'}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{app.position_title ?? 'Position'}</span>
+                      {app.ai_score != null && <ScoreBadge score={app.ai_score} />}
+                    </div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
                       {formatDate(app.submitted_at)}
                       {applications.length > 1 && (
                         <span className="ml-2 font-medium text-foreground/50">#{idx + 1}</span>
                       )}
                     </div>
+                    {app.ai_score_reasoning && (
+                      <p className="mt-1.5 text-xs text-muted-foreground max-w-prose leading-relaxed">
+                        {app.ai_score_reasoning}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -1275,6 +1350,80 @@ function CandidateDetailView({
                       </a>
                     </div>
                   )}
+
+                  {app.resume_parse_version > 0 && app.resume_parsed && (() => {
+                    let p: Record<string, unknown>
+                    try { p = JSON.parse(app.resume_parsed) } catch { return null }
+                    const edu = (p.education as { school?: string; degree?: string; year?: number | null }[] | undefined) ?? []
+                    const work = (p.work_history as { company?: string; role?: string; start?: string | null; end?: string | null; months?: number | null }[] | undefined) ?? []
+                    const skills = (p.skills as string[] | undefined) ?? []
+                    const languages = (p.languages as string[] | undefined) ?? []
+                    return (
+                      <div className="px-5 py-4">
+                        <div className="mb-3 flex items-center gap-1.5">
+                          <Sparkles className="size-3.5 text-violet-500" />
+                          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Analysis</span>
+                        </div>
+                        <dl className="space-y-3">
+                          {(p.total_experience_years as number | null) != null && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Experience</dt>
+                              <dd className="font-medium">{p.total_experience_years as number} years</dd>
+                            </div>
+                          )}
+                          {edu.length > 0 && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Education</dt>
+                              {edu.map((e, i) => (
+                                <dd key={i} className="font-medium">
+                                  {e.school ?? '—'}{e.degree ? ` · ${e.degree}` : ''}{e.year ? ` (${e.year})` : ''}
+                                </dd>
+                              ))}
+                            </div>
+                          )}
+                          {work.length > 0 && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Work History</dt>
+                              <dd className="space-y-1.5 mt-0.5">
+                                {work.map((w, i) => (
+                                  <div key={i} className="leading-snug">
+                                    <span className="font-medium">{w.role ?? '—'}</span>
+                                    {w.company && <span className="text-muted-foreground"> · {w.company}</span>}
+                                    {(w.start || w.months) && (
+                                      <div className="text-xs text-muted-foreground">
+                                        {w.start}{w.end ? ` – ${w.end}` : w.start ? ' – present' : ''}
+                                        {w.months ? ` (${w.months} mo)` : ''}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </dd>
+                            </div>
+                          )}
+                          {skills.length > 0 && (
+                            <div className="text-sm">
+                              <dt className="mb-1 text-xs text-muted-foreground">Skills</dt>
+                              <dd className="flex flex-wrap gap-1">
+                                {skills.map((s, i) => (
+                                  <span key={i} className="rounded-md bg-muted px-1.5 py-0.5 text-xs">{s}</span>
+                                ))}
+                              </dd>
+                            </div>
+                          )}
+                          {languages.length > 0 && (
+                            <div className="text-sm">
+                              <dt className="mb-1 text-xs text-muted-foreground">Languages</dt>
+                              <dd className="flex flex-wrap gap-1">
+                                {languages.map((l, i) => (
+                                  <span key={i} className="rounded-md bg-muted px-1.5 py-0.5 text-xs">{l}</span>
+                                ))}
+                              </dd>
+                            </div>
+                          )}
+                        </dl>
+                      </div>
+                    )
+                  })()}
 
                   {app.answers.length > 0 && (
                     <div className="px-5 py-4">

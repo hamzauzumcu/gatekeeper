@@ -15,6 +15,7 @@ export type CandidateListItem = {
   latest_application_id: number | null
   fit_status: string | null
   notes_count: number
+  ai_score: number | null
   extra_answers?: Record<string, string | null>
 }
 
@@ -37,6 +38,10 @@ export type CandidateApplication = {
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
+  resume_parsed: string | null
+  resume_parse_version: number
+  ai_score: number | null
+  ai_score_reasoning: string | null
 }
 
 export type CandidateDetail = {
@@ -129,6 +134,8 @@ export type ActiveFilters = {
   position: string
   fit_statuses: string[]
   answerFilters: AnswerFilter[]
+  min_score: string
+  max_score: string
 }
 
 const FILTER_STORAGE_KEY = 'gk_candidate_filters'
@@ -148,12 +155,14 @@ export function loadSavedFilters(): ActiveFilters {
         position: typeof parsed.position === 'string' ? parsed.position : '',
         fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
         answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
+        min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
+        max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
       }
     }
   } catch {
     // ignore
   }
-  return { countries: [], position: '', fit_statuses: [], answerFilters: [] }
+  return { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
 }
 
 export function saveFilters(f: ActiveFilters): void {
@@ -205,6 +214,8 @@ export async function fetchCandidates(
     params.append('af_op', f.op)
     params.append('af_v', f.value)
   })
+  if (filters.min_score) params.set('min_score', filters.min_score)
+  if (filters.max_score) params.set('max_score', filters.max_score)
   const res = await fetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
@@ -306,6 +317,41 @@ export function formatDate(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+export type PositionWithPrompt = {
+  id: number
+  title: string
+  prompt: string | null
+  updated_at: string | null
+}
+
+export async function fetchScoringPrompts(): Promise<PositionWithPrompt[]> {
+  const res = await fetch('/api/admin/scoring-prompts')
+  const data = (await res.json()) as { ok: true; positions: PositionWithPrompt[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch scoring prompts')
+  return data.positions
+}
+
+export async function saveScoringPrompt(positionId: number, prompt: string): Promise<void> {
+  const res = await fetch(`/api/admin/scoring-prompts/${positionId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to save prompt')
+}
+
+export async function syncScores(opts: { limit?: number; dryRun?: boolean } = {}): Promise<{ pending?: number; processed?: number; failed?: number; remaining?: number }> {
+  const res = await fetch('/api/admin/sync-scores', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  })
+  const data = (await res.json()) as { ok: true; pending?: number; processed?: number; failed?: number; remaining?: number } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'sync failed')
+  return data
 }
 
 export function formatDateShort(iso: string | null): string {

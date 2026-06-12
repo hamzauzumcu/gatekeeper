@@ -235,7 +235,8 @@ export async function handleTallyWebhook(
   webhookSecret: string | undefined,
   db: D1Database,
   resumes: R2Bucket,
-  r2PublicUrl: string
+  r2PublicUrl: string,
+  deepseekApiKey?: string
 ): Promise<{ status: number; body: object }> {
   // Signature check — skip only if no secret configured (dev mode)
   if (webhookSecret) {
@@ -263,7 +264,7 @@ export async function handleTallyWebhook(
   const importPayload = tallyToImportPayload(payload)
 
   try {
-    const summary = await importApplications(db, importPayload, resumes, r2PublicUrl)
+    const summary = await importApplications(db, importPayload, resumes, r2PublicUrl, deepseekApiKey)
     return { status: 200, body: { ok: true, summary } }
   } catch (e) {
     return { status: 500, body: { ok: false, error: e instanceof Error ? e.message : 'import error' } }

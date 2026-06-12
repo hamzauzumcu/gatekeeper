@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Sun, Moon } from 'lucide-react'
 import ImportPage from './ImportPage'
 import CandidatesPage from './CandidatesPage'
+import SettingsPage from './SettingsPage'
 import LoginPage from './LoginPage'
 import { getUser, logout, type User } from '@/lib/auth'
 import { useDarkMode } from '@/lib/theme'
@@ -40,6 +41,7 @@ export default function App() {
         <TabsList>
           <TabsTrigger value="candidates">Candidates</TabsTrigger>
           <TabsTrigger value="import">Import CSV</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="candidates" className="mt-4">
@@ -48,6 +50,10 @@ export default function App() {
 
         <TabsContent value="import" className="mt-4">
           <ImportPage />
+        </TabsContent>
+
+        <TabsContent value="settings" className="mt-4">
+          <SettingsPage />
         </TabsContent>
       </Tabs>
     </div>

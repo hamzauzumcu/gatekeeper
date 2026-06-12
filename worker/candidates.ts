@@ -1,5 +1,7 @@
 // Candidate list and detail queries (read-only).
 
+import { CV_COLUMNS } from './cv-schema'
+
 export type CandidateListItem = {
   id: number
   full_name: string | null
@@ -15,6 +17,7 @@ export type CandidateListItem = {
   latest_application_id: number | null
   fit_status: string | null
   notes_count: number
+  ai_score: number | null
   extra_answers?: Record<string, string | null>
 }
 
@@ -28,6 +31,10 @@ export type CandidateApplication = {
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
+  resume_parsed: string | null
+  resume_parse_version: number
+  ai_score: number | null
+  ai_score_reasoning: string | null
 }
 
 export type CandidateDetail = {
@@ -71,12 +78,26 @@ function buildAnswerFilterCondition(
   value: string,
   idx: number
 ): AnswerFilterResult | null {
+  // Negatif ID → CV parsed alan filtresi
+  if (qId < 0) {
+    const col = CV_COLUMNS.find((c) => c.id === qId)
+    if (!col) return null
+    const subq = `(SELECT json_extract(a_cv.resume_parsed, '${col.jsonPath}')
+      FROM applications a_cv WHERE a_cv.applicant_id = ap.id
+      ORDER BY a_cv.submitted_at DESC LIMIT 1)`
+    return buildFilterFromSubq(subq, op, value, idx)
+  }
+
   const subq = `(SELECT aa_f.value
     FROM applications a_f
     JOIN application_answers aa_f ON aa_f.application_id = a_f.id
     WHERE a_f.applicant_id = ap.id AND aa_f.question_id = ${qId}
     ORDER BY a_f.submitted_at DESC LIMIT 1)`
 
+  return buildFilterFromSubq(subq, op, value, idx)
+}
+
+function buildFilterFromSubq(subq: string, op: string, value: string, idx: number): AnswerFilterResult | null {
   switch (op) {
     case 'contains':
       return { sql: `${subq} LIKE ?${idx}`, binding: `%${value}%` }
@@ -147,7 +168,18 @@ export async function getQuestionColumns(db: D1Database): Promise<QuestionColumn
        ORDER BY jp.title, pq.sort_order`
     )
     .all<QuestionColumn>()
-  return res.results ?? []
+
+  // CV parsed alanları virtual sütun olarak başa ekle (negatif ID)
+  const cvVirtual: QuestionColumn[] = CV_COLUMNS.map((c) => ({
+    id: c.id,
+    label: c.label,
+    type: c.type,
+    field_key: c.jsonPath,
+    position_id: 0,
+    position_title: 'AI Analysis',
+  }))
+
+  return [...cvVirtual, ...(res.results ?? [])]
 }
 
 export async function listCandidates(
@@ -161,6 +193,8 @@ export async function listCandidates(
     offset?: number
     extraCols?: number[]
     answerFilters?: AnswerFilter[]
+    min_score?: string
+    max_score?: string
   }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const q = (opts.q ?? '').trim()
@@ -171,9 +205,9 @@ export async function listCandidates(
   const fit_statuses = fit_statuses_raw.filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const offset = Math.max(opts.offset ?? 0, 0)
-  const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n > 0)
+  const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n !== 0)
   const answerFilters = (opts.answerFilters ?? []).filter(
-    (f) => Number.isInteger(f.questionId) && f.questionId > 0 && (VALID_OPS as readonly string[]).includes(f.op)
+    (f) => Number.isInteger(f.questionId) && f.questionId !== 0 && (VALID_OPS as readonly string[]).includes(f.op)
   )
 
   const conditions: string[] = []
@@ -223,13 +257,32 @@ export async function listCandidates(
     }
   }
 
+  const scoreSubq = `(SELECT a_sc.ai_score FROM applications a_sc WHERE a_sc.applicant_id = ap.id ORDER BY a_sc.submitted_at DESC LIMIT 1)`
+  const minScore = opts.min_score !== undefined && opts.min_score !== '' ? Number(opts.min_score) : null
+  const maxScore = opts.max_score !== undefined && opts.max_score !== '' ? Number(opts.max_score) : null
+  if (minScore !== null && !isNaN(minScore)) {
+    conditions.push(`${scoreSubq} >= ?${++idx}`)
+    bindings.push(minScore)
+  }
+  if (maxScore !== null && !isNaN(maxScore)) {
+    conditions.push(`${scoreSubq} <= ?${++idx}`)
+    bindings.push(maxScore)
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const extraColSelects = extraCols
-    .map(
-      (qId) =>
-        `(SELECT aa_ec.value FROM applications a_ec JOIN application_answers aa_ec ON aa_ec.application_id = a_ec.id WHERE a_ec.applicant_id = ap.id AND aa_ec.question_id = ${qId} ORDER BY a_ec.submitted_at DESC LIMIT 1) AS extra_q_${qId}`
-    )
+    .map((qId) => {
+      // Negatif ID → CV parsed alan subquery
+      if (qId < 0) {
+        const col = CV_COLUMNS.find((c) => c.id === qId)
+        if (!col) return null
+        const alias = `extra_q_n${Math.abs(qId)}`
+        return `(SELECT json_extract(a_ec.resume_parsed, '${col.jsonPath}') FROM applications a_ec WHERE a_ec.applicant_id = ap.id ORDER BY a_ec.submitted_at DESC LIMIT 1) AS ${alias}`
+      }
+      return `(SELECT aa_ec.value FROM applications a_ec JOIN application_answers aa_ec ON aa_ec.application_id = a_ec.id WHERE a_ec.applicant_id = ap.id AND aa_ec.question_id = ${qId} ORDER BY a_ec.submitted_at DESC LIMIT 1) AS extra_q_${qId}`
+    })
+    .filter(Boolean)
     .join(',\n           ')
 
   const listSql = `
@@ -254,7 +307,10 @@ export async function listCandidates(
             ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_status,
            (SELECT a_ls.id FROM applications a_ls
             WHERE a_ls.applicant_id = ap.id
-            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id${extraCols.length ? `,\n           ${extraColSelects}` : ''}
+            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id,
+           (SELECT a_sc.ai_score FROM applications a_sc
+            WHERE a_sc.applicant_id = ap.id
+            ORDER BY a_sc.submitted_at DESC LIMIT 1) AS ai_score${extraCols.length ? `,\n           ${extraColSelects}` : ''}
     FROM applicants ap
     LEFT JOIN applications a ON a.applicant_id = ap.id
     LEFT JOIN job_positions p ON p.id = a.position_id
@@ -277,8 +333,9 @@ export async function listCandidates(
     const row = rawRow as Record<string, unknown>
     const extra_answers: Record<string, string | null> = {}
     for (const qId of extraCols) {
-      extra_answers[String(qId)] = (row[`extra_q_${qId}`] as string | null | undefined) ?? null
-      delete row[`extra_q_${qId}`]
+      const alias = qId < 0 ? `extra_q_n${Math.abs(qId)}` : `extra_q_${qId}`
+      extra_answers[String(qId)] = (row[alias] as string | null | undefined) ?? null
+      delete row[alias]
     }
     return { ...row, extra_answers } as CandidateListItem
   })
@@ -345,6 +402,8 @@ export async function getCandidate(
   const apps = await db
     .prepare(
       `SELECT a.id, a.submitted_at, a.status, a.resume_url, a.cover_letter,
+              a.resume_parsed, a.resume_parse_version,
+              a.ai_score, a.ai_score_reasoning,
               p.title AS position_title
        FROM applications a
        LEFT JOIN job_positions p ON p.id = a.position_id

@@ -5,6 +5,7 @@ import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, 
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
+import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, SCORE_VERSION } from './ai-scorer'
 
 type Env = {
   Bindings: {
@@ -65,14 +66,16 @@ app.get('/api/candidates', async (c) => {
   const fit_statuses = c.req.queries('fit_status') ?? []
   const limit = Number(c.req.query('limit') ?? '50')
   const offset = Number(c.req.query('offset') ?? '0')
-  const extraCols = (c.req.queries('extra_col') ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  const extraCols = (c.req.queries('extra_col') ?? []).map(Number).filter((n) => Number.isInteger(n) && n !== 0)
   const afQ = (c.req.queries('af_q') ?? []).map(Number)
   const afOp = c.req.queries('af_op') ?? []
   const afV = c.req.queries('af_v') ?? []
   const answerFilters = afQ
     .map((questionId, i) => ({ questionId, op: afOp[i] ?? '', value: afV[i] ?? '' }))
-    .filter((f) => Number.isInteger(f.questionId) && f.questionId > 0 && f.op)
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters })
+    .filter((f) => Number.isInteger(f.questionId) && f.op)
+  const min_score = c.req.query('min_score') ?? ''
+  const max_score = c.req.query('max_score') ?? ''
+  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score })
   return c.json({ ok: true, ...data })
 })
 
@@ -209,6 +212,66 @@ app.post('/api/admin/sync-cv', async (c) => {
   return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
 })
 
+// Scoring prompts — list all positions with their prompts
+app.get('/api/admin/scoring-prompts', async (c) => {
+  const positions = await getPositionsWithPrompts(c.env.DB)
+  return c.json({ ok: true, positions })
+})
+
+// Scoring prompts — upsert prompt for a position
+app.put('/api/admin/scoring-prompts/:positionId', async (c) => {
+  const positionId = Number(c.req.param('positionId'))
+  if (!Number.isInteger(positionId) || positionId <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { prompt: string }
+  try { body = await c.req.json() } catch { return c.json({ ok: false, error: 'invalid JSON' }, 400) }
+  if (!body.prompt?.trim()) return c.json({ ok: false, error: 'prompt cannot be empty' }, 400)
+  await upsertScoringPrompt(c.env.DB, positionId, body.prompt.trim())
+  return c.json({ ok: true })
+})
+
+// Sync AI scores — score applications that have a prompt but no current score
+app.post('/api/admin/sync-scores', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  let body: { limit?: number; dryRun?: boolean } = {}
+  try { body = await c.req.json() } catch { /* body optional */ }
+  const limit = Math.min(body.limit ?? 10, 50)
+  const dryRun = body.dryRun ?? false
+
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT a.id FROM applications a
+       JOIN scoring_prompts sp ON sp.position_id = a.position_id
+       WHERE a.ai_score_version < ?
+       LIMIT ?`
+    )
+    .bind(SCORE_VERSION, limit)
+    .all<{ id: number }>()
+
+  if (dryRun) return c.json({ ok: true, pending: results.length })
+
+  let processed = 0
+  let failed = 0
+  for (const row of results) {
+    try {
+      await scoreApplication(c.env.DB, row.id, c.env.DEEPSEEK_API_KEY)
+      processed++
+    } catch {
+      failed++
+    }
+  }
+
+  const { results: remaining } = await c.env.DB
+    .prepare(
+      `SELECT COUNT(*) AS n FROM applications a
+       JOIN scoring_prompts sp ON sp.position_id = a.position_id
+       WHERE a.ai_score_version < ?`
+    )
+    .bind(SCORE_VERSION)
+    .all<{ n: number }>()
+
+  return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
+})
+
 // Tally webhook — new form responses arrive automatically
 app.post('/api/webhook/tally', async (c) => {
   const rawBody = await c.req.text()
@@ -219,7 +282,8 @@ app.post('/api/webhook/tally', async (c) => {
     c.env.TALLY_WEBHOOK_SECRET,
     c.env.DB,
     c.env.RESUMES,
-    c.env.R2_PUBLIC_URL
+    c.env.R2_PUBLIC_URL,
+    c.env.DEEPSEEK_API_KEY
   )
   return c.json(result.body, result.status as 200 | 400 | 401 | 500)
 })

@@ -2,7 +2,7 @@
 // PDF text extraction: BT...ET bloklarından okunabilir metin toplar.
 // Taranan (scanned) PDF'lerde boş döner; text-based CV'lerin tamamında çalışır.
 
-import { PARSE_VERSION, PARSE_SCHEMA } from './cv-schema'
+import { PARSE_VERSION, PARSE_SCHEMA, UNIVERSITY_MAP } from './cv-schema'
 import { deepseekChat } from './deepseek'
 
 function extractTextFromPdf(buffer: ArrayBuffer): string {
@@ -31,6 +31,14 @@ function extractTextFromPdf(buffer: ArrayBuffer): string {
   }
 
   return parts.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+function normalizeUniversity(name: string): string {
+  const lower = ` ${name.toLowerCase()} `
+  for (const [pattern, canonical] of UNIVERSITY_MAP) {
+    if (lower.includes(pattern)) return canonical
+  }
+  return name
 }
 
 export async function parseAndStoreResume(
@@ -72,6 +80,15 @@ Kurallar:
   // Bazen ```json ... ``` bloğuna sarıyor, temizle
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()
   const fields = JSON.parse(jsonText)
+
+  // Üniversite isimlerini normalize et
+  if (Array.isArray(fields.education)) {
+    for (const entry of fields.education) {
+      if (typeof entry.school === 'string') {
+        entry.school = normalizeUniversity(entry.school)
+      }
+    }
+  }
 
   await db
     .prepare(
