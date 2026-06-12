@@ -23,12 +23,14 @@ type TallyFieldType =
   | string
 
 type TallyFileValue = { url: string; name?: string; mimeType?: string; size?: number }
+type TallyOption = { id: string; text: string }
 
 type TallyField = {
   key: string
-  label: string
+  label: string | null
   type: TallyFieldType
   value: string | number | boolean | string[] | TallyFileValue[] | null | undefined
+  options?: TallyOption[]
 }
 
 type TallyWebhookPayload = {
@@ -87,7 +89,13 @@ function extractValue(field: TallyField): string | null {
     if (typeof v[0] === 'object' && v[0] !== null && 'url' in v[0]) {
       return (v[0] as TallyFileValue).url ?? null
     }
-    // CHECKBOXES / multi-select — array of strings
+    // DROPDOWN / MULTIPLE_CHOICE — array of option IDs → resolve to text
+    if (field.options?.length) {
+      const optMap = new Map(field.options.map((o) => [o.id, o.text]))
+      const texts = (v as string[]).map((id) => optMap.get(id) ?? id).filter(Boolean)
+      return texts.join(', ') || null
+    }
+    // CHECKBOXES / multi-select — array of plain strings
     return (v as string[]).filter(Boolean).join(', ') || null
   }
   return null
@@ -123,10 +131,17 @@ const KNOWN_RULES: [RegExp, KnownTarget][] = [
   [/resume|\bcv\b|özgeçmiş|upload your resume/i, 'resume_url'],
 ]
 
-function classifyHeader(header: string): KnownTarget | null {
-  const h = header.trim()
-  for (const [re, target] of KNOWN_RULES) if (re.test(h)) return target
-  return null
+// type-only fallbacks for fields where label is null
+const TYPE_TARGETS: Partial<Record<string, KnownTarget>> = {
+  RESPONDENT_COUNTRY: 'country',
+}
+
+function classifyField(field: TallyField): KnownTarget | null {
+  if (field.label) {
+    const h = field.label.trim()
+    for (const [re, target] of KNOWN_RULES) if (re.test(h)) return target
+  }
+  return TYPE_TARGETS[field.type] ?? null
 }
 
 function slugify(input: string, maxLen = 60): string {
@@ -152,14 +167,16 @@ export function tallyToImportPayload(raw: TallyWebhookPayload): ImportPayload {
   // Classify each field: known applicant field OR position question
   const questionsByKey = new Map<string, { field_key: string; label: string; type: 'text' | 'number' | 'boolean' | 'file' }>()
   const usedKeys = new Set<string>()
-  const knownByKey = new Map<string, ReturnType<typeof classifyHeader>>()
+  const knownByKey = new Map<string, ReturnType<typeof classifyField>>()
 
   for (const field of data.fields) {
-    const target = classifyHeader(field.label)
+    const target = classifyField(field)
     if (target) {
       knownByKey.set(field.key, target)
       continue
     }
+    // Skip fields with no usable label (can't become a question column)
+    if (!field.label?.trim()) continue
     // Unknown → position question
     const qt = tallyTypeToQt(field.type)
     let fk = slugify(field.label)
