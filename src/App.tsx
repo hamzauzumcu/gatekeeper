@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import ImportPage from './ImportPage'
+import CandidatesPage from './CandidatesPage'
 
 type ApiStatus = 'checking' | 'ok' | 'error'
 
@@ -31,21 +31,14 @@ export default function App() {
         </Badge>
       </header>
 
-      <Tabs defaultValue="dashboard" className="mt-6">
+      <Tabs defaultValue="candidates" className="mt-6">
         <TabsList>
-          <TabsTrigger value="dashboard">Panel</TabsTrigger>
+          <TabsTrigger value="candidates">Adaylar</TabsTrigger>
           <TabsTrigger value="import">CSV İçe Aktar</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Panel</CardTitle>
-            </CardHeader>
-            <CardContent className="text-muted-foreground">
-              HR aday analiz paneli — iskelet hazır. Aday listesi ve analiz bir sonraki adım.
-            </CardContent>
-          </Card>
+        <TabsContent value="candidates" className="mt-4">
+          <CandidatesPage />
         </TabsContent>
 
         <TabsContent value="import" className="mt-4">

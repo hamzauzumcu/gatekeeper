@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
+import { listCandidates, getCandidate, getCandidateFilters } from './candidates'
 
 // Bindings (DB, RESUMES vb.) wrangler.jsonc'de tanımlandıkça buraya eklenecek
 type Env = {
@@ -41,8 +42,33 @@ app.post('/api/import', async (c) => {
   }
 })
 
+// Filtre seçenekleri (ülke + pozisyon listeleri)
+app.get('/api/candidates/filters', async (c) => {
+  const filters = await getCandidateFilters(c.env.DB)
+  return c.json({ ok: true, ...filters })
+})
+
+// Aday listesi + arama + filtre
+app.get('/api/candidates', async (c) => {
+  const q = c.req.query('q') ?? ''
+  const country = c.req.query('country') ?? ''
+  const position = c.req.query('position') ?? ''
+  const limit = Number(c.req.query('limit') ?? '50')
+  const offset = Number(c.req.query('offset') ?? '0')
+  const data = await listCandidates(c.env.DB, { q, country, position, limit, offset })
+  return c.json({ ok: true, ...data })
+})
+
+// Aday detayı (başvurular + cevaplar)
+app.get('/api/candidates/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id)) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  const detail = await getCandidate(c.env.DB, id)
+  if (!detail) return c.json({ ok: false, error: 'aday bulunamadı' }, 404)
+  return c.json({ ok: true, ...detail })
+})
+
 // İleride:
 // app.post('/api/webhook/tally', ...)   — yeni başvurular otomatik düşer
-// app.get('/api/candidates', ...)       — aday listesi
 
 export default app
