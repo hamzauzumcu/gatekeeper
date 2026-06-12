@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import ImportPage from './ImportPage'
 
-type Tab = 'dashboard' | 'import'
+type ApiStatus = 'checking' | 'ok' | 'error'
+
+const STATUS_LABEL: Record<ApiStatus, string> = {
+  checking: 'kontrol ediliyor…',
+  ok: 'çalışıyor',
+  error: 'erişilemiyor',
+}
 
 export default function App() {
-  const [apiStatus, setApiStatus] = useState<'checking' | 'ok' | 'error'>('checking')
-  const [tab, setTab] = useState<Tab>('dashboard')
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
 
   useEffect(() => {
     fetch('/api/health')
@@ -15,30 +23,35 @@ export default function App() {
   }, [])
 
   return (
-    <div className="shell">
-      <header>
-        <h1>Gatekeeper</h1>
-        <span className={`status status-${apiStatus}`}>
-          API: {apiStatus === 'checking' ? 'kontrol ediliyor…' : apiStatus === 'ok' ? 'çalışıyor' : 'erişilemiyor'}
-        </span>
+    <div className="mx-auto max-w-5xl px-6 py-8">
+      <header className="flex items-center justify-between border-b pb-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Gatekeeper</h1>
+        <Badge variant={apiStatus === 'ok' ? 'secondary' : apiStatus === 'error' ? 'destructive' : 'outline'}>
+          API: {STATUS_LABEL[apiStatus]}
+        </Badge>
       </header>
 
-      <nav className="tabs">
-        <button className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>
-          Panel
-        </button>
-        <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}>
-          CSV İçe Aktar
-        </button>
-      </nav>
+      <Tabs defaultValue="dashboard" className="mt-6">
+        <TabsList>
+          <TabsTrigger value="dashboard">Panel</TabsTrigger>
+          <TabsTrigger value="import">CSV İçe Aktar</TabsTrigger>
+        </TabsList>
 
-      <main>
-        {tab === 'dashboard' ? (
-          <p>HR aday analiz paneli — iskelet hazır. Aday listesi ve analiz bir sonraki adım.</p>
-        ) : (
+        <TabsContent value="dashboard" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Panel</CardTitle>
+            </CardHeader>
+            <CardContent className="text-muted-foreground">
+              HR aday analiz paneli — iskelet hazır. Aday listesi ve analiz bir sonraki adım.
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="import" className="mt-4">
           <ImportPage />
-        )}
-      </main>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

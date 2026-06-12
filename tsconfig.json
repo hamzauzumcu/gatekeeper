@@ -1,9 +1,16 @@
 {
   // Solution-style: frontend (DOM) ve worker (Cloudflare runtime) tipleri ayrı derlenir.
   // Aksi halde worker'ın global Response/fetch tipleri src'ye sızıp DOM tiplerini bozar.
+  // compilerOptions.paths burada yalnızca shadcn CLI'nın @ alias'ını çözmesi için.
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.worker.json" }
+    { "path": "./tsconfig.worker.json" },
+    { "path": "./tsconfig.node.json" }
   ]
 }
