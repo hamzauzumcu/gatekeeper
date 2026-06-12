@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check,
+  Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus, Sparkles,
+  GitBranch, AtSign,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -466,6 +467,7 @@ export default function CandidatesPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [open, setOpen] = useState(false)
   const [sheetTab, setSheetTab] = useState('applications')
+  const [openedIndex, setOpenedIndex] = useState(-1)
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
@@ -588,7 +590,8 @@ export default function CandidatesPage() {
     updateFilter('answerFilters', filters.answerFilters.filter((_, idx) => idx !== i))
   }
 
-  function openCandidate(id: number, tab = 'applications') {
+  function openCandidate(id: number, tab = 'applications', idx = -1) {
+    setOpenedIndex(idx)
     setSheetTab(tab)
     setOpen(true)
     setSelected(null)
@@ -597,6 +600,42 @@ export default function CandidatesPage() {
       .then(setSelected)
       .catch(() => setSelected(null))
       .finally(() => setDetailLoading(false))
+  }
+
+  function navigateSheet(dir: -1 | 1) {
+    const newIdx = openedIndex + dir
+    if (newIdx < 0 || newIdx >= candidates.length) return
+    openCandidate(candidates[newIdx].id, sheetTab, newIdx)
+  }
+
+  async function handleSheetFitStatus(fitStatus: string | null) {
+    if (!selected) return
+    const candId = selected.applicant.id
+    const willExit =
+      filters.fit_statuses.length > 0 &&
+      (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
+    setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+    if (willExit && openedIndex >= 0) {
+      const nextCand = openedIndex + 1 < candidates.length ? candidates[openedIndex + 1] : null
+      const prevCand = openedIndex > 0 ? candidates[openedIndex - 1] : null
+      const target = nextCand ?? prevCand
+      if (target) {
+        // post-removal the successor slides down by 1 if we went forward
+        openCandidate(target.id, sheetTab, nextCand ? openedIndex : openedIndex - 1)
+      } else {
+        setOpen(false)
+      }
+      setExitingIds((prev) => new Set([...prev, candId]))
+      setTimeout(() => {
+        setCandidates((prev) => prev.filter((c) => c.id !== candId))
+        setExitingIds((prev) => { const next = new Set(prev); next.delete(candId); return next })
+      }, 350)
+    }
+    try {
+      await updateApplicantsFitStatus([candId], fitStatus)
+    } catch {
+      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
+    }
   }
 
   function toggleSelectId(id: number) {
@@ -866,7 +905,7 @@ export default function CandidatesPage() {
         )}
       </CardHeader>
 
-      <CardContent className="relative pb-0">
+      <CardContent className="relative pb-0 overflow-x-auto">
         {error && <p className="mb-2 text-sm text-destructive">Error: {error}</p>}
 
         <Table>
@@ -920,13 +959,13 @@ export default function CandidatesPage() {
                     ))}
                   </TableRow>
                 ))
-              : candidates.map((cand) => {
+              : candidates.map((cand, idx) => {
                   const checked = selectedIds.has(cand.id)
                   return (
                     <TableRow
                       key={cand.id}
                       className={`cursor-pointer transition-opacity duration-300 ${checked ? 'bg-primary/5' : ''} ${exitingIds.has(cand.id) ? 'opacity-0' : ''}`}
-                      onClick={() => openCandidate(cand.id)}
+                      onClick={() => openCandidate(cand.id, 'applications', idx)}
                       onContextMenu={(e) => {
                         e.preventDefault()
                         setCtxNote('')
@@ -1166,6 +1205,10 @@ export default function CandidatesPage() {
               activeTab={sheetTab}
               onTabChange={setSheetTab}
               currentUser={currentUser}
+              onFitStatus={handleSheetFitStatus}
+              onNavigate={navigateSheet}
+              hasPrev={openedIndex > 0}
+              hasNext={openedIndex >= 0 && openedIndex < candidates.length - 1}
             />
           )}
         </SheetContent>
@@ -1205,17 +1248,36 @@ function CandidateDetailView({
   activeTab,
   onTabChange,
   currentUser,
+  onFitStatus,
+  onNavigate,
+  hasPrev,
+  hasNext,
 }: {
   detail: CandidateDetail
   activeTab: string
   onTabChange: (tab: string) => void
   currentUser: User
+  onFitStatus: (status: string | null) => void
+  onNavigate: (dir: -1 | 1) => void
+  hasPrev: boolean
+  hasNext: boolean
 }) {
   const { applicant, applications } = detail
   const initials = getInitials(applicant.full_name)
   const [appStatuses, setAppStatuses] = useState<Map<number, string>>(
     () => new Map(applications.map((a) => [a.id, a.status]))
   )
+  const [fitStatus, setFitStatus] = useState<string | null>(applicant.fit_status ?? null)
+
+  useEffect(() => {
+    setFitStatus(applicant.fit_status ?? null)
+  }, [applicant.id])
+
+  function handleFitClick(status: string) {
+    const next = fitStatus === status ? null : status
+    setFitStatus(next)
+    onFitStatus(next)
+  }
 
   async function handleDetailStatusChange(appId: number, newStatus: string) {
     const prev = appStatuses.get(appId) ?? 'new'
@@ -1234,10 +1296,33 @@ function CandidateDetailView({
       : `https://${applicant.linkedin_url}`
     : null
 
+  const firstResumeUrl = applications.find((a) => a.resume_url)?.resume_url ?? null
+
+  // Personal links: LinkedIn from the applicant record + everything extracted from the CVs, deduped.
+  const linkButtons: { type: string; url: string }[] = []
+  const seenLinks = new Set<string>()
+  const pushLink = (type: string, raw: string | null | undefined) => {
+    if (!raw || !raw.trim()) return
+    const url = raw.startsWith('http') ? raw : `https://${raw}`
+    const key = url.replace(/\/+$/, '').toLowerCase()
+    if (seenLinks.has(key)) return
+    seenLinks.add(key)
+    linkButtons.push({ type, url })
+  }
+  pushLink('linkedin', linkedinHref)
+  for (const a of applications) {
+    if (!a.resume_parsed) continue
+    let parsed: { links?: { type?: string; url?: string }[] }
+    try { parsed = JSON.parse(a.resume_parsed) } catch { continue }
+    for (const l of parsed.links ?? []) {
+      pushLink((l.type ?? 'other').toLowerCase(), l.url)
+    }
+  }
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Sticky header */}
-      <div className="shrink-0 border-b bg-background px-6 pb-5 pt-6">
+      <div className="shrink-0 border-b bg-background px-4 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-6">
         <SheetHeader className="mb-0">
           <div className="flex items-start gap-4">
             <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary">
@@ -1246,7 +1331,7 @@ function CandidateDetailView({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <SheetTitle className="text-xl">{applicant.full_name ?? 'Candidate'}</SheetTitle>
-                {applicant.fit_status && <FitBadge status={applicant.fit_status} />}
+                {fitStatus && <FitBadge status={fitStatus} />}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                 {applicant.email && (
@@ -1271,17 +1356,30 @@ function CandidateDetailView({
                   </span>
                 )}
               </div>
-              {linkedinHref && (
-                <div className="mt-3">
-                  <a
-                    href={linkedinHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
-                  >
-                    <ExternalLink className="size-3" />
-                    LinkedIn
-                  </a>
+              {(linkedinHref || firstResumeUrl) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {linkedinHref && (
+                    <a
+                      href={linkedinHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                    >
+                      <ExternalLink className="size-3" />
+                      LinkedIn
+                    </a>
+                  )}
+                  {firstResumeUrl && (
+                    <a
+                      href={firstResumeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                    >
+                      <Download className="size-3" />
+                      CV
+                    </a>
+                  )}
                 </div>
               )}
             </div>
@@ -1295,7 +1393,7 @@ function CandidateDetailView({
         onValueChange={onTabChange}
         className="flex flex-1 flex-col overflow-hidden gap-0"
       >
-        <TabsList className="mx-6 my-3 shrink-0 w-fit">
+        <TabsList className="mx-4 my-3 shrink-0 w-fit sm:mx-6">
           <TabsTrigger value="applications">
             Applications
             {applications.length > 1 && (
@@ -1315,11 +1413,11 @@ function CandidateDetailView({
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="applications" className="mt-0 flex-1 overflow-y-auto px-6 pb-6">
+        <TabsContent value="applications" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
           <div className="space-y-4">
             {applications.map((app, idx) => (
               <div key={app.id} className="overflow-hidden rounded-xl border">
-                <div className="flex items-start justify-between bg-muted/40 px-5 py-4">
+                <div className="flex items-start justify-between bg-muted/40 px-4 py-3 sm:px-5 sm:py-4">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{app.position_title ?? 'Position'}</span>
@@ -1340,38 +1438,51 @@ function CandidateDetailView({
                 </div>
 
                 <div className="divide-y">
-                  {app.resume_url && (
-                    <div className="px-5 py-3">
-                      <a
-                        href={app.resume_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 py-3 text-sm font-medium text-primary transition-colors hover:border-primary/60 hover:bg-primary/10"
-                      >
-                        <Download className="size-4" />
-                        Open / Download CV
-                      </a>
-                    </div>
-                  )}
 
                   {app.resume_parse_version > 0 && app.resume_parsed && (() => {
                     let p: Record<string, unknown>
                     try { p = JSON.parse(app.resume_parsed) } catch { return null }
-                    const edu = (p.education as { school?: string; degree?: string; year?: number | null }[] | undefined) ?? []
+                    const edu = (p.education as { school?: string; degree?: string; year?: number | null; gpa?: string | null }[] | undefined) ?? []
                     const work = (p.work_history as { company?: string; role?: string; start?: string | null; end?: string | null; months?: number | null }[] | undefined) ?? []
-                    const skills = (p.skills as string[] | undefined) ?? []
                     const languages = (p.languages as string[] | undefined) ?? []
+                    const summary = typeof p.summary === 'string' ? p.summary : null
+                    const seniority = typeof p.seniority === 'string' ? p.seniority : null
+                    const location = typeof p.location === 'string' ? p.location : null
+                    const avgTenure = typeof p.avg_tenure_months === 'number' ? p.avg_tenure_months : null
                     return (
-                      <div className="px-5 py-4">
+                      <div className="px-4 py-4 sm:px-5">
                         <div className="mb-3 flex items-center gap-1.5">
                           <Sparkles className="size-3.5 text-violet-500" />
                           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Analysis</span>
                         </div>
+                        {summary && (
+                          <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm leading-relaxed text-foreground/90">
+                            {summary}
+                          </div>
+                        )}
                         <dl className="space-y-3">
                           {(p.total_experience_years as number | null) != null && (
                             <div className="text-sm">
                               <dt className="mb-0.5 text-xs text-muted-foreground">Experience</dt>
                               <dd className="font-medium">{p.total_experience_years as number} years</dd>
+                            </div>
+                          )}
+                          {seniority && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Seniority</dt>
+                              <dd className="font-medium capitalize">{seniority}</dd>
+                            </div>
+                          )}
+                          {location && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Location</dt>
+                              <dd className="font-medium">{location}</dd>
+                            </div>
+                          )}
+                          {avgTenure != null && (
+                            <div className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">Avg Tenure</dt>
+                              <dd className="font-medium">{avgTenure} months</dd>
                             </div>
                           )}
                           {edu.length > 0 && (
@@ -1380,6 +1491,7 @@ function CandidateDetailView({
                               {edu.map((e, i) => (
                                 <dd key={i} className="font-medium">
                                   {e.school ?? '—'}{e.degree ? ` · ${e.degree}` : ''}{e.year ? ` (${e.year})` : ''}
+                                  {e.gpa ? <span className="text-muted-foreground font-normal"> · GPA {e.gpa}</span> : ''}
                                 </dd>
                               ))}
                             </div>
@@ -1403,16 +1515,6 @@ function CandidateDetailView({
                               </dd>
                             </div>
                           )}
-                          {skills.length > 0 && (
-                            <div className="text-sm">
-                              <dt className="mb-1 text-xs text-muted-foreground">Skills</dt>
-                              <dd className="flex flex-wrap gap-1">
-                                {skills.map((s, i) => (
-                                  <span key={i} className="rounded-md bg-muted px-1.5 py-0.5 text-xs">{s}</span>
-                                ))}
-                              </dd>
-                            </div>
-                          )}
                           {languages.length > 0 && (
                             <div className="text-sm">
                               <dt className="mb-1 text-xs text-muted-foreground">Languages</dt>
@@ -1429,7 +1531,7 @@ function CandidateDetailView({
                   })()}
 
                   {app.answers.length > 0 && (
-                    <div className="px-5 py-4">
+                    <div className="px-4 py-4 sm:px-5">
                       <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         Application Form
                       </div>
@@ -1449,7 +1551,7 @@ function CandidateDetailView({
                   )}
 
                   {app.cover_letter && (
-                    <div className="px-5 py-4">
+                    <div className="px-4 py-4 sm:px-5">
                       <div className="mb-2 flex items-center gap-1.5">
                         <FileText className="size-3.5 text-muted-foreground" />
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1467,10 +1569,63 @@ function CandidateDetailView({
           </div>
         </TabsContent>
 
-        <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-6 pb-6">
+        <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
           <NotesSection applicantId={applicant.id} currentUser={currentUser} />
         </TabsContent>
       </Tabs>
+
+      {/* Bottom action bar — fit status + prev/next navigation */}
+      <div className="shrink-0 border-t bg-background px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onNavigate(-1)}
+            disabled={!hasPrev}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Previous candidate"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+
+          <div className="flex flex-1 gap-1.5">
+            {(['good_fit', 'maybe', 'not_fit'] as const).map((s) => {
+              const active = fitStatus === s
+              const styles = {
+                good_fit: active
+                  ? 'border-green-500 bg-green-50 text-green-700'
+                  : 'border-input text-muted-foreground hover:border-green-300 hover:bg-green-50/60 hover:text-green-700',
+                maybe: active
+                  ? 'border-amber-500 bg-amber-50 text-amber-700'
+                  : 'border-input text-muted-foreground hover:border-amber-300 hover:bg-amber-50/60 hover:text-amber-700',
+                not_fit: active
+                  ? 'border-red-500 bg-red-50 text-red-700'
+                  : 'border-input text-muted-foreground hover:border-red-300 hover:bg-red-50/60 hover:text-red-700',
+              }
+              const labels = { good_fit: 'Good Fit', maybe: 'Maybe', not_fit: 'Not Fit' }
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => handleFitClick(s)}
+                  className={`flex-1 rounded-lg border py-2 text-xs font-medium transition-colors ${styles[s]}`}
+                >
+                  {labels[s]}
+                </button>
+              )
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigate(1)}
+            disabled={!hasNext}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Next candidate"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

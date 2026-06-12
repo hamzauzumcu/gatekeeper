@@ -82,7 +82,12 @@ Format to return:
 ${PARSE_SCHEMA}
 
 Rules:
+- summary: exactly 2 sentences, in English, highlighting years of experience and the most recent/notable role
 - total_experience_years: sum of all work experience, 1 decimal precision
+- seniority: exactly one of intern, junior, mid, senior, lead — infer from titles and total experience
+- location: the city the candidate is currently based in (city name only)
+- gpa: keep the original scale exactly as written (e.g. "3.6/4.0", "85/100"); null if not stated
+- links: every personal URL found in the CV (LinkedIn, GitHub, portfolio, Twitter/X, personal site, etc.); classify each into type and keep the full URL; empty array if none
 - work_history: sorted newest to oldest
 - months: calculate from start/end dates if given; otherwise estimate from "X years Y months" in the CV
 - Use null for unknown fields, do not guess`
@@ -117,6 +122,18 @@ Rules:
         entry.school = normalizeUniversity(entry.school)
       }
     }
+  }
+
+  // Average tenure (months) across work history — a job-hopping signal.
+  // Computed deterministically here rather than asking the model to do arithmetic.
+  if (Array.isArray(fields.work_history)) {
+    const tenures = fields.work_history
+      .map((w: { months?: unknown }) => Number(w?.months))
+      .filter((n: number) => Number.isFinite(n) && n > 0)
+    fields.avg_tenure_months =
+      tenures.length > 0
+        ? Math.round(tenures.reduce((a: number, b: number) => a + b, 0) / tenures.length)
+        : null
   }
 
   await db

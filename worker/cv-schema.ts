@@ -1,7 +1,7 @@
-// CV parsing schema — tek değiştirilen yer burası.
-// Yeni field ekle → PARSE_VERSION'ı +1 yap → POST /api/admin/sync-cv çalıştır.
+// CV parsing schema — the single source of truth for parsed CV fields.
+// Add a new field → bump PARSE_VERSION by 1 → run POST /api/admin/sync-cv.
 
-export const PARSE_VERSION = 1
+export const PARSE_VERSION = 3
 
 // Üniversite adı normalleştirme — farklı yazımları tek isime çeker.
 // Pattern küçük harfle aranır, alt string eşleşmesi yeterli.
@@ -42,39 +42,52 @@ export const UNIVERSITY_MAP: [pattern: string, canonical: string][] = [
   ['gazi universitesi', 'Gazi Üniversitesi'],
 ]
 
-// Tablo + filtre için expose edilen CV parsed alanları.
-// Negatif ID → virtual sütun (gerçek position_questions satırı değil).
-// Sıra önemli: index 0 → id -1, index 1 → id -2, …
+// Parsed CV fields exposed as table columns + filters.
+// Negative ID → virtual column (not a real position_questions row).
+// Order matters: index 0 → id -1, index 1 → id -2, …
+// IDs must NEVER change (they must match the ones persisted in localStorage).
 export type CvColumnDef = {
-  id: number        // negatif, NEVER değiştirilmemeli (localStorage'daki id'lerle uyuşmalı)
+  id: number        // negative, must never change
   jsonPath: string  // SQLite json_extract path
   label: string
   type: 'text' | 'number'
 }
 
 export const CV_COLUMNS: CvColumnDef[] = [
-  { id: -1, jsonPath: '$.total_experience_years', label: 'Deneyim (yıl)', type: 'number' },
-  { id: -2, jsonPath: '$.education[0].school',    label: 'Üniversite',    type: 'text'   },
-  { id: -3, jsonPath: '$.education[0].degree',    label: 'Bölüm',         type: 'text'   },
+  { id: -1, jsonPath: '$.total_experience_years', label: 'Experience (yrs)', type: 'number' },
+  { id: -2, jsonPath: '$.education[0].school',    label: 'University',       type: 'text'   },
+  { id: -3, jsonPath: '$.education[0].degree',    label: 'Field of Study',   type: 'text'   },
+  { id: -4, jsonPath: '$.work_history[0].company', label: 'Current Company', type: 'text'   },
+  { id: -5, jsonPath: '$.work_history[0].role',    label: 'Current Title',   type: 'text'   },
+  { id: -6, jsonPath: '$.seniority',               label: 'Seniority',       type: 'text'   },
+  { id: -7, jsonPath: '$.avg_tenure_months',       label: 'Avg Tenure (mo)', type: 'number' },
+  { id: -8, jsonPath: '$.location',                label: 'Location',        type: 'text'   },
+  { id: -9, jsonPath: '$.education[0].gpa',        label: 'GPA',             type: 'text'   },
 ]
 
-// Claude'a gönderilen JSON şema açıklaması.
-// Yeni alan eklenince buraya da ekle.
+// JSON schema description sent to the model.
+// Add any new field here as well.
 export const PARSE_SCHEMA = `{
-  "resume_text": "CV'nin tüm içeriği düz metin — bölüm başlıkları korunarak",
-  "total_experience_years": "toplam iş deneyimi yıl cinsinden (ondalık, örn: 3.5), bilinmiyorsa null",
+  "resume_text": "full CV content as plain text — keep section headings",
+  "summary": "concise 2-sentence professional summary in English, e.g. '5 years of React experience, last 2 years as frontend lead at Getir.'",
+  "total_experience_years": "total work experience in years (decimal, e.g. 3.5), null if unknown",
+  "seniority": "exactly one of: intern, junior, mid, senior, lead — inferred from titles and total experience; null if unclear",
+  "location": "city the candidate is currently based in, null if unknown",
   "education": [
-    { "school": "okul/üniversite adı", "degree": "bölüm veya derece", "year": "mezuniyet yılı integer ya da null" }
+    { "school": "school/university name", "degree": "field of study or degree", "year": "graduation year as integer or null", "gpa": "GPA / grade as written incl. its scale, e.g. '3.6/4.0' or '85/100', null if not stated" }
+  ],
+  "links": [
+    { "type": "one of: linkedin, github, portfolio, twitter, website, other", "url": "full URL including https://" }
   ],
   "work_history": [
     {
-      "company": "şirket adı",
-      "role": "pozisyon/unvan",
-      "start": "başlangıç YYYY-MM formatında ya da null",
-      "end": "bitiş YYYY-MM formatında, hâlâ çalışıyorsa null",
-      "months": "bu pozisyondaki süre ay cinsinden integer ya da null"
+      "company": "company name",
+      "role": "position/title",
+      "start": "start date in YYYY-MM format or null",
+      "end": "end date in YYYY-MM format, null if still employed",
+      "months": "duration in this position in months as integer or null"
     }
   ],
-  "skills": ["teknik beceri listesi"],
-  "languages": ["dil listesi"]
+  "skills": ["list of technical skills"],
+  "languages": ["list of languages"]
 }`
