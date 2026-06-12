@@ -47,10 +47,10 @@ export async function getCandidateFilters(db: D1Database): Promise<CandidateFilt
 
 export async function listCandidates(
   db: D1Database,
-  opts: { q?: string; country?: string; position?: string; limit?: number; offset?: number }
+  opts: { q?: string; countries?: string[]; position?: string; limit?: number; offset?: number }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const q = (opts.q ?? '').trim()
-  const country = (opts.country ?? '').trim()
+  const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const offset = Math.max(opts.offset ?? 0, 0)
@@ -65,10 +65,10 @@ export async function listCandidates(
     bindings.push(`%${q}%`)
   }
 
-  if (country) {
-    idx++
-    conditions.push(`ap.country = ?${idx}`)
-    bindings.push(country)
+  if (countries.length > 0) {
+    const placeholders = countries.map(() => `?${++idx}`).join(', ')
+    conditions.push(`ap.country IN (${placeholders})`)
+    bindings.push(...countries)
   }
 
   if (position) {

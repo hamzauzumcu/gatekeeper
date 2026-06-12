@@ -35,7 +35,7 @@ export type FilterOptions = {
 }
 
 export type ActiveFilters = {
-  country: string
+  countries: string[]
   position: string
 }
 
@@ -44,11 +44,22 @@ const FILTER_STORAGE_KEY = 'gk_candidate_filters'
 export function loadSavedFilters(): ActiveFilters {
   try {
     const raw = localStorage.getItem(FILTER_STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as ActiveFilters
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      return {
+        // migrate old single-string country → array
+        countries: Array.isArray(parsed.countries)
+          ? (parsed.countries as string[])
+          : parsed.country
+            ? [parsed.country as string]
+            : [],
+        position: typeof parsed.position === 'string' ? parsed.position : '',
+      }
+    }
   } catch {
     // ignore
   }
-  return { country: '', position: '' }
+  return { countries: [], position: '' }
 }
 
 export function saveFilters(f: ActiveFilters): void {
@@ -69,7 +80,7 @@ export async function fetchCandidates(
   filters: ActiveFilters
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const params = new URLSearchParams({ q })
-  if (filters.country) params.set('country', filters.country)
+  filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
   const res = await fetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
