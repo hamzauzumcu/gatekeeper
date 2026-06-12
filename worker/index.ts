@@ -6,6 +6,8 @@ type Env = {
   Bindings: {
     // Lokal: .dev.vars — Prod: wrangler secret put DEEPSEEK_API_KEY
     DEEPSEEK_API_KEY: string
+    // D1 — wrangler.jsonc'de tanımlı
+    DB: D1Database
   }
 }
 

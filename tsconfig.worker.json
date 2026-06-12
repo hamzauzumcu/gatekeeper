@@ -1,0 +1,16 @@
+{
+  // Worker — Cloudflare runtime ortamı. DOM yok; tipler worker-configuration.d.ts'ten.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "composite": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["./worker-configuration.d.ts"]
+  },
+  "include": ["worker", "worker-configuration.d.ts"]
+}
