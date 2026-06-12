@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react'
-import { fetchScoringPrompts, saveScoringPrompt, syncScores, syncCv, clearData, type PositionWithPrompt } from './lib/candidates'
+import {
+  fetchScoringPrompts,
+  saveScoringPrompt,
+  fetchPendingScoreIds,
+  scoreOneApplication,
+  fetchPendingCvIds,
+  parseSingleCv,
+  clearData,
+  type PositionWithPrompt,
+} from './lib/candidates'
 import { formatDate } from './lib/candidates'
 
 function getDefaultPrompt(positionTitle: string): string {
@@ -170,19 +179,159 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
   )
 }
 
+// ── Shared sync progress panel ─────────────────────────────────────────────
+
+type SyncPhase = 'idle' | 'fetching' | 'running' | 'done' | 'stopped' | 'error'
+
+interface SyncPanelProps {
+  accent: string
+  phase: SyncPhase
+  total: number
+  processed: number
+  failed: number
+  errors: { id: number; error: string }[]
+  fatalError: string | null
+  batchSize: number
+  onBatchSizeChange: (n: number) => void
+  onStart: () => void
+  onStop: () => void
+  disabled?: boolean
+  disabledHint?: string
+  itemLabel: string
+}
+
+function SyncPanel({
+  accent,
+  phase,
+  total,
+  processed,
+  failed,
+  errors,
+  fatalError,
+  batchSize,
+  onBatchSizeChange,
+  onStart,
+  onStop,
+  disabled,
+  disabledHint,
+  itemLabel,
+}: SyncPanelProps) {
+  const [errorsOpen, setErrorsOpen] = useState(false)
+  const running = phase === 'fetching' || phase === 'running'
+  const done = phase === 'done'
+  const pct = total > 0 ? Math.round(((processed + failed) / total) * 100) : 0
+  const barColor = done && failed === 0 ? 'bg-emerald-500' : accent
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-muted-foreground whitespace-nowrap">Batch size:</label>
+          <input
+            type="number"
+            min="1"
+            max="20"
+            value={batchSize}
+            onChange={(e) => onBatchSizeChange(Math.max(1, Math.min(20, Number(e.target.value) || 5)))}
+            disabled={running}
+            className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+          />
+        </div>
+        {running ? (
+          <Button size="sm" variant="destructive" onClick={onStop}>
+            Stop
+          </Button>
+        ) : (
+          <Button size="sm" onClick={onStart} disabled={disabled}>
+            Start Sync
+          </Button>
+        )}
+        {!running && disabled && disabledHint && (
+          <span className="text-xs text-muted-foreground">{disabledHint}</span>
+        )}
+      </div>
+
+      {/* Progress */}
+      {phase !== 'idle' && (
+        <div className="space-y-2">
+          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+            {phase === 'fetching' ? (
+              <div className={`h-full w-full ${accent} opacity-30 animate-pulse rounded-full`} />
+            ) : (
+              <div
+                className={`h-full ${barColor} rounded-full transition-all duration-500`}
+                style={{ width: total === 0 ? '100%' : `${pct}%` }}
+              />
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              {phase === 'fetching' && 'Fetching pending items…'}
+              {phase === 'running' && `Processing ${processed + failed} / ${total}`}
+              {phase === 'done' && total === 0 && 'All up to date — nothing to process.'}
+              {phase === 'done' && total > 0 && failed === 0 && `Done — all ${total} ${itemLabel} successfully`}
+              {phase === 'done' && total > 0 && failed > 0 && `Done — ${processed} ${itemLabel}, ${failed} failed`}
+              {phase === 'stopped' && `Stopped — ${processed} ${itemLabel}, ${total - processed - failed} remaining`}
+              {phase === 'error' && 'Failed to start — see error below'}
+            </span>
+            {phase === 'running' && total > 0 && (
+              <span className="tabular-nums shrink-0 font-medium">{pct}%</span>
+            )}
+          </div>
+
+          {phase === 'running' && (processed > 0 || failed > 0) && (
+            <div className="flex gap-4 text-xs">
+              {processed > 0 && (
+                <span className="text-emerald-600 tabular-nums">{processed} ok</span>
+              )}
+              {failed > 0 && (
+                <span className="text-destructive tabular-nums">{failed} failed</span>
+              )}
+              <span className="text-muted-foreground tabular-nums">
+                {total - processed - failed} remaining
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {fatalError && <p className="text-sm text-destructive">{fatalError}</p>}
+
+      {errors.length > 0 && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setErrorsOpen((o) => !o)}
+            className="flex items-center gap-1 text-xs font-medium text-destructive hover:text-destructive/80 transition-colors"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform duration-200 ${errorsOpen ? 'rotate-180' : ''}`}
+            />
+            {errors.length} error{errors.length !== 1 ? 's' : ''}
+          </button>
+          {errorsOpen && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1 max-h-40 overflow-y-auto">
+              {errors.map((e, i) => (
+                <div key={i} className="text-xs font-mono text-muted-foreground">
+                  <span className="text-destructive font-semibold">#{e.id}</span> — {e.error}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main settings page ─────────────────────────────────────────────────────
+
 export default function SettingsPage() {
   const [positions, setPositions] = useState<PositionWithPrompt[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  const [syncTotal, setSyncTotal] = useState<number | null>(null)
-  const [syncProcessed, setSyncProcessed] = useState(0)
-  const [syncFailed, setSyncFailed] = useState(0)
-  const [syncRemaining, setSyncRemaining] = useState<number | null>(null)
-  const [syncRunning, setSyncRunning] = useState(false)
-  const [syncError, setSyncError] = useState<string | null>(null)
-  const [batchSize, setBatchSize] = useState(5)
-  const stopRef = useRef(false)
 
   useEffect(() => {
     setLoading(true)
@@ -196,94 +345,127 @@ export default function SettingsPage() {
     setPositions((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
   }
 
+  // ── Sync AI Scores state ───────────────────────────────────────────────
+  const [scoresPhase, setScoresPhase] = useState<SyncPhase>('idle')
+  const [scoresTotal, setScoresTotal] = useState(0)
+  const [scoresProcessed, setScoresProcessed] = useState(0)
+  const [scoresFailed, setScoresFailed] = useState(0)
+  const [scoresErrors, setScoresErrors] = useState<{ id: number; error: string }[]>([])
+  const [scoresFatalError, setScoresFatalError] = useState<string | null>(null)
+  const [scoresBatchSize, setScoresBatchSize] = useState(5)
+  const scoresStopRef = useRef(false)
+
   async function handleStartSync() {
-    stopRef.current = false
-    setSyncRunning(true)
-    setSyncError(null)
-    setSyncProcessed(0)
-    setSyncFailed(0)
-    setSyncTotal(null)
-    setSyncRemaining(null)
+    scoresStopRef.current = false
+    setScoresPhase('fetching')
+    setScoresErrors([])
+    setScoresFatalError(null)
+    setScoresProcessed(0)
+    setScoresFailed(0)
+    setScoresTotal(0)
 
     try {
-      const initial = await syncScores({ dryRun: true })
-      const total = initial.pending ?? 0
-      setSyncTotal(total)
-      setSyncRemaining(total)
+      const ids = await fetchPendingScoreIds()
+      setScoresTotal(ids.length)
 
-      if (total === 0) return
+      if (ids.length === 0) {
+        setScoresPhase('done')
+        return
+      }
 
-      let remaining = total
+      setScoresPhase('running')
       let processed = 0
       let failed = 0
 
-      while (remaining > 0 && !stopRef.current) {
-        const r = await syncScores({ limit: batchSize })
-        processed += r.processed ?? 0
-        failed += r.failed ?? 0
-        remaining = r.remaining ?? 0
-        setSyncProcessed(processed)
-        setSyncFailed(failed)
-        setSyncRemaining(remaining)
+      for (let i = 0; i < ids.length; i += scoresBatchSize) {
+        if (scoresStopRef.current) break
+        const chunk = ids.slice(i, i + scoresBatchSize)
+        const results = await Promise.allSettled(chunk.map((id) => scoreOneApplication(id)))
+        for (let j = 0; j < results.length; j++) {
+          const r = results[j]
+          if (r.status === 'fulfilled') {
+            processed++
+          } else {
+            failed++
+            const msg = r.reason instanceof Error ? r.reason.message : 'score failed'
+            console.error(`[sync-scores] #${chunk[j]} failed:`, msg)
+            setScoresErrors((prev) => [...prev, { id: chunk[j], error: msg }])
+          }
+        }
+        setScoresProcessed(processed)
+        setScoresFailed(failed)
       }
+
+      setScoresPhase(scoresStopRef.current ? 'stopped' : 'done')
     } catch (e) {
-      setSyncError(e instanceof Error ? e.message : 'Sync failed')
-    } finally {
-      setSyncRunning(false)
+      const msg = e instanceof Error ? e.message : 'Sync failed'
+      console.error('[sync-scores] fatal:', msg)
+      setScoresFatalError(msg)
+      setScoresPhase('error')
     }
   }
 
-  function handleStop() {
-    stopRef.current = true
+  function handleStopScores() {
+    scoresStopRef.current = true
   }
 
-  // ── CV Enhancer state ──────────────────────────────────────────────────────
-  const [cvTotal, setCvTotal] = useState<number | null>(null)
+  // ── CV Enhancer state ──────────────────────────────────────────────────
+  const [cvPhase, setCvPhase] = useState<SyncPhase>('idle')
+  const [cvTotal, setCvTotal] = useState(0)
   const [cvProcessed, setCvProcessed] = useState(0)
   const [cvFailed, setCvFailed] = useState(0)
-  const [cvRemaining, setCvRemaining] = useState<number | null>(null)
-  const [cvRunning, setCvRunning] = useState(false)
-  const [cvError, setCvError] = useState<string | null>(null)
   const [cvErrors, setCvErrors] = useState<{ id: number; error: string }[]>([])
+  const [cvFatalError, setCvFatalError] = useState<string | null>(null)
   const [cvBatchSize, setCvBatchSize] = useState(5)
   const cvStopRef = useRef(false)
 
   async function handleStartCvSync() {
     cvStopRef.current = false
-    setCvRunning(true)
-    setCvError(null)
+    setCvPhase('fetching')
     setCvErrors([])
+    setCvFatalError(null)
     setCvProcessed(0)
     setCvFailed(0)
-    setCvTotal(null)
-    setCvRemaining(null)
+    setCvTotal(0)
 
     try {
-      const initial = await syncCv({ dryRun: true })
-      const total = initial.pending ?? 0
-      setCvTotal(total)
-      setCvRemaining(total)
+      const ids = await fetchPendingCvIds()
+      setCvTotal(ids.length)
 
-      if (total === 0) return
+      if (ids.length === 0) {
+        setCvPhase('done')
+        return
+      }
 
-      let remaining = total
+      setCvPhase('running')
       let processed = 0
       let failed = 0
 
-      while (remaining > 0 && !cvStopRef.current) {
-        const r = await syncCv({ limit: cvBatchSize })
-        processed += r.processed ?? 0
-        failed += r.failed ?? 0
-        remaining = r.remaining ?? 0
-        if (r.errors?.length) setCvErrors((prev) => [...prev, ...(r.errors ?? [])])
+      for (let i = 0; i < ids.length; i += cvBatchSize) {
+        if (cvStopRef.current) break
+        const chunk = ids.slice(i, i + cvBatchSize)
+        const results = await Promise.allSettled(chunk.map((id) => parseSingleCv(id)))
+        for (let j = 0; j < results.length; j++) {
+          const r = results[j]
+          if (r.status === 'fulfilled') {
+            processed++
+          } else {
+            failed++
+            const msg = r.reason instanceof Error ? r.reason.message : 'parse failed'
+            console.error(`[cv-enhancer] #${chunk[j]} failed:`, msg)
+            setCvErrors((prev) => [...prev, { id: chunk[j], error: msg }])
+          }
+        }
         setCvProcessed(processed)
         setCvFailed(failed)
-        setCvRemaining(remaining)
       }
+
+      setCvPhase(cvStopRef.current ? 'stopped' : 'done')
     } catch (e) {
-      setCvError(e instanceof Error ? e.message : 'Sync failed')
-    } finally {
-      setCvRunning(false)
+      const msg = e instanceof Error ? e.message : 'Sync failed'
+      console.error('[cv-enhancer] fatal:', msg)
+      setCvFatalError(msg)
+      setCvPhase('error')
     }
   }
 
@@ -293,7 +475,7 @@ export default function SettingsPage() {
 
   const promptedCount = positions.filter((p) => p.prompt).length
 
-  // ── Danger Zone state ──────────────────────────────────────────────────────
+  // ── Danger Zone state ──────────────────────────────────────────────────
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [deleteRunning, setDeleteRunning] = useState(false)
   const [deleteResult, setDeleteResult] = useState<string | null>(null)
@@ -354,7 +536,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Sync Scores */}
+      {/* Sync AI Scores */}
       <Card>
         <CardHeader>
           <CardTitle>Sync AI Scores</CardTitle>
@@ -363,67 +545,23 @@ export default function SettingsPage() {
             Saving a new prompt resets all scores for that position so they are re-evaluated.
           </p>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label htmlFor="batch-size" className="text-sm text-muted-foreground whitespace-nowrap">
-                Batch size:
-              </label>
-              <input
-                id="batch-size"
-                type="number"
-                min="1"
-                max="20"
-                value={batchSize}
-                onChange={(e) => setBatchSize(Math.min(20, Math.max(1, Number(e.target.value) || 5)))}
-                disabled={syncRunning}
-                className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
-              />
-            </div>
-            {syncRunning ? (
-              <Button size="sm" variant="destructive" onClick={handleStop}>
-                Stop
-              </Button>
-            ) : (
-              <Button size="sm" onClick={handleStartSync} disabled={promptedCount === 0}>
-                Start Sync
-              </Button>
-            )}
-            {promptedCount === 0 && !syncRunning && (
-              <span className="text-xs text-muted-foreground">Save at least one prompt first.</span>
-            )}
-          </div>
-
-          {syncTotal !== null && (
-            <div className="space-y-2">
-              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{
-                    width: syncTotal === 0
-                      ? '100%'
-                      : `${((syncTotal - (syncRemaining ?? syncTotal)) / syncTotal) * 100}%`,
-                  }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>
-                  {syncTotal === 0
-                    ? 'All up to date — nothing to score.'
-                    : syncRunning
-                    ? `Processing… ${syncTotal - (syncRemaining ?? syncTotal)} / ${syncTotal}`
-                    : syncRemaining === 0
-                    ? `Done — ${syncProcessed} scored${syncFailed > 0 ? `, ${syncFailed} failed` : ''}`
-                    : `Stopped — ${syncProcessed} scored, ${syncRemaining} remaining`}
-                </span>
-                {syncFailed > 0 && (
-                  <span className="text-destructive">{syncFailed} failed</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {syncError && <p className="text-sm text-destructive">{syncError}</p>}
+        <CardContent>
+          <SyncPanel
+            accent="bg-primary"
+            phase={scoresPhase}
+            total={scoresTotal}
+            processed={scoresProcessed}
+            failed={scoresFailed}
+            errors={scoresErrors}
+            fatalError={scoresFatalError}
+            batchSize={scoresBatchSize}
+            onBatchSizeChange={setScoresBatchSize}
+            onStart={handleStartSync}
+            onStop={handleStopScores}
+            disabled={promptedCount === 0}
+            disabledHint="Save at least one prompt first."
+            itemLabel="scored"
+          />
         </CardContent>
       </Card>
 
@@ -441,7 +579,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            {['Deneyim (yıl)', 'Üniversite', 'Bölüm', 'İş Geçmişi', 'Beceriler', 'Diller'].map((label) => (
+            {['Experience (yrs)', 'University', 'Field of Study', 'Work History', 'Skills', 'Languages'].map((label) => (
               <span
                 key={label}
                 className="inline-flex items-center rounded-full border bg-muted/50 px-2.5 py-0.5 text-xs font-medium text-muted-foreground"
@@ -451,74 +589,20 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label htmlFor="cv-batch-size" className="text-sm text-muted-foreground whitespace-nowrap">
-                Batch size:
-              </label>
-              <input
-                id="cv-batch-size"
-                type="number"
-                min="1"
-                max="20"
-                value={cvBatchSize}
-                onChange={(e) => setCvBatchSize(Math.min(20, Math.max(1, Number(e.target.value) || 5)))}
-                disabled={cvRunning}
-                className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
-              />
-            </div>
-            {cvRunning ? (
-              <Button size="sm" variant="destructive" onClick={handleStopCv}>
-                Stop
-              </Button>
-            ) : (
-              <Button size="sm" onClick={handleStartCvSync}>
-                Start Sync
-              </Button>
-            )}
-          </div>
-
-          {cvTotal !== null && (
-            <div className="space-y-2">
-              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full bg-violet-500 rounded-full transition-all duration-300"
-                  style={{
-                    width: cvTotal === 0
-                      ? '100%'
-                      : `${((cvProcessed + cvFailed) / cvTotal) * 100}%`,
-                  }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>
-                  {cvTotal === 0
-                    ? 'All up to date — no CVs to parse.'
-                    : cvRunning
-                    ? `Processing… ${cvProcessed + cvFailed} / ${cvTotal}`
-                    : cvRemaining === 0
-                    ? `Done — ${cvProcessed} parsed${cvFailed > 0 ? `, ${cvFailed} failed` : ''}`
-                    : `Stopped — ${cvProcessed} parsed, ${cvRemaining} remaining`}
-                </span>
-                {cvFailed > 0 && (
-                  <span className="text-destructive">{cvFailed} failed</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {cvError && <p className="text-sm text-destructive">{cvError}</p>}
-
-          {cvErrors.length > 0 && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1 max-h-48 overflow-y-auto">
-              <p className="text-xs font-medium text-destructive mb-2">Parse errors ({cvErrors.length})</p>
-              {cvErrors.map((e, i) => (
-                <div key={i} className="text-xs text-muted-foreground font-mono">
-                  <span className="text-destructive font-semibold">#{e.id}</span> — {e.error}
-                </div>
-              ))}
-            </div>
-          )}
+          <SyncPanel
+            accent="bg-violet-500"
+            phase={cvPhase}
+            total={cvTotal}
+            processed={cvProcessed}
+            failed={cvFailed}
+            errors={cvErrors}
+            fatalError={cvFatalError}
+            batchSize={cvBatchSize}
+            onBatchSizeChange={setCvBatchSize}
+            onStart={handleStartCvSync}
+            onStop={handleStopCv}
+            itemLabel="parsed"
+          />
         </CardContent>
       </Card>
 

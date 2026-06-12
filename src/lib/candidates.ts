@@ -362,6 +362,32 @@ export type CvSyncResult = {
   errors?: { id: number; error: string }[]
 }
 
+export async function fetchPendingCvIds(): Promise<number[]> {
+  const res = await fetch('/api/admin/pending-cvs')
+  const data = (await res.json()) as { ok: true; ids: number[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'fetch failed')
+  return data.ids
+}
+
+export async function parseSingleCv(id: number): Promise<void> {
+  const res = await fetch(`/api/admin/parse-cv/${id}`, { method: 'POST' })
+  const data = (await res.json()) as { ok: true } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'parse failed')
+}
+
+export async function fetchPendingScoreIds(): Promise<number[]> {
+  const res = await fetch('/api/admin/pending-scores')
+  const data = (await res.json()) as { ok: true; ids: number[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'fetch failed')
+  return data.ids
+}
+
+export async function scoreOneApplication(id: number): Promise<void> {
+  const res = await fetch(`/api/admin/score-application/${id}`, { method: 'POST' })
+  const data = (await res.json()) as { ok: true } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'score failed')
+}
+
 export async function syncCv(opts: { limit?: number; dryRun?: boolean } = {}): Promise<CvSyncResult> {
   const res = await fetch('/api/admin/sync-cv', {
     method: 'POST',

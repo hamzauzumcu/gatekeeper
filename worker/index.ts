@@ -170,6 +170,35 @@ app.delete('/api/notes/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// Pending CVs — returns all application IDs that need CV parsing (parse_version outdated).
+app.get('/api/admin/pending-cvs', async (c) => {
+  const { results } = await c.env.DB
+    .prepare(`SELECT id FROM applications WHERE resume_url IS NOT NULL AND resume_parse_version < ? LIMIT 1000`)
+    .bind(PARSE_VERSION)
+    .all<{ id: number }>()
+  return c.json({ ok: true, ids: results.map((r) => r.id), parse_version: PARSE_VERSION })
+})
+
+// Parse a single CV by application ID.
+app.post('/api/admin/parse-cv/:id', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+
+  const row = await c.env.DB
+    .prepare(`SELECT resume_url FROM applications WHERE id = ? AND resume_url IS NOT NULL`)
+    .bind(id)
+    .first<{ resume_url: string }>()
+  if (!row) return c.json({ ok: false, error: 'not found or no resume' }, 404)
+
+  try {
+    await parseAndStoreResume(c.env.DB, id, row.resume_url, c.env.DEEPSEEK_API_KEY, c.env.RESUMES, c.env.R2_PUBLIC_URL, c.env.OPENAI_API_KEY)
+    return c.json({ ok: true })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'parse failed' }, 500)
+  }
+})
+
 // CV parsing sync — re-parses CVs whose parse_version < PARSE_VERSION.
 // dryRun: true returns the count of affected rows without processing.
 // limit: max CVs to process per call (default 10, max 50).
@@ -230,6 +259,33 @@ app.put('/api/admin/scoring-prompts/:positionId', async (c) => {
   if (!body.prompt?.trim()) return c.json({ ok: false, error: 'prompt cannot be empty' }, 400)
   await upsertScoringPrompt(c.env.DB, positionId, body.prompt.trim())
   return c.json({ ok: true })
+})
+
+// Pending scores — returns application IDs that need scoring
+app.get('/api/admin/pending-scores', async (c) => {
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT a.id FROM applications a
+       JOIN scoring_prompts sp ON sp.position_id = a.position_id
+       WHERE a.ai_score_version < ?
+       LIMIT 1000`
+    )
+    .bind(SCORE_VERSION)
+    .all<{ id: number }>()
+  return c.json({ ok: true, ids: results.map((r) => r.id) })
+})
+
+// Score a single application by ID
+app.post('/api/admin/score-application/:id', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  try {
+    await scoreApplication(c.env.DB, id, c.env.DEEPSEEK_API_KEY)
+    return c.json({ ok: true })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'score failed' }, 500)
+  }
 })
 
 // Sync AI scores — score applications that have a prompt but no current score
