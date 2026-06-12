@@ -119,7 +119,7 @@ export default function ImportPage() {
         setProgress({
           done: i,
           total: normalized.length,
-          status: hasResume ? `${name} — CV yükleniyor…` : `${name} — kaydediliyor…`,
+          status: hasResume ? `${name} — uploading CV…` : `${name} — saving…`,
         })
         const res = await fetch('/api/import', {
           method: 'POST',
@@ -140,8 +140,8 @@ export default function ImportPage() {
           done: i + CHUNK_SIZE,
           total: normalized.length,
           status: hasResume && (data.summary.resumes_copied ?? 0) > 0
-            ? `${name} — CV yüklendi ✓`
-            : `${name} — kaydedildi ✓`,
+            ? `${name} — CV uploaded ✓`
+            : `${name} — saved ✓`,
         })
       }
       setResult(acc)
@@ -261,7 +261,7 @@ export default function ImportPage() {
           <div className="space-y-3">
             <Button onClick={runImport} disabled={busy}>
               <Upload />
-              {busy ? `İçe aktarılıyor… (${Math.min(progress.done, progress.total)}/${progress.total})` : 'İçe aktar'}
+              {busy ? `Importing… (${Math.min(progress.done, progress.total)}/${progress.total})` : 'Import'}
             </Button>
             {busy && (
               <>
@@ -289,11 +289,11 @@ export default function ImportPage() {
           <AlertTitle>Import complete</AlertTitle>
           <AlertDescription>
             <ul className="list-inside list-disc">
-              <li>Pozisyon ID: {result.positionId}</li>
-              <li>Sorular: {result.questions}</li>
-              <li>Başvurular: {result.applications}</li>
-              <li>Cevaplar: {result.answers}</li>
-              <li>CV yüklendi: {result.resumes_copied}</li>
+              <li>Position ID: {result.positionId}</li>
+              <li>Questions: {result.questions}</li>
+              <li>Applications: {result.applications}</li>
+              <li>Answers: {result.answers}</li>
+              <li>CVs copied: {result.resumes_copied}</li>
             </ul>
           </AlertDescription>
         </Alert>
