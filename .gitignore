@@ -4,3 +4,8 @@ dist/
 .dev.vars
 *.local
 .DS_Store
+
+# wrangler generated
+worker-configuration.d.ts
+tsconfig.*.tsbuildinfo
+*.tsbuildinfo
