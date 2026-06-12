@@ -34,3 +34,94 @@ h1 {
 .status-ok { color: #15803d; }
 .status-error { color: #b91c1c; }
 .status-checking { color: #737373; }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.tabs button {
+  border: 1px solid #e5e5e5;
+  background: #fff;
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.tabs button.active {
+  background: #1a1a1a;
+  color: #fff;
+  border-color: #1a1a1a;
+}
+
+.import h2 { margin-bottom: 0.25rem; }
+.muted { color: #737373; font-size: 0.9rem; }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.grid2 label, .import label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+.import input[type='text'], .grid2 input {
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.95rem;
+}
+
+.badges { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.badge {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: #f0f0f0;
+  border: 1px solid #e5e5e5;
+}
+.badge .arrow { color: #999; }
+.badge-known { background: #eff6ff; border-color: #dbeafe; color: #1e40af; }
+
+.qtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 0.5rem 0 1rem;
+}
+.qtable th, .qtable td {
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+.qtable code { font-size: 0.8rem; color: #444; }
+
+.pill {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: #f0f0f0;
+}
+.pill-number { background: #fef3c7; }
+.pill-boolean { background: #dcfce7; }
+.pill-file { background: #ede9fe; }
+.pill-text { background: #f1f5f9; }
+
+button.primary {
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  padding: 0.55rem 1.2rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+button.primary:disabled { opacity: 0.6; cursor: default; }
+
+.result { margin-top: 1.5rem; }
+.result ul { margin: 0.5rem 0; padding-left: 1.2rem; }

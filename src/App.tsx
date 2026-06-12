@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
+import ImportPage from './ImportPage'
+
+type Tab = 'dashboard' | 'import'
 
 export default function App() {
   const [apiStatus, setApiStatus] = useState<'checking' | 'ok' | 'error'>('checking')
+  const [tab, setTab] = useState<Tab>('dashboard')
 
   useEffect(() => {
     fetch('/api/health')
@@ -18,8 +22,22 @@ export default function App() {
           API: {apiStatus === 'checking' ? 'kontrol ediliyor…' : apiStatus === 'ok' ? 'çalışıyor' : 'erişilemiyor'}
         </span>
       </header>
+
+      <nav className="tabs">
+        <button className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>
+          Panel
+        </button>
+        <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}>
+          CSV İçe Aktar
+        </button>
+      </nav>
+
       <main>
-        <p>HR aday analiz paneli — iskelet hazır. Sıradaki adım: veri modeli ve CSV import.</p>
+        {tab === 'dashboard' ? (
+          <p>HR aday analiz paneli — iskelet hazır. Aday listesi ve analiz bir sonraki adım.</p>
+        ) : (
+          <ImportPage />
+        )}
       </main>
     </div>
   )
