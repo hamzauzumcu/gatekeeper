@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gatekeeper",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "not_found_handling": "single-page-application"
+  }
+
+  // DB şeması netleşince açılacak:
+  //
+  // "d1_databases": [
+  //   { "binding": "DB", "database_name": "gatekeeper", "database_id": "<wrangler d1 create gatekeeper>" }
+  // ],
+  // "r2_buckets": [
+  //   { "binding": "RESUMES", "bucket_name": "gatekeeper-resumes" }
+  // ]
+}
