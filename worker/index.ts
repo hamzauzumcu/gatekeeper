@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
 import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
+import { handleTallyWebhook } from './tally-webhook'
 
 type Env = {
   Bindings: {
@@ -9,6 +10,7 @@ type Env = {
     DB: D1Database
     RESUMES: R2Bucket
     R2_PUBLIC_URL: string
+    TALLY_WEBHOOK_SECRET?: string
   }
 }
 
@@ -162,7 +164,19 @@ app.delete('/api/notes/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-// Future:
-// app.post('/api/webhook/tally', ...)   — new applications arrive automatically
+// Tally webhook — new form responses arrive automatically
+app.post('/api/webhook/tally', async (c) => {
+  const rawBody = await c.req.text()
+  const sig = c.req.header('tally-signature') ?? null
+  const result = await handleTallyWebhook(
+    rawBody,
+    sig,
+    c.env.TALLY_WEBHOOK_SECRET,
+    c.env.DB,
+    c.env.RESUMES,
+    c.env.R2_PUBLIC_URL
+  )
+  return c.json(result.body, result.status as 200 | 400 | 401 | 500)
+})
 
 export default app

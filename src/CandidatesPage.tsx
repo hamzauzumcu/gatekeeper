@@ -452,6 +452,11 @@ export default function CandidatesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; candId: number; candName: string } | null>(null)
+  const [ctxNote, setCtxNote] = useState('')
+  const [ctxNoteSubmitting, setCtxNoteSubmitting] = useState(false)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+
   // All extra col IDs to request = visible columns + answer filter question IDs
   const extraColIds = Array.from(
     new Set([...visibleQuestionIds, ...filters.answerFilters.map((f) => f.questionId).filter(Boolean)])
@@ -461,6 +466,25 @@ export default function CandidatesPage() {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
     fetchQuestionColumns().then(setQuestionColumns).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    function handleClick(e: MouseEvent) {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null)
+        setCtxNote('')
+      }
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setContextMenu(null); setCtxNote('') }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [contextMenu])
 
   // Reset + initial load when query, filters, or visible columns change
   useEffect(() => {
@@ -587,6 +611,31 @@ export default function CandidatesPage() {
       // silent
     } finally {
       setBulkLoading(false)
+    }
+  }
+
+  async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
+    try {
+      await updateApplicantsFitStatus([candId], fitStatus)
+      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+    } catch {
+      // silent
+    }
+    setContextMenu(null)
+  }
+
+  async function submitQuickNote(candId: number) {
+    if (!ctxNote.trim()) return
+    setCtxNoteSubmitting(true)
+    try {
+      await addNote(candId, ctxNote.trim(), currentUser.username, currentUser.fullName)
+      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, notes_count: (c.notes_count ?? 0) + 1 } : c)))
+      setCtxNote('')
+      setContextMenu(null)
+    } catch {
+      // silent
+    } finally {
+      setCtxNoteSubmitting(false)
     }
   }
 
@@ -795,6 +844,11 @@ export default function CandidatesPage() {
                       key={cand.id}
                       className={`cursor-pointer ${checked ? 'bg-primary/5' : ''}`}
                       onClick={() => openCandidate(cand.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setCtxNote('')
+                        setContextMenu({ x: e.clientX, y: e.clientY, candId: cand.id, candName: cand.full_name ?? '' })
+                      }}
                     >
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <button
@@ -899,15 +953,15 @@ export default function CandidatesPage() {
           </TableBody>
         </Table>
 
-        {/* Bottom action bar — multi-select */}
+        {/* Floating bulk pill — multi-select */}
         {selectedIds.size > 0 && (
-          <div className="sticky bottom-0 left-0 right-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-sm font-medium text-foreground">
+          <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+            <div className="flex items-center gap-2 rounded-2xl border bg-background/95 px-4 py-2.5 shadow-xl backdrop-blur">
+              <span className="text-sm font-medium text-foreground whitespace-nowrap">
                 {selectedIds.size} candidate{selectedIds.size !== 1 ? 's' : ''} selected
               </span>
-              <Separator orientation="vertical" className="h-5" />
-              <span className="text-xs text-muted-foreground">Assign status:</span>
+              <Separator orientation="vertical" className="h-4" />
+              <span className="text-xs text-muted-foreground whitespace-nowrap">Assign:</span>
               {FIT_STATUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -931,17 +985,77 @@ export default function CandidatesPage() {
               >
                 Clear
               </button>
+              <Separator orientation="vertical" className="h-4" />
               <button
                 type="button"
                 onClick={() => setSelectedIds(new Set())}
-                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground"
               >
-                Deselect
+                ✕
               </button>
             </div>
           </div>
         )}
       </CardContent>
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 min-w-52 overflow-hidden rounded-xl border bg-popover shadow-xl"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <div className="border-b px-3 py-2">
+            <p className="text-xs font-medium truncate max-w-48">{contextMenu.candName}</p>
+          </div>
+          <div className="p-1.5">
+            <p className="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Status</p>
+            {FIT_STATUS_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => assignSingleFitStatus(contextMenu.candId, opt.value)}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-accent"
+              >
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${FIT_STATUS_STYLES[opt.value]?.badge ?? ''}`}>
+                  {opt.label}
+                </span>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => assignSingleFitStatus(contextMenu.candId, null)}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent"
+            >
+              Clear status
+            </button>
+          </div>
+          <div className="border-t p-1.5">
+            <p className="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Quick Note</p>
+            <div className="px-2 pb-1.5 flex flex-col gap-1.5">
+              <textarea
+                autoFocus={false}
+                rows={2}
+                value={ctxNote}
+                onChange={(e) => setCtxNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitQuickNote(contextMenu.candId)
+                }}
+                placeholder="Add a note… (⌘↵ to save)"
+                className="w-full resize-none rounded-md border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <button
+                type="button"
+                disabled={!ctxNote.trim() || ctxNoteSubmitting}
+                onClick={() => submitQuickNote(contextMenu.candId)}
+                className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                {ctxNoteSubmitting ? 'Saving…' : 'Save Note'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="flex w-full flex-col p-0 sm:max-w-3xl">
@@ -1127,15 +1241,6 @@ function CandidateDetailView({
                       )}
                     </div>
                   </div>
-                  <select
-                    value={appStatuses.get(app.id) ?? app.status}
-                    onChange={(e) => handleDetailStatusChange(app.id, e.target.value)}
-                    className="h-7 cursor-pointer rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    {STATUS_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
                 </div>
 
                 <div className="divide-y">
