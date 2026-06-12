@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
 
 type Env = {
   Bindings: {
@@ -47,6 +47,12 @@ app.get('/api/candidates/filters', async (c) => {
   return c.json({ ok: true, ...filters })
 })
 
+// Question columns available for extra display + filtering
+app.get('/api/candidates/question-columns', async (c) => {
+  const questions = await getQuestionColumns(c.env.DB)
+  return c.json({ ok: true, questions })
+})
+
 // Candidate list + search + filter
 app.get('/api/candidates', async (c) => {
   const q = c.req.query('q') ?? ''
@@ -55,7 +61,14 @@ app.get('/api/candidates', async (c) => {
   const fit_statuses = c.req.queries('fit_status') ?? []
   const limit = Number(c.req.query('limit') ?? '50')
   const offset = Number(c.req.query('offset') ?? '0')
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset })
+  const extraCols = (c.req.queries('extra_col') ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  const afQ = (c.req.queries('af_q') ?? []).map(Number)
+  const afOp = c.req.queries('af_op') ?? []
+  const afV = c.req.queries('af_v') ?? []
+  const answerFilters = afQ
+    .map((questionId, i) => ({ questionId, op: afOp[i] ?? '', value: afV[i] ?? '' }))
+    .filter((f) => Number.isInteger(f.questionId) && f.questionId > 0 && f.op)
+  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters })
   return c.json({ ok: true, ...data })
 })
 

@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check, Mail, Phone, Globe, Download, MessageSquare, Trash2, ThumbsUp, ThumbsDown, Minus } from 'lucide-react'
+import {
+  Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check,
+  Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus,
+} from 'lucide-react'
 import {
   fetchCandidates,
   fetchCandidate,
   fetchFilterOptions,
+  fetchQuestionColumns,
   loadSavedFilters,
   saveFilters,
+  loadSavedColumns,
+  saveColumns,
   formatDate,
-  formatDateShort,
   formatSalary,
   updateApplicationStatus,
   updateApplicantsFitStatus,
@@ -15,11 +20,17 @@ import {
   addNote,
   deleteNote,
   FIT_STATUS_OPTIONS,
+  getOpOptions,
+  defaultOpForType,
+  NO_VALUE_OPS,
   type CandidateListItem,
   type CandidateDetail,
   type CandidateNote,
   type FilterOptions,
   type ActiveFilters,
+  type QuestionColumn,
+  type AnswerFilter,
+  type AnswerFilterOp,
 } from './lib/candidates'
 import { getUser, type User } from './lib/auth'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -61,7 +72,7 @@ function FitBadge({ status }: { status: string | null }) {
   )
 }
 
-// Generic multi-select dropdown (shared for country and fit_status)
+// Generic multi-select dropdown
 function MultiSelect({
   values,
   onChange,
@@ -204,10 +215,221 @@ function FilterSelect({
   )
 }
 
+// Column picker dropdown
+function ColumnPicker({
+  questionColumns,
+  visibleIds,
+  onChange,
+}: {
+  questionColumns: QuestionColumn[]
+  visibleIds: number[]
+  onChange: (ids: number[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [])
+
+  function toggle(id: number) {
+    onChange(visibleIds.includes(id) ? visibleIds.filter((x) => x !== id) : [...visibleIds, id])
+  }
+
+  // Group by position
+  const byPosition = questionColumns.reduce<Record<string, QuestionColumn[]>>((acc, q) => {
+    const key = q.position_title
+    if (!acc[key]) acc[key] = []
+    acc[key].push(q)
+    return acc
+  }, {})
+
+  const active = visibleIds.length > 0
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={[
+          'flex h-9 items-center gap-2 rounded-md border px-3 text-sm transition-colors',
+          active
+            ? 'border-primary bg-primary/5 font-medium text-primary'
+            : 'border-input bg-background text-muted-foreground hover:text-foreground',
+        ].join(' ')}
+      >
+        <Columns3 className="size-3.5 shrink-0" />
+        Columns
+        {active && (
+          <span className="flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+            {visibleIds.length}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 w-96 overflow-hidden rounded-md border bg-popover shadow-md">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Question Columns
+            </span>
+            {visibleIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          {questionColumns.length === 0 ? (
+            <div className="px-3 py-4 text-center text-sm text-muted-foreground">No questions found</div>
+          ) : (
+            <div className="max-h-80 overflow-y-auto">
+              {Object.entries(byPosition).map(([posTitle, qs]) => (
+                <div key={posTitle}>
+                  <div className="sticky top-0 bg-muted/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {posTitle}
+                  </div>
+                  {qs.map((q) => {
+                    const checked = visibleIds.includes(q.id)
+                    return (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onClick={() => toggle(q.id)}
+                        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-accent"
+                      >
+                        <span
+                          className={[
+                            'flex size-4 shrink-0 items-center justify-center rounded border',
+                            checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                          ].join(' ')}
+                        >
+                          {checked && <Check className="size-2.5" />}
+                        </span>
+                        <span className="flex-1 leading-snug">{q.label}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">{q.type}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Single answer filter row
+function AnswerFilterRow({
+  filter,
+  questionColumns,
+  onChange,
+  onRemove,
+}: {
+  filter: AnswerFilter
+  questionColumns: QuestionColumn[]
+  onChange: (f: AnswerFilter) => void
+  onRemove: () => void
+}) {
+  const question = questionColumns.find((q) => q.id === filter.questionId)
+  const opOptions = question ? getOpOptions(question.type) : []
+  const noValue = NO_VALUE_OPS.has(filter.op as AnswerFilterOp)
+
+  function handleQuestionChange(qIdStr: string) {
+    const qId = Number(qIdStr)
+    const q = questionColumns.find((c) => c.id === qId)
+    const newOp = q ? defaultOpForType(q.type) : 'contains'
+    onChange({ questionId: qId, op: newOp as AnswerFilterOp, value: '' })
+  }
+
+  function handleOpChange(op: string) {
+    const newNoValue = NO_VALUE_OPS.has(op as AnswerFilterOp)
+    onChange({ ...filter, op: op as AnswerFilterOp, value: newNoValue ? '' : filter.value })
+  }
+
+  const selectCls = [
+    'h-8 rounded-md border border-input bg-background px-2 text-sm appearance-none cursor-pointer',
+    'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+  ].join(' ')
+
+  const chevron = (
+    <svg className="pointer-events-none absolute right-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+  )
+
+  return (
+    <div className="flex items-center gap-2">
+      {/* Question select */}
+      <div className="relative">
+        <select
+          value={filter.questionId || ''}
+          onChange={(e) => handleQuestionChange(e.target.value)}
+          className={`${selectCls} min-w-40 pr-7 font-medium`}
+        >
+          <option value="" disabled>Select field…</option>
+          {questionColumns.map((q) => (
+            <option key={q.id} value={q.id}>{q.label}</option>
+          ))}
+        </select>
+        {chevron}
+      </div>
+
+      {/* Operator select */}
+      <div className="relative">
+        <select
+          value={filter.op}
+          onChange={(e) => handleOpChange(e.target.value)}
+          className={`${selectCls} min-w-32 pr-7`}
+        >
+          {opOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        {chevron}
+      </div>
+
+      {/* Value input */}
+      {!noValue && (
+        <input
+          type={question?.type === 'number' ? 'number' : 'text'}
+          value={filter.value}
+          onChange={(e) => onChange({ ...filter, value: e.target.value })}
+          placeholder="value…"
+          className={[
+            'h-8 w-28 rounded-md border border-input bg-background px-2 text-sm',
+            'ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+          ].join(' ')}
+        />
+      )}
+
+      {/* Remove */}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  )
+}
+
 export default function CandidatesPage() {
   const [q, setQ] = useState('')
   const [filters, setFilters] = useState<ActiveFilters>(loadSavedFilters)
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ countries: [], positions: [] })
+  const [questionColumns, setQuestionColumns] = useState<QuestionColumn[]>([])
+  const [visibleQuestionIds, setVisibleQuestionIds] = useState<number[]>(loadSavedColumns)
 
   const PAGE_SIZE = 50
 
@@ -227,19 +449,20 @@ export default function CandidatesPage() {
   const [open, setOpen] = useState(false)
   const [sheetTab, setSheetTab] = useState('applications')
 
-  // Multi-select state
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
-  // Context menu state
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; candidateId: number } | null>(null)
-
+  // All extra col IDs to request = visible columns + answer filter question IDs
+  const extraColIds = Array.from(
+    new Set([...visibleQuestionIds, ...filters.answerFilters.map((f) => f.questionId).filter(Boolean)])
+  )
 
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
+    fetchQuestionColumns().then(setQuestionColumns).catch(() => {})
   }, [])
 
-  // Reset + initial load when query or filters change
+  // Reset + initial load when query, filters, or visible columns change
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true)
@@ -248,7 +471,7 @@ export default function CandidatesPage() {
       setOffset(0)
       setHasMore(false)
       setSelectedIds(new Set())
-      fetchCandidates(q, filters, 0, PAGE_SIZE)
+      fetchCandidates(q, filters, extraColIds, 0, PAGE_SIZE)
         .then(({ candidates: page, total }) => {
           setCandidates(page)
           setTotal(total)
@@ -259,7 +482,7 @@ export default function CandidatesPage() {
         .finally(() => setLoading(false))
     }, 250)
     return () => clearTimeout(t)
-  }, [q, filters])
+  }, [q, filters, visibleQuestionIds]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Intersection observer for infinite scroll
   useEffect(() => {
@@ -268,7 +491,7 @@ export default function CandidatesPage() {
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
           setLoadingMore(true)
-          fetchCandidates(q, filters, offset, PAGE_SIZE)
+          fetchCandidates(q, filters, extraColIds, offset, PAGE_SIZE)
             .then(({ candidates: page, total }) => {
               setCandidates((prev) => {
                 const merged = [...prev, ...page]
@@ -285,7 +508,7 @@ export default function CandidatesPage() {
     )
     obs.observe(sentinelRef.current)
     return () => obs.disconnect()
-  }, [hasMore, loadingMore, loading, offset, q, filters])
+  }, [hasMore, loadingMore, loading, offset, q, filters, visibleQuestionIds]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
     const next = { ...filters, [key]: value }
@@ -294,9 +517,33 @@ export default function CandidatesPage() {
   }
 
   function clearFilters() {
-    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [] }
+    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [], answerFilters: [] }
     setFilters(cleared)
     saveFilters(cleared)
+  }
+
+  function updateVisibleColumns(ids: number[]) {
+    setVisibleQuestionIds(ids)
+    saveColumns(ids)
+  }
+
+  function addAnswerFilter() {
+    if (questionColumns.length === 0) return
+    const col = questionColumns[0]
+    const newFilter: AnswerFilter = {
+      questionId: col.id,
+      op: defaultOpForType(col.type),
+      value: '',
+    }
+    updateFilter('answerFilters', [...filters.answerFilters, newFilter])
+  }
+
+  function updateAnswerFilter(i: number, f: AnswerFilter) {
+    updateFilter('answerFilters', filters.answerFilters.map((x, idx) => (idx === i ? f : x)))
+  }
+
+  function removeAnswerFilter(i: number) {
+    updateFilter('answerFilters', filters.answerFilters.filter((_, idx) => idx !== i))
   }
 
   function openCandidate(id: number, tab = 'applications') {
@@ -343,26 +590,23 @@ export default function CandidatesPage() {
     }
   }
 
-  async function assignFitStatusSingle(candidateId: number, fitStatus: string | null) {
-    try {
-      await updateApplicantsFitStatus([candidateId], fitStatus)
-      setCandidates((prev) =>
-        prev.map((c) => (c.id === candidateId ? { ...c, fit_status: fitStatus } : c))
-      )
-    } catch {
-      // silent
-    }
-  }
-
   const activeFilterCount =
     (filters.countries.length > 0 ? 1 : 0) +
     (filters.position ? 1 : 0) +
-    (filters.fit_statuses.length > 0 ? 1 : 0)
+    (filters.fit_statuses.length > 0 ? 1 : 0) +
+    filters.answerFilters.length
 
   const allSelected = candidates.length > 0 && selectedIds.size === candidates.length
   const someSelected = selectedIds.size > 0 && !allSelected
 
   const countryOptions = filterOptions.countries.map((c) => ({ value: c, label: c }))
+
+  // Ordered visible question columns
+  const visibleQuestions = visibleQuestionIds
+    .map((id) => questionColumns.find((q) => q.id === id))
+    .filter(Boolean) as QuestionColumn[]
+
+  const totalCols = 8 + visibleQuestions.length
 
   return (
     <Card>
@@ -397,7 +641,7 @@ export default function CandidatesPage() {
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <SlidersHorizontal className="size-4 shrink-0 text-muted-foreground" />
             <MultiSelect
               values={filters.countries}
@@ -418,11 +662,41 @@ export default function CandidatesPage() {
               placeholder="All statuses"
               minWidth="min-w-36"
             />
+            <ColumnPicker
+              questionColumns={questionColumns}
+              visibleIds={visibleQuestionIds}
+              onChange={updateVisibleColumns}
+            />
+            {questionColumns.length > 0 && (
+              <button
+                type="button"
+                onClick={addAnswerFilter}
+                className="flex h-9 items-center gap-1.5 rounded-md border border-dashed border-input bg-background px-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground transition-colors"
+              >
+                <Plus className="size-3.5" />
+                Add filter
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Active filter tags */}
-        {activeFilterCount > 0 && (
+        {/* Answer filter rows */}
+        {filters.answerFilters.length > 0 && (
+          <div className="mt-2 flex flex-col gap-2 pl-1">
+            {filters.answerFilters.map((f, i) => (
+              <AnswerFilterRow
+                key={i}
+                filter={f}
+                questionColumns={questionColumns}
+                onChange={(updated) => updateAnswerFilter(i, updated)}
+                onRemove={() => removeAnswerFilter(i)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Active filter tags (country, position, fit_status) */}
+        {(filters.countries.length > 0 || filters.position || filters.fit_statuses.length > 0) && (
           <div className="mt-1 flex flex-wrap gap-1.5">
             {filters.countries.map((c) => (
               <Badge key={c} variant="secondary" className="gap-1 pr-1">
@@ -494,7 +768,12 @@ export default function CandidatesPage() {
               <TableHead>Position</TableHead>
               <TableHead>Salary Expectation</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Apply Date</TableHead>
+              <TableHead>Last application</TableHead>
+              {visibleQuestions.map((q) => (
+                <TableHead key={q.id} className="max-w-40">
+                  <span className="block truncate" title={q.label}>{q.label}</span>
+                </TableHead>
+              ))}
               <TableHead className="w-10 text-center">Notes</TableHead>
             </TableRow>
           </TableHeader>
@@ -502,7 +781,7 @@ export default function CandidatesPage() {
             {loading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((__, j) => (
+                    {Array.from({ length: totalCols }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-full" />
                       </TableCell>
@@ -516,10 +795,6 @@ export default function CandidatesPage() {
                       key={cand.id}
                       className={`cursor-pointer ${checked ? 'bg-primary/5' : ''}`}
                       onClick={() => openCandidate(cand.id)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setCtxMenu({ x: e.clientX, y: e.clientY, candidateId: cand.id })
-                      }}
                     >
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <button
@@ -575,8 +850,15 @@ export default function CandidatesPage() {
                         <FitBadge status={cand.fit_status} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatDateShort(cand.latest_submitted_at)}
+                        {formatDate(cand.latest_submitted_at)}
                       </TableCell>
+                      {visibleQuestions.map((q) => (
+                        <TableCell key={q.id} className="max-w-40 text-sm text-muted-foreground">
+                          <span className="block truncate" title={cand.extra_answers?.[String(q.id)] ?? undefined}>
+                            {cand.extra_answers?.[String(q.id)] ?? '—'}
+                          </span>
+                        </TableCell>
+                      ))}
                       <TableCell className="text-center">
                         <button
                           type="button"
@@ -599,7 +881,7 @@ export default function CandidatesPage() {
                 })}
             {!loading && candidates.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
+                <TableCell colSpan={totalCols} className="text-center text-muted-foreground">
                   {activeFilterCount > 0 || q
                     ? 'No candidates match the current filters.'
                     : 'No candidates found.'}
@@ -609,7 +891,7 @@ export default function CandidatesPage() {
             {/* Infinite scroll sentinel */}
             <TableRow ref={sentinelRef} className="border-0">
               {loadingMore && (
-                <TableCell colSpan={8} className="py-3 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={totalCols} className="py-3 text-center text-sm text-muted-foreground">
                   Loading…
                 </TableCell>
               )}
@@ -617,32 +899,15 @@ export default function CandidatesPage() {
           </TableBody>
         </Table>
 
-        {/* Floating bulk-action pill */}
+        {/* Bottom action bar — multi-select */}
         {selectedIds.size > 0 && (
-          <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
-            <div className="flex items-center gap-1 rounded-2xl border bg-background/95 px-2 py-2 shadow-xl backdrop-blur ring-1 ring-border">
-              {/* dismiss */}
-              <button
-                type="button"
-                onClick={() => setSelectedIds(new Set())}
-                className="flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Deselect all"
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M2 2l10 10M12 2L2 12" />
-                </svg>
-              </button>
-
-              <Separator orientation="vertical" className="mx-1 h-5" />
-
-              {/* count */}
-              <span className="px-2 text-sm font-medium tabular-nums text-foreground">
-                {selectedIds.size} selected
+          <div className="sticky bottom-0 left-0 right-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-foreground">
+                {selectedIds.size} candidate{selectedIds.size !== 1 ? 's' : ''} selected
               </span>
-
-              <Separator orientation="vertical" className="mx-1 h-5" />
-
-              {/* status buttons */}
+              <Separator orientation="vertical" className="h-5" />
+              <span className="text-xs text-muted-foreground">Assign status:</span>
               {FIT_STATUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -650,7 +915,7 @@ export default function CandidatesPage() {
                   disabled={bulkLoading}
                   onClick={() => assignFitStatus(opt.value)}
                   className={[
-                    'inline-flex items-center rounded-xl border px-3 py-1.5 text-xs font-medium transition-opacity',
+                    'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-opacity',
                     FIT_STATUS_STYLES[opt.value]?.badge ?? '',
                     bulkLoading ? 'opacity-50' : 'hover:opacity-80',
                   ].join(' ')}
@@ -662,31 +927,21 @@ export default function CandidatesPage() {
                 type="button"
                 disabled={bulkLoading}
                 onClick={() => assignFitStatus(null)}
-                className="inline-flex items-center rounded-xl border border-input bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
+                className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
               >
                 Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                Deselect
               </button>
             </div>
           </div>
         )}
       </CardContent>
-
-      {ctxMenu && (
-        <CandidateContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          candidateId={ctxMenu.candidateId}
-          onAssignFit={(status) => {
-            assignFitStatusSingle(ctxMenu.candidateId, status)
-            setCtxMenu(null)
-          }}
-          onAddNote={() => {
-            openCandidate(ctxMenu.candidateId, 'notes')
-            setCtxMenu(null)
-          }}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="flex w-full flex-col p-0 sm:max-w-3xl">
@@ -743,15 +998,6 @@ const STATUS_STYLES: Record<string, string> = {
   hired: 'bg-emerald-50 text-emerald-700 border-emerald-200',
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const cls = STATUS_STYLES[status?.toLowerCase()] ?? 'bg-muted text-muted-foreground border-border'
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
-      {status}
-    </span>
-  )
-}
-
 function CandidateDetailView({
   detail,
   activeTab,
@@ -779,6 +1025,7 @@ function CandidateDetailView({
       setAppStatuses((m) => new Map(m).set(appId, prev))
     }
   }
+
   const linkedinHref = applicant.linkedin_url
     ? applicant.linkedin_url.startsWith('http')
       ? applicant.linkedin_url
@@ -880,6 +1127,15 @@ function CandidateDetailView({
                       )}
                     </div>
                   </div>
+                  <select
+                    value={appStatuses.get(app.id) ?? app.status}
+                    onChange={(e) => handleDetailStatusChange(app.id, e.target.value)}
+                    className="h-7 cursor-pointer rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    {STATUS_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="divide-y">
@@ -940,90 +1196,6 @@ function CandidateDetailView({
           <NotesSection applicantId={applicant.id} currentUser={currentUser} />
         </TabsContent>
       </Tabs>
-    </div>
-  )
-}
-
-const FIT_CONTEXT_ITEMS = [
-  { value: 'good_fit', label: 'Good Fit', icon: ThumbsUp, style: 'text-green-700 hover:bg-green-50' },
-  { value: 'maybe', label: 'Maybe', icon: Minus, style: 'text-amber-700 hover:bg-amber-50' },
-  { value: 'not_fit', label: 'Not Fit', icon: ThumbsDown, style: 'text-red-700 hover:bg-red-50' },
-] as const
-
-function CandidateContextMenu({
-  x,
-  y,
-  onAssignFit,
-  onAddNote,
-  onClose,
-}: {
-  x: number
-  y: number
-  candidateId: number
-  onAssignFit: (status: string | null) => void
-  onAddNote: () => void
-  onClose: () => void
-}) {
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function onDown(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose()
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
-
-  // Adjust position so menu stays within viewport
-  const menuW = 192
-  const menuH = 180
-  const left = x + menuW > window.innerWidth ? x - menuW : x
-  const top = y + menuH > window.innerHeight ? y - menuH : y
-
-  return (
-    <div
-      ref={menuRef}
-      style={{ position: 'fixed', left, top, zIndex: 9999 }}
-      className="w-48 rounded-lg border bg-popover py-1 shadow-lg"
-    >
-      <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Fit Status
-      </div>
-      {FIT_CONTEXT_ITEMS.map(({ value, label, icon: Icon, style }) => (
-        <button
-          key={value}
-          type="button"
-          onClick={() => onAssignFit(value)}
-          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-sm transition-colors ${style}`}
-        >
-          <Icon className="size-3.5 shrink-0" />
-          {label}
-        </button>
-      ))}
-      <button
-        type="button"
-        onClick={() => onAssignFit(null)}
-        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <X className="size-3.5 shrink-0" />
-        Clear Status
-      </button>
-      <div className="my-1 border-t" />
-      <button
-        type="button"
-        onClick={onAddNote}
-        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
-      >
-        <MessageSquare className="size-3.5 shrink-0" />
-        Add Note
-      </button>
     </div>
   )
 }

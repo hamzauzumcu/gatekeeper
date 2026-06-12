@@ -15,6 +15,7 @@ export type CandidateListItem = {
   latest_application_id: number | null
   fit_status: string | null
   notes_count: number
+  extra_answers?: Record<string, string | null>
 }
 
 export const FIT_STATUS_OPTIONS = [
@@ -47,13 +48,90 @@ export type FilterOptions = {
   positions: string[]
 }
 
+export type QuestionColumn = {
+  id: number
+  label: string
+  type: 'text' | 'number' | 'boolean' | 'file'
+  field_key: string
+  position_id: number
+  position_title: string
+}
+
+export type AnswerFilterOp =
+  | 'contains' | 'not_contains' | 'equals' | 'not_equals' | 'starts_with' | 'ends_with'
+  | 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'
+  | 'is_true' | 'is_false'
+  | 'is_empty' | 'is_not_empty'
+
+export type AnswerFilter = {
+  questionId: number
+  op: AnswerFilterOp
+  value: string
+}
+
+export const TEXT_OP_OPTIONS: { value: AnswerFilterOp; label: string }[] = [
+  { value: 'contains', label: 'contains' },
+  { value: 'not_contains', label: 'does not contain' },
+  { value: 'equals', label: 'is exactly' },
+  { value: 'not_equals', label: 'is not' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'ends_with', label: 'ends with' },
+  { value: 'is_empty', label: 'is empty' },
+  { value: 'is_not_empty', label: 'is not empty' },
+]
+
+export const NUMBER_OP_OPTIONS: { value: AnswerFilterOp; label: string }[] = [
+  { value: 'eq', label: '=' },
+  { value: 'neq', label: '≠' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '≥' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '≤' },
+  { value: 'is_empty', label: 'is empty' },
+  { value: 'is_not_empty', label: 'is not empty' },
+]
+
+export const BOOLEAN_OP_OPTIONS: { value: AnswerFilterOp; label: string }[] = [
+  { value: 'is_true', label: 'is Yes' },
+  { value: 'is_false', label: 'is No' },
+  { value: 'is_empty', label: 'is empty' },
+  { value: 'is_not_empty', label: 'is not empty' },
+]
+
+export const FILE_OP_OPTIONS: { value: AnswerFilterOp; label: string }[] = [
+  { value: 'is_not_empty', label: 'has file' },
+  { value: 'is_empty', label: 'no file' },
+]
+
+export const NO_VALUE_OPS = new Set<AnswerFilterOp>(['is_empty', 'is_not_empty', 'is_true', 'is_false'])
+
+export function getOpOptions(type: QuestionColumn['type']) {
+  switch (type) {
+    case 'number': return NUMBER_OP_OPTIONS
+    case 'boolean': return BOOLEAN_OP_OPTIONS
+    case 'file': return FILE_OP_OPTIONS
+    default: return TEXT_OP_OPTIONS
+  }
+}
+
+export function defaultOpForType(type: QuestionColumn['type']): AnswerFilterOp {
+  switch (type) {
+    case 'number': return 'eq'
+    case 'boolean': return 'is_true'
+    case 'file': return 'is_not_empty'
+    default: return 'contains'
+  }
+}
+
 export type ActiveFilters = {
   countries: string[]
   position: string
   fit_statuses: string[]
+  answerFilters: AnswerFilter[]
 }
 
 const FILTER_STORAGE_KEY = 'gk_candidate_filters'
+const COLUMN_STORAGE_KEY = 'gk_candidate_columns'
 
 export function loadSavedFilters(): ActiveFilters {
   try {
@@ -61,7 +139,6 @@ export function loadSavedFilters(): ActiveFilters {
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>
       return {
-        // migrate old single-string country → array
         countries: Array.isArray(parsed.countries)
           ? (parsed.countries as string[])
           : parsed.country
@@ -69,16 +146,29 @@ export function loadSavedFilters(): ActiveFilters {
             : [],
         position: typeof parsed.position === 'string' ? parsed.position : '',
         fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
+        answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
       }
     }
   } catch {
     // ignore
   }
-  return { countries: [], position: '', fit_statuses: [] }
+  return { countries: [], position: '', fit_statuses: [], answerFilters: [] }
 }
 
 export function saveFilters(f: ActiveFilters): void {
   localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(f))
+}
+
+export function loadSavedColumns(): number[] {
+  try {
+    const raw = localStorage.getItem(COLUMN_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as number[]
+  } catch {}
+  return []
+}
+
+export function saveColumns(cols: number[]): void {
+  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(cols))
 }
 
 export async function fetchFilterOptions(): Promise<FilterOptions> {
@@ -90,9 +180,17 @@ export async function fetchFilterOptions(): Promise<FilterOptions> {
   return { countries: data.countries, positions: data.positions }
 }
 
+export async function fetchQuestionColumns(): Promise<QuestionColumn[]> {
+  const res = await fetch('/api/candidates/question-columns')
+  const data = (await res.json()) as { ok: true; questions: QuestionColumn[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch question columns')
+  return data.questions
+}
+
 export async function fetchCandidates(
   q: string,
   filters: ActiveFilters,
+  extraCols: number[],
   offset = 0,
   limit = 50
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
@@ -100,6 +198,12 @@ export async function fetchCandidates(
   filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
   filters.fit_statuses.forEach((s) => params.append('fit_status', s))
+  extraCols.forEach((id) => params.append('extra_col', String(id)))
+  filters.answerFilters.forEach((f) => {
+    params.append('af_q', String(f.questionId))
+    params.append('af_op', f.op)
+    params.append('af_v', f.value)
+  })
   const res = await fetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
@@ -119,7 +223,6 @@ export function formatSalary(raw: string | null): string {
   if (!raw) return '—'
   const s = raw.trim()
   if (!s) return '—'
-  // Replace all digit groups (≥ 3 digits) with locale-formatted numbers
   return s.replace(/\d[\d,.]*\d|\d{3,}/g, (m) => {
     const n = parseInt(m.replace(/[,.]/g, ''), 10)
     if (isNaN(n) || n < 100) return m

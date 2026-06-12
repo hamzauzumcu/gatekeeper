@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sun, Moon } from 'lucide-react'
 import ImportPage from './ImportPage'
@@ -9,26 +8,9 @@ import LoginPage from './LoginPage'
 import { getUser, logout, type User } from '@/lib/auth'
 import { useDarkMode } from '@/lib/theme'
 
-type ApiStatus = 'checking' | 'ok' | 'error'
-
-const STATUS_LABEL: Record<ApiStatus, string> = {
-  checking: 'checking…',
-  ok: 'running',
-  error: 'unreachable',
-}
-
 export default function App() {
   const [user, setUser] = useState<User | null>(() => getUser())
-  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
   const [dark, setDark] = useDarkMode()
-
-  useEffect(() => {
-    if (!user) return
-    fetch('/api/health')
-      .then((r) => r.json())
-      .then((d: { ok: boolean }) => setApiStatus(d.ok ? 'ok' : 'error'))
-      .catch(() => setApiStatus('error'))
-  }, [user])
 
   if (!user) {
     return <LoginPage onLogin={setUser} />
@@ -37,7 +19,6 @@ export default function App() {
   function handleLogout() {
     logout()
     setUser(null)
-    setApiStatus('checking')
   }
 
   return (
@@ -45,9 +26,6 @@ export default function App() {
       <header className="flex items-center justify-between border-b pb-4">
         <h1 className="text-2xl font-semibold tracking-tight">Gatekeeper</h1>
         <div className="flex items-center gap-3">
-          <Badge variant={apiStatus === 'ok' ? 'secondary' : apiStatus === 'error' ? 'destructive' : 'outline'}>
-            API: {STATUS_LABEL[apiStatus]}
-          </Badge>
           <span className="text-sm text-muted-foreground">{user.fullName}</span>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             Sign out

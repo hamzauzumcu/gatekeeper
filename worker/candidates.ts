@@ -15,6 +15,7 @@ export type CandidateListItem = {
   latest_application_id: number | null
   fit_status: string | null
   notes_count: number
+  extra_answers?: Record<string, string | null>
 }
 
 export type CandidateAnswer = { label: string; type: string; value: string | null }
@@ -39,6 +40,93 @@ export type CandidateFilters = {
   positions: string[]
 }
 
+export type QuestionColumn = {
+  id: number
+  label: string
+  type: 'text' | 'number' | 'boolean' | 'file'
+  field_key: string
+  position_id: number
+  position_title: string
+}
+
+export type AnswerFilter = {
+  questionId: number
+  op: string
+  value: string
+}
+
+const VALID_OPS = [
+  'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with',
+  'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
+  'is_true', 'is_false', 'is_empty', 'is_not_empty',
+] as const
+
+const NO_VALUE_OPS = new Set(['is_empty', 'is_not_empty', 'is_true', 'is_false'])
+
+type AnswerFilterResult = { sql: string; binding?: string | number }
+
+function buildAnswerFilterCondition(
+  qId: number,
+  op: string,
+  value: string,
+  idx: number
+): AnswerFilterResult | null {
+  const subq = `(SELECT aa_f.value
+    FROM applications a_f
+    JOIN application_answers aa_f ON aa_f.application_id = a_f.id
+    WHERE a_f.applicant_id = ap.id AND aa_f.question_id = ${qId}
+    ORDER BY a_f.submitted_at DESC LIMIT 1)`
+
+  switch (op) {
+    case 'contains':
+      return { sql: `${subq} LIKE ?${idx}`, binding: `%${value}%` }
+    case 'not_contains':
+      return { sql: `${subq} NOT LIKE ?${idx}`, binding: `%${value}%` }
+    case 'equals':
+      return { sql: `${subq} = ?${idx}`, binding: value }
+    case 'not_equals':
+      return { sql: `${subq} != ?${idx}`, binding: value }
+    case 'starts_with':
+      return { sql: `${subq} LIKE ?${idx}`, binding: `${value}%` }
+    case 'ends_with':
+      return { sql: `${subq} LIKE ?${idx}`, binding: `%${value}` }
+    case 'is_empty':
+      return { sql: `COALESCE(${subq}, '') = ''` }
+    case 'is_not_empty':
+      return { sql: `COALESCE(${subq}, '') != ''` }
+    case 'eq': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) = ?${idx}`, binding: n }
+    }
+    case 'neq': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) != ?${idx}`, binding: n }
+    }
+    case 'gt': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) > ?${idx}`, binding: n }
+    }
+    case 'gte': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) >= ?${idx}`, binding: n }
+    }
+    case 'lt': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) < ?${idx}`, binding: n }
+    }
+    case 'lte': {
+      const n = Number(value); if (isNaN(n)) return null
+      return { sql: `CAST(${subq} AS REAL) <= ?${idx}`, binding: n }
+    }
+    case 'is_true':
+      return { sql: `lower(COALESCE(${subq}, '')) IN ('1', 'true', 'yes')` }
+    case 'is_false':
+      return { sql: `lower(COALESCE(${subq}, '')) NOT IN ('1', 'true', 'yes')` }
+    default:
+      return null
+  }
+}
+
 export async function getCandidateFilters(db: D1Database): Promise<CandidateFilters> {
   const [countriesRes, positionsRes] = await db.batch([
     db.prepare(`SELECT DISTINCT country FROM applicants WHERE country IS NOT NULL AND country != '' ORDER BY country`),
@@ -50,9 +138,30 @@ export async function getCandidateFilters(db: D1Database): Promise<CandidateFilt
   }
 }
 
+export async function getQuestionColumns(db: D1Database): Promise<QuestionColumn[]> {
+  const res = await db
+    .prepare(
+      `SELECT pq.id, pq.label, pq.type, pq.field_key, pq.position_id, jp.title AS position_title
+       FROM position_questions pq
+       JOIN job_positions jp ON jp.id = pq.position_id
+       ORDER BY jp.title, pq.sort_order`
+    )
+    .all<QuestionColumn>()
+  return res.results ?? []
+}
+
 export async function listCandidates(
   db: D1Database,
-  opts: { q?: string; countries?: string[]; position?: string; fit_statuses?: string[]; limit?: number; offset?: number }
+  opts: {
+    q?: string
+    countries?: string[]
+    position?: string
+    fit_statuses?: string[]
+    limit?: number
+    offset?: number
+    extraCols?: number[]
+    answerFilters?: AnswerFilter[]
+  }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
@@ -60,9 +169,13 @@ export async function listCandidates(
   const fit_statuses = (opts.fit_statuses ?? []).filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const offset = Math.max(opts.offset ?? 0, 0)
+  const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n > 0)
+  const answerFilters = (opts.answerFilters ?? []).filter(
+    (f) => Number.isInteger(f.questionId) && f.questionId > 0 && (VALID_OPS as readonly string[]).includes(f.op)
+  )
 
   const conditions: string[] = []
-  const bindings: string[] = []
+  const bindings: (string | number)[] = []
   let idx = 0
 
   if (q) {
@@ -91,7 +204,26 @@ export async function listCandidates(
     bindings.push(...fit_statuses)
   }
 
+  for (const f of answerFilters) {
+    const needsBinding = !NO_VALUE_OPS.has(f.op)
+    const bindingIdx = needsBinding ? idx + 1 : idx
+    const res = buildAnswerFilterCondition(f.questionId, f.op, f.value, bindingIdx)
+    if (!res) continue
+    conditions.push(res.sql)
+    if (res.binding !== undefined) {
+      idx++
+      bindings.push(res.binding)
+    }
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  const extraColSelects = extraCols
+    .map(
+      (qId) =>
+        `(SELECT aa_ec.value FROM applications a_ec JOIN application_answers aa_ec ON aa_ec.application_id = a_ec.id WHERE a_ec.applicant_id = ap.id AND aa_ec.question_id = ${qId} ORDER BY a_ec.submitted_at DESC LIMIT 1) AS extra_q_${qId}`
+    )
+    .join(',\n           ')
 
   const listSql = `
     SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url, ap.fit_status,
@@ -115,7 +247,7 @@ export async function listCandidates(
             ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_status,
            (SELECT a_ls.id FROM applications a_ls
             WHERE a_ls.applicant_id = ap.id
-            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id
+            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id${extraCols.length ? `,\n           ${extraColSelects}` : ''}
     FROM applicants ap
     LEFT JOIN applications a ON a.applicant_id = ap.id
     LEFT JOIN job_positions p ON p.id = a.position_id
@@ -129,12 +261,21 @@ export async function listCandidates(
   const bind = (sql: string) =>
     bindings.length ? db.prepare(sql).bind(...bindings) : db.prepare(sql)
 
-  const [listRes, countRes] = await db.batch<CandidateListItem | { total: number }>([
+  const [listRes, countRes] = await db.batch<Record<string, unknown> | { total: number }>([
     bind(listSql),
     bind(countSql),
   ])
 
-  const candidates = (listRes.results ?? []) as CandidateListItem[]
+  const candidates = (listRes.results ?? []).map((rawRow) => {
+    const row = rawRow as Record<string, unknown>
+    const extra_answers: Record<string, string | null> = {}
+    for (const qId of extraCols) {
+      extra_answers[String(qId)] = (row[`extra_q_${qId}`] as string | null | undefined) ?? null
+      delete row[`extra_q_${qId}`]
+    }
+    return { ...row, extra_answers } as CandidateListItem
+  })
+
   const total = ((countRes.results ?? [])[0] as { total: number } | undefined)?.total ?? 0
   return { candidates, total }
 }
