@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check, Mail, Phone, Globe, Download, MessageSquare, Trash2 } from 'lucide-react'
+import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check, Mail, Phone, Globe, Download, MessageSquare, Trash2, ThumbsUp, ThumbsDown, Minus } from 'lucide-react'
 import {
   fetchCandidates,
   fetchCandidate,
@@ -231,6 +231,9 @@ export default function CandidatesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; candidateId: number } | null>(null)
+
 
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
@@ -337,6 +340,17 @@ export default function CandidatesPage() {
       // silent
     } finally {
       setBulkLoading(false)
+    }
+  }
+
+  async function assignFitStatusSingle(candidateId: number, fitStatus: string | null) {
+    try {
+      await updateApplicantsFitStatus([candidateId], fitStatus)
+      setCandidates((prev) =>
+        prev.map((c) => (c.id === candidateId ? { ...c, fit_status: fitStatus } : c))
+      )
+    } catch {
+      // silent
     }
   }
 
@@ -502,6 +516,10 @@ export default function CandidatesPage() {
                       key={cand.id}
                       className={`cursor-pointer ${checked ? 'bg-primary/5' : ''}`}
                       onClick={() => openCandidate(cand.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setCtxMenu({ x: e.clientX, y: e.clientY, candidateId: cand.id })
+                      }}
                     >
                       <TableCell onClick={(e) => e.stopPropagation()}>
                         <button
@@ -599,15 +617,32 @@ export default function CandidatesPage() {
           </TableBody>
         </Table>
 
-        {/* Bottom action bar — multi-select */}
+        {/* Floating bulk-action pill */}
         {selectedIds.size > 0 && (
-          <div className="sticky bottom-0 left-0 right-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-sm font-medium text-foreground">
-                {selectedIds.size} candidate{selectedIds.size !== 1 ? 's' : ''} selected
+          <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+            <div className="flex items-center gap-1 rounded-2xl border bg-background/95 px-2 py-2 shadow-xl backdrop-blur ring-1 ring-border">
+              {/* dismiss */}
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="flex h-8 w-8 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Deselect all"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M2 2l10 10M12 2L2 12" />
+                </svg>
+              </button>
+
+              <Separator orientation="vertical" className="mx-1 h-5" />
+
+              {/* count */}
+              <span className="px-2 text-sm font-medium tabular-nums text-foreground">
+                {selectedIds.size} selected
               </span>
-              <Separator orientation="vertical" className="h-5" />
-              <span className="text-xs text-muted-foreground">Assign status:</span>
+
+              <Separator orientation="vertical" className="mx-1 h-5" />
+
+              {/* status buttons */}
               {FIT_STATUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -615,7 +650,7 @@ export default function CandidatesPage() {
                   disabled={bulkLoading}
                   onClick={() => assignFitStatus(opt.value)}
                   className={[
-                    'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-opacity',
+                    'inline-flex items-center rounded-xl border px-3 py-1.5 text-xs font-medium transition-opacity',
                     FIT_STATUS_STYLES[opt.value]?.badge ?? '',
                     bulkLoading ? 'opacity-50' : 'hover:opacity-80',
                   ].join(' ')}
@@ -627,21 +662,31 @@ export default function CandidatesPage() {
                 type="button"
                 disabled={bulkLoading}
                 onClick={() => assignFitStatus(null)}
-                className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
+                className="inline-flex items-center rounded-xl border border-input bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
               >
                 Clear
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedIds(new Set())}
-                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-              >
-                Deselect
               </button>
             </div>
           </div>
         )}
       </CardContent>
+
+      {ctxMenu && (
+        <CandidateContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          candidateId={ctxMenu.candidateId}
+          onAssignFit={(status) => {
+            assignFitStatusSingle(ctxMenu.candidateId, status)
+            setCtxMenu(null)
+          }}
+          onAddNote={() => {
+            openCandidate(ctxMenu.candidateId, 'notes')
+            setCtxMenu(null)
+          }}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="flex w-full flex-col p-0 sm:max-w-3xl">
@@ -835,15 +880,6 @@ function CandidateDetailView({
                       )}
                     </div>
                   </div>
-                  <select
-                    value={appStatuses.get(app.id) ?? app.status}
-                    onChange={(e) => handleDetailStatusChange(app.id, e.target.value)}
-                    className="h-7 cursor-pointer rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    {STATUS_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
                 </div>
 
                 <div className="divide-y">
@@ -904,6 +940,90 @@ function CandidateDetailView({
           <NotesSection applicantId={applicant.id} currentUser={currentUser} />
         </TabsContent>
       </Tabs>
+    </div>
+  )
+}
+
+const FIT_CONTEXT_ITEMS = [
+  { value: 'good_fit', label: 'Good Fit', icon: ThumbsUp, style: 'text-green-700 hover:bg-green-50' },
+  { value: 'maybe', label: 'Maybe', icon: Minus, style: 'text-amber-700 hover:bg-amber-50' },
+  { value: 'not_fit', label: 'Not Fit', icon: ThumbsDown, style: 'text-red-700 hover:bg-red-50' },
+] as const
+
+function CandidateContextMenu({
+  x,
+  y,
+  onAssignFit,
+  onAddNote,
+  onClose,
+}: {
+  x: number
+  y: number
+  candidateId: number
+  onAssignFit: (status: string | null) => void
+  onAddNote: () => void
+  onClose: () => void
+}) {
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose()
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  // Adjust position so menu stays within viewport
+  const menuW = 192
+  const menuH = 180
+  const left = x + menuW > window.innerWidth ? x - menuW : x
+  const top = y + menuH > window.innerHeight ? y - menuH : y
+
+  return (
+    <div
+      ref={menuRef}
+      style={{ position: 'fixed', left, top, zIndex: 9999 }}
+      className="w-48 rounded-lg border bg-popover py-1 shadow-lg"
+    >
+      <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Fit Status
+      </div>
+      {FIT_CONTEXT_ITEMS.map(({ value, label, icon: Icon, style }) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => onAssignFit(value)}
+          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-sm transition-colors ${style}`}
+        >
+          <Icon className="size-3.5 shrink-0" />
+          {label}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={() => onAssignFit(null)}
+        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <X className="size-3.5 shrink-0" />
+        Clear Status
+      </button>
+      <div className="my-1 border-t" />
+      <button
+        type="button"
+        onClick={onAddNote}
+        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
+      >
+        <MessageSquare className="size-3.5 shrink-0" />
+        Add Note
+      </button>
     </div>
   )
 }
