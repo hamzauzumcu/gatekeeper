@@ -1,5 +1,5 @@
-// Tally CSV → DB import: kolon sınıflandırma + satır normalize (tarayıcı tarafı).
-// Worker bu modülün ürettiği ImportPayload'ı alır; sınıflandırma burada yapılır.
+// Tally CSV → DB import: column classification + row normalization (browser-side).
+// Worker receives the ImportPayload produced by this module; classification happens here.
 
 export type QuestionType = 'text' | 'number' | 'boolean' | 'file'
 
@@ -7,7 +7,7 @@ export type ImportQuestion = {
   field_key: string
   label: string
   type: QuestionType
-  /** kaynaktaki CSV başlığı — normalize sırasında değeri buradan okuruz */
+  /** original CSV header — we read the value from here during normalization */
   header: string
 }
 
@@ -22,7 +22,7 @@ export type ImportRow = {
   linkedin_url: string | null
   resume_url: string | null
   cover_letter: string | null
-  answers: Record<string, string> // field_key -> ham değer (yalnızca dolu olanlar)
+  answers: Record<string, string> // field_key -> raw value (only non-empty)
 }
 
 export type ImportPayload = {
@@ -31,7 +31,7 @@ export type ImportPayload = {
   rows: ImportRow[]
 }
 
-// Applicant/application alanlarına eşlenen "bilinen" kolon hedefleri.
+// "Known" column targets mapped to applicant/application fields.
 export type KnownTarget =
   | 'submission_id'
   | 'respondent_id'
@@ -46,7 +46,7 @@ export type KnownTarget =
   | 'cover_letter'
   | 'resume_url'
 
-// Başlık → hedef. İlk eşleşen kazanır; eşleşmeyen başlık = pozisyon sorusu.
+// Header → target. First match wins; unmatched header = position question.
 const KNOWN_RULES: [RegExp, KnownTarget][] = [
   [/^submission id$/i, 'submission_id'],
   [/^respondent id$/i, 'respondent_id'],
@@ -72,7 +72,7 @@ export function slugify(input: string, maxLen = 60): string {
   const s = input
     .toLowerCase()
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '') // diakritikleri at
+    .replace(/[̀-ͯ]/g, '') // strip diacritics
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
   return s.slice(0, maxLen).replace(/_+$/, '') || 'field'
@@ -92,9 +92,9 @@ export function inferType(samples: string[]): QuestionType {
 }
 
 export type Classification = {
-  /** bilinen başlık → hedef alan */
+  /** known header → target field */
   known: Map<string, KnownTarget>
-  /** pozisyona özel sorular (otomatik) */
+  /** position-specific questions (auto-generated) */
   questions: ImportQuestion[]
 }
 
@@ -109,7 +109,7 @@ export function classify(headers: string[], rows: Record<string, string>[]): Cla
       known.set(header, target)
       continue
     }
-    // Bilinmeyen başlık → pozisyon sorusu. Tipi örnek değerlerden çıkar.
+    // Unknown header → position question. Infer type from sample values.
     const samples = rows.slice(0, 50).map((r) => r[header] ?? '')
     let field_key = slugify(header)
     while (usedKeys.has(field_key)) field_key += '_x'
@@ -125,7 +125,7 @@ function orNull(v: string | undefined): string | null {
   return t.length ? t : null
 }
 
-// "2026-03-04 19:34:21" → "2026-03-04T19:34:21Z" (UTC varsayımı).
+// "2026-03-04 19:34:21" → "2026-03-04T19:34:21Z" (assumes UTC).
 export function parseTallyDate(v: string | undefined): string | null {
   const t = (v ?? '').trim()
   const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(t)
@@ -137,7 +137,7 @@ export function normalizeRow(
   row: Record<string, string>,
   c: Classification
 ): ImportRow {
-  // başlık aramasını hedefe göre tersine çevir
+  // reverse header lookup by target
   const byTarget = (target: KnownTarget): string | undefined => {
     for (const [header, t] of c.known) if (t === target) return row[header]
     return undefined
@@ -150,7 +150,7 @@ export function normalizeRow(
 
   const respondent_id = orNull(byTarget('respondent_id'))
   const submission_id = orNull(byTarget('submission_id'))
-  // Dedup anahtarları her zaman dolu olmalı; eksikse türet.
+  // Dedup keys must always be populated; derive them if missing.
   const subId = submission_id ?? `synthsub:${respondent_id ?? full_name ?? 'anon'}:${byTarget('submitted_at') ?? ''}`
   const respId = respondent_id ?? `sub:${subId}`
 
@@ -166,7 +166,7 @@ export function normalizeRow(
     submitted_at: parseTallyDate(byTarget('submitted_at')),
     full_name,
     email: orNull(byTarget('email')),
-    phone: orNull(byTarget('phone')), // ham; normalize ETME
+    phone: orNull(byTarget('phone')), // raw; do NOT normalize
     country: orNull(byTarget('country')),
     linkedin_url: orNull(byTarget('linkedin_url')),
     resume_url: orNull(byTarget('resume_url')),
@@ -181,6 +181,6 @@ export function guessPosition(fileName: string): { title: string; slug: string }
   base = base.split(/_submissions/i)[0]
   base = base.replace(/job application/i, '').trim()
   base = base.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
-  const title = base || 'Yeni Pozisyon'
+  const title = base || 'New Position'
   return { title, slug: slugify(title) }
 }

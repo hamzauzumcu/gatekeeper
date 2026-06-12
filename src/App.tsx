@@ -38,7 +38,7 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-7xl px-6 py-8">
       <header className="flex items-center justify-between border-b pb-4">
         <h1 className="text-2xl font-semibold tracking-tight">Gatekeeper</h1>
         <div className="flex items-center gap-3">

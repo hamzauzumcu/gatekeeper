@@ -7,6 +7,7 @@ import {
   loadSavedFilters,
   saveFilters,
   formatDate,
+  formatDateShort,
   formatSalary,
   updateApplicationStatus,
   updateApplicantsFitStatus,
@@ -251,7 +252,7 @@ export default function CandidatesPage() {
           setHasMore(page.length < total)
           setOffset(page.length)
         })
-        .catch((e) => setError(e instanceof Error ? e.message : 'hata'))
+        .catch((e) => setError(e instanceof Error ? e.message : 'error'))
         .finally(() => setLoading(false))
     }, 250)
     return () => clearTimeout(t)
@@ -479,8 +480,7 @@ export default function CandidatesPage() {
               <TableHead>Position</TableHead>
               <TableHead>Salary Expectation</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-center">Applications</TableHead>
-              <TableHead>Last application</TableHead>
+              <TableHead>Apply Date</TableHead>
               <TableHead className="w-10 text-center">Notes</TableHead>
             </TableRow>
           </TableHeader>
@@ -488,7 +488,7 @@ export default function CandidatesPage() {
             {loading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 9 }).map((__, j) => (
+                    {Array.from({ length: 8 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-full" />
                       </TableCell>
@@ -556,15 +556,8 @@ export default function CandidatesPage() {
                       <TableCell>
                         <FitBadge status={cand.fit_status} />
                       </TableCell>
-                      <TableCell className="text-center">
-                        {cand.applications_count > 1 ? (
-                          <Badge variant="secondary">{cand.applications_count}</Badge>
-                        ) : (
-                          cand.applications_count
-                        )}
-                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(cand.latest_submitted_at)}
+                        {formatDateShort(cand.latest_submitted_at)}
                       </TableCell>
                       <TableCell className="text-center">
                         <button
@@ -588,7 +581,7 @@ export default function CandidatesPage() {
                 })}
             {!loading && candidates.length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground">
+                <TableCell colSpan={8} className="text-center text-muted-foreground">
                   {activeFilterCount > 0 || q
                     ? 'No candidates match the current filters.'
                     : 'No candidates found.'}
@@ -598,7 +591,7 @@ export default function CandidatesPage() {
             {/* Infinite scroll sentinel */}
             <TableRow ref={sentinelRef} className="border-0">
               {loadingMore && (
-                <TableCell colSpan={9} className="py-3 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={8} className="py-3 text-center text-sm text-muted-foreground">
                   Loading…
                 </TableCell>
               )}
@@ -636,14 +629,14 @@ export default function CandidatesPage() {
                 onClick={() => assignFitStatus(null)}
                 className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
               >
-                Temizle
+                Clear
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedIds(new Set())}
                 className="ml-auto text-xs text-muted-foreground hover:text-foreground"
               >
-                Seçimi kaldır
+                Deselect
               </button>
             </div>
           </div>
@@ -651,7 +644,7 @@ export default function CandidatesPage() {
       </CardContent>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="flex w-full flex-col p-0 sm:max-w-2xl">
+        <SheetContent className="flex w-full flex-col p-0 sm:max-w-3xl">
           {detailLoading || !selected ? (
             <div className="space-y-4 p-8">
               <div className="flex items-center gap-4">
@@ -690,10 +683,10 @@ function getInitials(name: string | null | undefined) {
 }
 
 const STATUS_OPTIONS = [
-  { value: 'new', label: 'Yeni' },
-  { value: 'reviewed', label: 'İncelendi' },
-  { value: 'shortlisted', label: 'Listeye Alındı' },
-  { value: 'rejected', label: 'Reddedildi' },
+  { value: 'new', label: 'New' },
+  { value: 'reviewed', label: 'Reviewed' },
+  { value: 'shortlisted', label: 'Shortlisted' },
+  { value: 'rejected', label: 'Rejected' },
 ] as const
 
 const STATUS_STYLES: Record<string, string> = {
@@ -758,7 +751,7 @@ function CandidateDetailView({
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <SheetTitle className="text-xl">{applicant.full_name ?? 'Aday'}</SheetTitle>
+                <SheetTitle className="text-xl">{applicant.full_name ?? 'Candidate'}</SheetTitle>
                 {applicant.fit_status && <FitBadge status={applicant.fit_status} />}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
@@ -810,7 +803,7 @@ function CandidateDetailView({
       >
         <TabsList className="mx-6 my-3 shrink-0 w-fit">
           <TabsTrigger value="applications">
-            Başvurular
+            Applications
             {applications.length > 1 && (
               <Badge variant="secondary" className="ml-1.5 px-1.5 text-xs">
                 {applications.length}
@@ -819,7 +812,7 @@ function CandidateDetailView({
           </TabsTrigger>
           <TabsTrigger value="notes">
             <MessageSquare className="size-3.5" />
-            Notlar
+            Notes
             {(applicant.notes_count ?? 0) > 0 && (
               <Badge variant="secondary" className="ml-1 px-1.5 text-xs">
                 {applicant.notes_count}
@@ -834,7 +827,7 @@ function CandidateDetailView({
               <div key={app.id} className="overflow-hidden rounded-xl border">
                 <div className="flex items-start justify-between bg-muted/40 px-5 py-4">
                   <div>
-                    <div className="font-semibold">{app.position_title ?? 'Pozisyon'}</div>
+                    <div className="font-semibold">{app.position_title ?? 'Position'}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
                       {formatDate(app.submitted_at)}
                       {applications.length > 1 && (
@@ -863,7 +856,7 @@ function CandidateDetailView({
                         className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 py-3 text-sm font-medium text-primary transition-colors hover:border-primary/60 hover:bg-primary/10"
                       >
                         <Download className="size-4" />
-                        CV'yi Aç / İndir
+                        Open / Download CV
                       </a>
                     </div>
                   )}
@@ -871,7 +864,7 @@ function CandidateDetailView({
                   {app.answers.length > 0 && (
                     <div className="px-5 py-4">
                       <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Başvuru Formu
+                        Application Form
                       </div>
                       <dl className="space-y-3">
                         {app.answers.map((a, i) => (
@@ -893,7 +886,7 @@ function CandidateDetailView({
                       <div className="mb-2 flex items-center gap-1.5">
                         <FileText className="size-3.5 text-muted-foreground" />
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                          Ön Yazı
+                          Cover Letter
                         </span>
                       </div>
                       <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
@@ -942,7 +935,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
       setNotes((prev) => [note, ...prev])
       setText('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'not eklenemedi')
+      setError(err instanceof Error ? err.message : 'failed to add note')
     } finally {
       setSubmitting(false)
     }
@@ -963,7 +956,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Not ekle…"
+          placeholder="Add a note…"
           rows={3}
           className={[
             'w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm',
@@ -973,7 +966,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
         />
         {error && <p className="text-xs text-destructive">{error}</p>}
         <Button type="submit" size="sm" disabled={!text.trim() || submitting}>
-          {submitting ? 'Ekleniyor…' : 'Not Ekle'}
+          {submitting ? 'Adding…' : 'Add Note'}
         </Button>
       </form>
 
@@ -986,7 +979,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
           ))}
         </div>
       ) : notes.length === 0 ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">Henüz not eklenmemiş.</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">No notes yet.</p>
       ) : (
         <div className="space-y-3">
           {notes.map((note) => (
@@ -1001,7 +994,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
                   <button
                     type="button"
                     onClick={() => handleDelete(note.id)}
-                    title="Notu sil"
+                    title="Delete note"
                     className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
                   >
                     <Trash2 className="size-3.5" />

@@ -15,38 +15,38 @@ const app = new Hono<Env>()
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'gatekeeper' }))
 
-// Key'in çalıştığını doğrulamak için geçici test endpoint'i
+// Temporary test endpoint to verify the key works
 app.get('/api/llm/ping', async (c) => {
   const reply = await deepseekChat(c.env.DEEPSEEK_API_KEY, [
-    { role: 'user', content: 'Sadece "pong" yaz, başka bir şey yazma.' },
+    { role: 'user', content: 'Just write "pong", nothing else.' },
   ])
   return c.json({ ok: true, reply })
 })
 
-// CSV import — tarayıcı normalize edilmiş satırları chunk'lar halinde gönderir.
-// NOT: şimdilik auth yok (admin aracı). Prod'da paylaşılan secret / Access eklenecek.
+// CSV import — browser sends normalized rows in chunks.
+// NOTE: no auth for now (admin tool). Shared secret / Access will be added in prod.
 app.post('/api/import', async (c) => {
   let payload: ImportPayload
   try {
     payload = await c.req.json<ImportPayload>()
   } catch {
-    return c.json({ ok: false, error: 'geçersiz JSON' }, 400)
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
     const summary = await importApplications(c.env.DB, payload, c.env.RESUMES)
     return c.json({ ok: true, summary })
   } catch (e) {
-    return c.json({ ok: false, error: e instanceof Error ? e.message : 'import hatası' }, 400)
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'import error' }, 400)
   }
 })
 
-// Filtre seçenekleri (ülke + pozisyon listeleri)
+// Filter options (country + position lists)
 app.get('/api/candidates/filters', async (c) => {
   const filters = await getCandidateFilters(c.env.DB)
   return c.json({ ok: true, ...filters })
 })
 
-// Aday listesi + arama + filtre
+// Candidate list + search + filter
 app.get('/api/candidates', async (c) => {
   const q = c.req.query('q') ?? ''
   const countries = c.req.queries('country') ?? []
@@ -58,57 +58,57 @@ app.get('/api/candidates', async (c) => {
   return c.json({ ok: true, ...data })
 })
 
-// Aday detayı (başvurular + cevaplar)
+// Candidate detail (applications + answers)
 app.get('/api/candidates/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id)) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  if (!Number.isInteger(id)) return c.json({ ok: false, error: 'invalid id' }, 400)
   const detail = await getCandidate(c.env.DB, id)
-  if (!detail) return c.json({ ok: false, error: 'aday bulunamadı' }, 404)
+  if (!detail) return c.json({ ok: false, error: 'candidate not found' }, 404)
   return c.json({ ok: true, ...detail })
 })
 
-// Başvuru durumu güncelle
+// Update application status
 app.patch('/api/applications/:id/status', async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   let body: { status: string }
   try {
     body = await c.req.json<{ status: string }>()
   } catch {
-    return c.json({ ok: false, error: 'geçersiz JSON' }, 400)
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
     const updated = await updateApplicationStatus(c.env.DB, id, body.status)
-    if (!updated) return c.json({ ok: false, error: 'başvuru bulunamadı' }, 404)
+    if (!updated) return c.json({ ok: false, error: 'application not found' }, 404)
     return c.json({ ok: true })
   } catch (e) {
-    return c.json({ ok: false, error: e instanceof Error ? e.message : 'güncelleme hatası' }, 400)
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
   }
 })
 
-// Aday uygunluk durumu toplu güncelle (multi-select)
+// Bulk update candidate fit status (multi-select)
 app.patch('/api/applicants/fit-status', async (c) => {
   let body: { ids: number[]; fit_status: string | null }
   try {
     body = await c.req.json()
   } catch {
-    return c.json({ ok: false, error: 'geçersiz JSON' }, 400)
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
-    return c.json({ ok: false, error: 'ids boş olamaz' }, 400)
+    return c.json({ ok: false, error: 'ids cannot be empty' }, 400)
   }
   try {
     const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null)
     return c.json({ ok: true, updated })
   } catch (e) {
-    return c.json({ ok: false, error: e instanceof Error ? e.message : 'güncelleme hatası' }, 400)
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
   }
 })
 
-// Aday notları — GET
+// Candidate notes — GET
 app.get('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const { results } = await c.env.DB.prepare(
     `SELECT id, applicant_id, content, created_by, created_by_name, created_at
      FROM candidate_notes WHERE applicant_id = ? ORDER BY created_at DESC`
@@ -116,18 +116,18 @@ app.get('/api/candidates/:id/notes', async (c) => {
   return c.json({ ok: true, notes: results ?? [] })
 })
 
-// Aday notları — POST (yeni not ekle)
+// Candidate notes — POST (add new note)
 app.post('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   let body: { content: string; created_by: string; created_by_name: string }
   try {
     body = await c.req.json()
   } catch {
-    return c.json({ ok: false, error: 'geçersiz JSON' }, 400)
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
-  if (!body.content?.trim()) return c.json({ ok: false, error: 'not boş olamaz' }, 400)
-  if (!body.created_by) return c.json({ ok: false, error: 'kullanıcı gerekli' }, 400)
+  if (!body.content?.trim()) return c.json({ ok: false, error: 'note cannot be empty' }, 400)
+  if (!body.created_by) return c.json({ ok: false, error: 'user required' }, 400)
   const result = await c.env.DB.prepare(
     `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name)
      VALUES (?, ?, ?, ?)`
@@ -139,28 +139,28 @@ app.post('/api/candidates/:id/notes', async (c) => {
   return c.json({ ok: true, note })
 })
 
-// Not sil — DELETE
+// Delete note — DELETE
 app.delete('/api/notes/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'geçersiz id' }, 400)
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
-  if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'not bulunamadı' }, 404)
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   return c.json({ ok: true })
 })
 
-// R2'den resume serve et
+// Serve resume from R2
 app.get('/api/resumes/*', async (c) => {
   const key = c.req.path.replace('/api/resumes/', '')
-  if (!key) return c.json({ ok: false, error: 'key gerekli' }, 400)
+  if (!key) return c.json({ ok: false, error: 'key required' }, 400)
   const obj = await c.env.RESUMES.get(key)
-  if (!obj) return c.json({ ok: false, error: 'dosya bulunamadı' }, 404)
+  if (!obj) return c.json({ ok: false, error: 'file not found' }, 404)
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
   headers.set('cache-control', 'private, max-age=3600')
   return new Response(obj.body, { headers })
 })
 
-// İleride:
-// app.post('/api/webhook/tally', ...)   — yeni başvurular otomatik düşer
+// Future:
+// app.post('/api/webhook/tally', ...)   — new applications arrive automatically
 
 export default app

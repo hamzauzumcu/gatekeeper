@@ -1,4 +1,4 @@
-// DeepSeek API istemcisi — OpenAI uyumlu chat completions endpoint'i.
+// DeepSeek API client — OpenAI-compatible chat completions endpoint.
 // Docs: https://api-docs.deepseek.com
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
@@ -12,11 +12,11 @@ export type DeepseekOptions = {
   model?: 'deepseek-v4-pro' | 'deepseek-v4-flash'
   temperature?: number
   maxTokens?: number
-  /** true verilirse model JSON object döndürmeye zorlanır */
+  /** if true, forces the model to return a JSON object */
   jsonMode?: boolean
-  /** Reasoning (thinking) modu — varsayılan açık. Hızlı/ucuz cevap için 'disabled' */
+  /** Reasoning (thinking) mode — enabled by default. Use 'disabled' for fast/cheap responses */
   thinking?: 'enabled' | 'disabled'
-  /** thinking açıkken reasoning yoğunluğu — varsayılan 'high' */
+  /** reasoning intensity when thinking is enabled — defaults to 'high' */
   reasoningEffort?: 'high' | 'max'
 }
 

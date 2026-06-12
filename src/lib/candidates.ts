@@ -1,4 +1,4 @@
-// Aday API tipleri + fetch yardımcıları (tarayıcı tarafı).
+// Candidate API types + fetch helpers (browser-side).
 
 export type CandidateListItem = {
   id: number
@@ -86,7 +86,7 @@ export async function fetchFilterOptions(): Promise<FilterOptions> {
   const data = (await res.json()) as
     | { ok: true; countries: string[]; positions: string[] }
     | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'filtreler alınamadı')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch filters')
   return { countries: data.countries, positions: data.positions }
 }
 
@@ -104,14 +104,14 @@ export async function fetchCandidates(
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
     | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'liste alınamadı')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch list')
   return { candidates: data.candidates, total: data.total }
 }
 
 export async function fetchCandidate(id: number): Promise<CandidateDetail> {
   const res = await fetch(`/api/candidates/${id}`)
   const data = (await res.json()) as ({ ok: true } & CandidateDetail) | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'detay alınamadı')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch detail')
   return { applicant: data.applicant, applications: data.applications }
 }
 
@@ -123,7 +123,7 @@ export function formatSalary(raw: string | null): string {
   return s.replace(/\d[\d,.]*\d|\d{3,}/g, (m) => {
     const n = parseInt(m.replace(/[,.]/g, ''), 10)
     if (isNaN(n) || n < 100) return m
-    return new Intl.NumberFormat('tr-TR').format(n)
+    return new Intl.NumberFormat('en-US').format(n)
   })
 }
 
@@ -137,7 +137,7 @@ export async function updateApplicationStatus(
     body: JSON.stringify({ status }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
-  if (!res.ok || !data.ok) throw new Error(data.error ?? 'güncelleme hatası')
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
 }
 
 export async function updateApplicantsFitStatus(
@@ -150,7 +150,7 @@ export async function updateApplicantsFitStatus(
     body: JSON.stringify({ ids, fit_status }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
-  if (!res.ok || !data.ok) throw new Error(data.error ?? 'güncelleme hatası')
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
 }
 
 export type CandidateNote = {
@@ -165,7 +165,7 @@ export type CandidateNote = {
 export async function fetchNotes(applicantId: number): Promise<CandidateNote[]> {
   const res = await fetch(`/api/candidates/${applicantId}/notes`)
   const data = (await res.json()) as { ok: true; notes: CandidateNote[] } | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'notlar alınamadı')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch notes')
   return data.notes
 }
 
@@ -181,25 +181,36 @@ export async function addNote(
     body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName }),
   })
   const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'not eklenemedi')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to add note')
   return data.note
 }
 
 export async function deleteNote(noteId: number): Promise<void> {
   const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }
-  if (!res.ok || !data.ok) throw new Error(data.error ?? 'not silinemedi')
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
 }
 
 export function formatDate(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (isNaN(d.getTime())) return iso
-  return d.toLocaleString('tr-TR', {
+  return d.toLocaleString('en-US', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+  })
+}
+
+export function formatDateShort(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleString('en-US', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
   })
 }

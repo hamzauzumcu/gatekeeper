@@ -1,6 +1,6 @@
-// CSV import — D1'e idempotent yazma.
-// Tarayıcı normalize edilmiş ImportPayload gönderir; biz upsert ederiz.
-// Dedup: applicants.respondent_id (kişi), applications.tally_submission_id (başvuru).
+// CSV import — idempotent writes to D1.
+// Browser sends a normalized ImportPayload; we upsert it.
+// Dedup: applicants.respondent_id (person), applications.tally_submission_id (application).
 
 type QuestionType = 'text' | 'number' | 'boolean' | 'file'
 
@@ -38,14 +38,14 @@ export type ImportSummary = {
 const VALID_TYPES: QuestionType[] = ['text', 'number', 'boolean', 'file']
 
 function assertPayload(p: ImportPayload): string | null {
-  if (!p || typeof p !== 'object') return 'payload yok'
-  if (!p.position?.slug || !p.position?.title) return 'position.slug/title gerekli'
-  if (!Array.isArray(p.questions)) return 'questions dizi olmalı'
-  if (!Array.isArray(p.rows)) return 'rows dizi olmalı'
-  if (p.rows.length > 500) return 'chunk en fazla 500 satır olmalı'
+  if (!p || typeof p !== 'object') return 'missing payload'
+  if (!p.position?.slug || !p.position?.title) return 'position.slug/title required'
+  if (!Array.isArray(p.questions)) return 'questions must be an array'
+  if (!Array.isArray(p.rows)) return 'rows must be an array'
+  if (p.rows.length > 500) return 'chunk must be at most 500 rows'
   for (const q of p.questions) {
-    if (!q.field_key || !q.label) return 'her soruda field_key ve label gerekli'
-    if (!VALID_TYPES.includes(q.type)) return `geçersiz tip: ${q.type}`
+    if (!q.field_key || !q.label) return 'each question requires field_key and label'
+    if (!VALID_TYPES.includes(q.type)) return `invalid type: ${q.type}`
   }
   return null
 }
@@ -66,7 +66,7 @@ export async function importApplications(
   const err = assertPayload(payload)
   if (err) throw new Error(err)
 
-  // 1) Pozisyon upsert (slug tekil)
+  // 1) Position upsert (slug unique)
   const pos = await db
     .prepare(
       `INSERT INTO job_positions (slug, title) VALUES (?, ?)
@@ -75,10 +75,10 @@ export async function importApplications(
     )
     .bind(payload.position.slug, payload.position.title)
     .first<{ id: number }>()
-  if (!pos) throw new Error('pozisyon upsert başarısız')
+  if (!pos) throw new Error('position upsert failed')
   const positionId = pos.id
 
-  // 2) Sorular upsert (position_id + field_key tekil) → field_key -> question_id
+  // 2) Questions upsert (position_id + field_key unique) → field_key -> question_id
   const questionId = new Map<string, number>()
   if (payload.questions.length) {
     const stmts = payload.questions.map((q, i) =>
@@ -99,7 +99,7 @@ export async function importApplications(
     }
   }
 
-  // 3) Applicant upsert (respondent_id tekil). Chunk içinde tekilleştir (son kazanır).
+  // 3) Applicant upsert (respondent_id unique). Deduplicate within chunk (last wins).
   const uniqueApplicants = new Map<string, ImportRow>()
   for (const row of payload.rows) uniqueApplicants.set(row.respondent_id, row)
 
@@ -127,7 +127,7 @@ export async function importApplications(
     }
   }
 
-  // 4) Application upsert (tally_submission_id tekil) → submission_id -> application_id
+  // 4) Application upsert (tally_submission_id unique) → submission_id -> application_id
   const applicationId = new Map<string, number>()
   if (payload.rows.length) {
     const stmts = payload.rows.map((r) =>
@@ -159,7 +159,7 @@ export async function importApplications(
     }
   }
 
-  // 5) Cevaplar upsert (application_id + question_id tekil)
+  // 5) Answers upsert (application_id + question_id unique)
   let answers = 0
   const answerStmts: D1PreparedStatement[] = []
   for (const row of payload.rows) {
@@ -182,7 +182,7 @@ export async function importApplications(
   }
   if (answerStmts.length) await db.batch(answerStmts)
 
-  // 6) Tally resume URL'lerini R2'ye kopyala (sıralı — chunk küçük olduğu için sorun yok)
+  // 6) Copy Tally resume URLs to R2 (sequential — chunk is small enough)
   let resumes_copied = 0
   if (r2) {
     for (const row of payload.rows) {
@@ -192,7 +192,7 @@ export async function importApplications(
 
       const key = r2Key(row.submission_id, row.resume_url)
 
-      // Daha önce kopyalanmışsa atla
+      // Skip if already copied
       const existing = await r2.head(key)
       if (existing) {
         await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
@@ -200,10 +200,11 @@ export async function importApplications(
       }
 
       const res = await fetch(row.resume_url)
-      if (!res.ok || !res.body) continue
+      if (!res.ok) continue
 
       const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
-      await r2.put(key, res.body, { httpMetadata: { contentType } })
+      const buffer = await res.arrayBuffer()
+      await r2.put(key, buffer, { httpMetadata: { contentType } })
       await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
       resumes_copied++
     }

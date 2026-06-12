@@ -1,4 +1,4 @@
-// Aday listesi ve detay sorguları (salt-okunur).
+// Candidate list and detail queries (read-only).
 
 export type CandidateListItem = {
   id: number
@@ -148,7 +148,7 @@ export async function updateApplicationStatus(
   applicationId: number,
   status: string
 ): Promise<boolean> {
-  if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('geçersiz status')
+  if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('invalid status')
   const res = await db
     .prepare(`UPDATE applications SET status = ? WHERE id = ?`)
     .bind(status, applicationId)
@@ -163,7 +163,7 @@ export async function updateApplicantsFitStatus(
 ): Promise<number> {
   if (ids.length === 0) return 0
   if (fit_status !== null && !(VALID_FIT_STATUSES as readonly string[]).includes(fit_status)) {
-    throw new Error('geçersiz fit_status')
+    throw new Error('invalid fit_status')
   }
   const placeholders = ids.map(() => '?').join(',')
   const res = await db

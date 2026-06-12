@@ -25,7 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const CHUNK_SIZE = 50
+const CHUNK_SIZE = 1
 
 type Parsed = {
   headers: string[]
@@ -39,6 +39,7 @@ type Summary = {
   applicants: number
   applications: number
   answers: number
+  resumes_copied: number
 }
 
 const TYPE_STYLES: Record<QuestionType, string> = {
@@ -54,7 +55,7 @@ export default function ImportPage() {
   const [fileName, setFileName] = useState('')
   const [parseError, setParseError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [progress, setProgress] = useState({ done: 0, total: 0 })
+  const [progress, setProgress] = useState({ done: 0, total: 0, status: '' })
   const [result, setResult] = useState<Summary | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
 
@@ -75,7 +76,7 @@ export default function ImportPage() {
         const headers = (res.meta.fields ?? []).filter(Boolean)
         const rows = res.data.filter((r) => Object.values(r).some((v) => (v ?? '').trim()))
         if (!headers.length || !rows.length) {
-          setParseError('CSV boş ya da başlık satırı okunamadı.')
+          setParseError('CSV is empty or the header row could not be read.')
           setParsed(null)
           return
         }
@@ -91,7 +92,7 @@ export default function ImportPage() {
   async function runImport() {
     if (!parsed) return
     if (!position.slug || !position.title) {
-      setImportError('Pozisyon başlığı ve slug gerekli.')
+      setImportError('Position title and slug are required.')
       return
     }
     setBusy(true)
@@ -105,13 +106,21 @@ export default function ImportPage() {
       type,
     }))
 
-    const total = Math.ceil(normalized.length / CHUNK_SIZE)
-    setProgress({ done: 0, total })
+    const total = normalized.length
+    setProgress({ done: 0, total, status: '' })
 
-    const acc: Summary = { positionId: 0, questions: 0, applicants: 0, applications: 0, answers: 0 }
+    const acc: Summary = { positionId: 0, questions: 0, applicants: 0, applications: 0, answers: 0, resumes_copied: 0 }
     try {
       for (let i = 0; i < normalized.length; i += CHUNK_SIZE) {
         const chunk = normalized.slice(i, i + CHUNK_SIZE)
+        const row = chunk[0]
+        const hasResume = !!row?.resume_url
+        const name = row?.full_name ?? row?.email ?? `#${i + 1}`
+        setProgress({
+          done: i,
+          total: normalized.length,
+          status: hasResume ? `${name} — CV yükleniyor…` : `${name} — kaydediliyor…`,
+        })
         const res = await fetch('/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -120,44 +129,51 @@ export default function ImportPage() {
         const data = (await res.json()) as
           | { ok: true; summary: Summary }
           | { ok: false; error: string }
-        if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'import hatası')
+        if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'import error')
         acc.positionId = data.summary.positionId
         acc.questions = Math.max(acc.questions, data.summary.questions)
         acc.applicants += data.summary.applicants
         acc.applications += data.summary.applications
         acc.answers += data.summary.answers
-        setProgress({ done: i / CHUNK_SIZE + 1, total })
+        acc.resumes_copied += data.summary.resumes_copied ?? 0
+        setProgress({
+          done: i + CHUNK_SIZE,
+          total: normalized.length,
+          status: hasResume && (data.summary.resumes_copied ?? 0) > 0
+            ? `${name} — CV yüklendi ✓`
+            : `${name} — kaydedildi ✓`,
+        })
       }
       setResult(acc)
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : 'import hatası')
+      setImportError(e instanceof Error ? e.message : 'import error')
     } finally {
       setBusy(false)
     }
   }
 
   const c = parsed?.classification
-  const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
+  const pct = progress.total ? Math.round((Math.min(progress.done, progress.total) / progress.total) * 100) : 0
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>CSV İçe Aktar</CardTitle>
+          <CardTitle>Import CSV</CardTitle>
           <CardDescription>
-            Tally CSV'sini seç — kolonlar otomatik eşlenir, ekstra sorular otomatik oluşturulur.
+            Select a Tally CSV — columns are mapped automatically, extra questions are created automatically.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-2">
-            <Label htmlFor="csv">CSV dosyası</Label>
+            <Label htmlFor="csv">CSV file</Label>
             <Input id="csv" type="file" accept=".csv,text/csv" onChange={onFile} disabled={busy} />
           </div>
 
           {parseError && (
             <Alert variant="destructive">
               <AlertCircle />
-              <AlertTitle>CSV okunamadı</AlertTitle>
+              <AlertTitle>Failed to read CSV</AlertTitle>
               <AlertDescription>{parseError}</AlertDescription>
             </Alert>
           )}
@@ -166,7 +182,7 @@ export default function ImportPage() {
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">
-                  <Label htmlFor="title">Pozisyon başlığı</Label>
+                  <Label htmlFor="title">Position title</Label>
                   <Input
                     id="title"
                     value={position.title}
@@ -186,7 +202,7 @@ export default function ImportPage() {
               </div>
 
               <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{parsed.rows.length}</span> satır ·{' '}
+                <span className="font-medium text-foreground">{parsed.rows.length}</span> rows ·{' '}
                 <span className="font-medium text-foreground">{fileName}</span>
               </p>
             </>
@@ -198,7 +214,7 @@ export default function ImportPage() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Eşlenen alanlar</CardTitle>
+              <CardTitle className="text-base">Mapped fields</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
               {[...c.known.entries()].map(([header, target]) => (
@@ -211,16 +227,16 @@ export default function ImportPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Otomatik sorular ({c.questions.length})</CardTitle>
-              <CardDescription>Bilinen kolonlar dışındaki başlıklar pozisyon sorusu olur.</CardDescription>
+              <CardTitle className="text-base">Auto-generated questions ({c.questions.length})</CardTitle>
+              <CardDescription>Headers outside of known columns become position questions.</CardDescription>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Soru</TableHead>
+                    <TableHead>Question</TableHead>
                     <TableHead>field_key</TableHead>
-                    <TableHead className="w-24">Tip</TableHead>
+                    <TableHead className="w-24">Type</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -245,9 +261,16 @@ export default function ImportPage() {
           <div className="space-y-3">
             <Button onClick={runImport} disabled={busy}>
               <Upload />
-              {busy ? `İçe aktarılıyor… (${progress.done}/${progress.total})` : 'İçe aktar'}
+              {busy ? `İçe aktarılıyor… (${Math.min(progress.done, progress.total)}/${progress.total})` : 'İçe aktar'}
             </Button>
-            {busy && <Progress value={pct} />}
+            {busy && (
+              <>
+                <Progress value={pct} />
+                {progress.status && (
+                  <p className="text-sm text-muted-foreground">{progress.status}</p>
+                )}
+              </>
+            )}
           </div>
         </>
       )}
@@ -255,7 +278,7 @@ export default function ImportPage() {
       {importError && (
         <Alert variant="destructive">
           <AlertCircle />
-          <AlertTitle>İçe aktarma başarısız</AlertTitle>
+          <AlertTitle>Import failed</AlertTitle>
           <AlertDescription>{importError}</AlertDescription>
         </Alert>
       )}
@@ -263,13 +286,14 @@ export default function ImportPage() {
       {result && (
         <Alert>
           <CheckCircle2 />
-          <AlertTitle>İçe aktarma tamamlandı</AlertTitle>
+          <AlertTitle>Import complete</AlertTitle>
           <AlertDescription>
             <ul className="list-inside list-disc">
               <li>Pozisyon ID: {result.positionId}</li>
-              <li>Soru: {result.questions}</li>
-              <li>Başvuru (application): {result.applications}</li>
-              <li>Cevap: {result.answers}</li>
+              <li>Sorular: {result.questions}</li>
+              <li>Başvurular: {result.applications}</li>
+              <li>Cevaplar: {result.answers}</li>
+              <li>CV yüklendi: {result.resumes_copied}</li>
             </ul>
           </AlertDescription>
         </Alert>
