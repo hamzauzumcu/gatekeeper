@@ -181,6 +181,34 @@ export function saveColumns(cols: number[]): void {
   localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(cols))
 }
 
+// Default (always-available) table columns that the user can show/hide.
+// Name and the row selector are intentionally omitted — they are always visible.
+export type BaseColumnKey = 'country' | 'position' | 'salary' | 'status' | 'score' | 'apply_date' | 'notes'
+
+export const BASE_COLUMNS: { key: BaseColumnKey; label: string }[] = [
+  { key: 'country', label: 'Country' },
+  { key: 'position', label: 'Position' },
+  { key: 'salary', label: 'Salary Expectation' },
+  { key: 'status', label: 'Status' },
+  { key: 'score', label: 'Score' },
+  { key: 'apply_date', label: 'Apply date' },
+  { key: 'notes', label: 'Notes' },
+]
+
+const HIDDEN_BASE_COLUMN_STORAGE_KEY = 'gk_candidate_hidden_base_columns'
+
+export function loadHiddenBaseColumns(): BaseColumnKey[] {
+  try {
+    const raw = localStorage.getItem(HIDDEN_BASE_COLUMN_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as BaseColumnKey[]
+  } catch {}
+  return []
+}
+
+export function saveHiddenBaseColumns(keys: BaseColumnKey[]): void {
+  localStorage.setItem(HIDDEN_BASE_COLUMN_STORAGE_KEY, JSON.stringify(keys))
+}
+
 export async function fetchFilterOptions(): Promise<FilterOptions> {
   const res = await fetch('/api/candidates/filters')
   const data = (await res.json()) as

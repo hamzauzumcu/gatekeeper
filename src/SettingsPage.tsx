@@ -579,7 +579,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            {['Experience (yrs)', 'University', 'Field of Study', 'Work History', 'Languages'].map((label) => (
+            {['Summary', 'Experience (yrs)', 'Seniority', 'Location', 'University', 'Field of Study', 'GPA', 'Current Company', 'Current Title', 'Avg Tenure (mo)', 'Work History', 'Skills', 'Languages', 'Links'].map((label) => (
               <span
                 key={label}
                 className="inline-flex items-center rounded-full border bg-muted/50 px-2.5 py-0.5 text-xs font-medium text-muted-foreground"

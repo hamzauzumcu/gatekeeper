@@ -13,6 +13,9 @@ import {
   saveFilters,
   loadSavedColumns,
   saveColumns,
+  BASE_COLUMNS,
+  loadHiddenBaseColumns,
+  saveHiddenBaseColumns,
   formatDate,
   formatRelativeTime,
   formatSalary,
@@ -31,6 +34,7 @@ import {
   type FilterOptions,
   type ActiveFilters,
   type QuestionColumn,
+  type BaseColumnKey,
   type AnswerFilter,
   type AnswerFilterOp,
 } from './lib/candidates'
@@ -301,10 +305,16 @@ function ColumnPicker({
   questionColumns,
   visibleIds,
   onChange,
+  hiddenBaseColumns,
+  onToggleBase,
+  onResetBase,
 }: {
   questionColumns: QuestionColumn[]
   visibleIds: number[]
   onChange: (ids: number[]) => void
+  hiddenBaseColumns: BaseColumnKey[]
+  onToggleBase: (key: BaseColumnKey) => void
+  onResetBase: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -329,7 +339,8 @@ function ColumnPicker({
     return acc
   }, {})
 
-  const active = visibleIds.length > 0
+  const customizedCount = visibleIds.length + hiddenBaseColumns.length
+  const active = customizedCount > 0
 
   return (
     <div ref={ref} className="relative">
@@ -347,13 +358,52 @@ function ColumnPicker({
         <span className="hidden sm:inline">Columns</span>
         {active && (
           <span className="flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-            {visibleIds.length}
+            {customizedCount}
           </span>
         )}
       </button>
 
       {open && (
         <div className="absolute right-0 z-50 mt-1 w-96 overflow-hidden rounded-md border bg-popover shadow-md">
+          {/* Default columns — always available, can be shown/hidden */}
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Default Columns
+            </span>
+            {hiddenBaseColumns.length > 0 && (
+              <button
+                type="button"
+                onClick={onResetBase}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          <div className="border-b">
+            {BASE_COLUMNS.map((c) => {
+              const checked = !hiddenBaseColumns.includes(c.key)
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => onToggleBase(c.key)}
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-accent"
+                >
+                  <span
+                    className={[
+                      'flex size-4 shrink-0 items-center justify-center rounded border',
+                      checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                    ].join(' ')}
+                  >
+                    {checked && <Check className="size-2.5" />}
+                  </span>
+                  <span className="flex-1 leading-snug">{c.label}</span>
+                </button>
+              )
+            })}
+          </div>
+
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Question Columns
@@ -497,6 +547,8 @@ export default function CandidatesPage() {
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ countries: [], positions: [] })
   const [questionColumns, setQuestionColumns] = useState<QuestionColumn[]>([])
   const [visibleQuestionIds, setVisibleQuestionIds] = useState<number[]>(loadSavedColumns)
+  const [hiddenBaseColumns, setHiddenBaseColumns] = useState<BaseColumnKey[]>(loadHiddenBaseColumns)
+  const isBaseVisible = (key: BaseColumnKey) => !hiddenBaseColumns.includes(key)
 
   // Which fixed-filter chips are shown (a chip can be visible before it has a value).
   // Initialized from saved filters so persisted values reappear as chips on reload.
@@ -634,6 +686,19 @@ export default function CandidatesPage() {
   function updateVisibleColumns(ids: number[]) {
     setVisibleQuestionIds(ids)
     saveColumns(ids)
+  }
+
+  function toggleBaseColumn(key: BaseColumnKey) {
+    const next = hiddenBaseColumns.includes(key)
+      ? hiddenBaseColumns.filter((k) => k !== key)
+      : [...hiddenBaseColumns, key]
+    setHiddenBaseColumns(next)
+    saveHiddenBaseColumns(next)
+  }
+
+  function resetBaseColumns() {
+    setHiddenBaseColumns([])
+    saveHiddenBaseColumns([])
   }
 
   // Show a fixed-filter chip and immediately open its editor so the user can pick a value.
@@ -819,7 +884,7 @@ export default function CandidatesPage() {
     .map((id) => questionColumns.find((q) => q.id === id))
     .filter(Boolean) as QuestionColumn[]
 
-  const totalCols = 9 + visibleQuestions.length
+  const totalCols = 9 - hiddenBaseColumns.length + visibleQuestions.length
 
   return (
     <Card>
@@ -857,6 +922,9 @@ export default function CandidatesPage() {
             questionColumns={questionColumns}
             visibleIds={visibleQuestionIds}
             onChange={updateVisibleColumns}
+            hiddenBaseColumns={hiddenBaseColumns}
+            onToggleBase={toggleBaseColumn}
+            onResetBase={resetBaseColumns}
           />
         </div>
 
@@ -1057,23 +1125,25 @@ export default function CandidatesPage() {
                 </button>
               </TableHead>
               <TableHead>Name</TableHead>
-              <TableHead>Country</TableHead>
-              <TableHead>Position</TableHead>
-              <TableHead>Salary Expectation</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-20 text-center">
-                <span className="inline-flex items-center gap-1">
-                  <Sparkles className="size-3 text-muted-foreground" />
-                  Score
-                </span>
-              </TableHead>
-              <TableHead>Apply date</TableHead>
+              {isBaseVisible('country') && <TableHead>Country</TableHead>}
+              {isBaseVisible('position') && <TableHead>Position</TableHead>}
+              {isBaseVisible('salary') && <TableHead>Salary Expectation</TableHead>}
+              {isBaseVisible('status') && <TableHead>Status</TableHead>}
+              {isBaseVisible('score') && (
+                <TableHead className="w-20 text-center">
+                  <span className="inline-flex items-center gap-1">
+                    <Sparkles className="size-3 text-muted-foreground" />
+                    Score
+                  </span>
+                </TableHead>
+              )}
+              {isBaseVisible('apply_date') && <TableHead>Apply date</TableHead>}
               {visibleQuestions.map((q) => (
                 <TableHead key={q.id} className="max-w-40">
                   <span className="block truncate" title={q.label}>{q.label}</span>
                 </TableHead>
               ))}
-              <TableHead className="w-10 text-center">Notes</TableHead>
+              {isBaseVisible('notes') && <TableHead className="w-10 text-center">Notes</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1118,6 +1188,7 @@ export default function CandidatesPage() {
                         <div className="font-medium">{cand.full_name ?? '—'}</div>
                         <div className="text-xs text-muted-foreground">{cand.email ?? '—'}</div>
                       </TableCell>
+                      {isBaseVisible('country') && (
                       <TableCell>
                         {cand.country ? (
                           <button
@@ -1144,23 +1215,34 @@ export default function CandidatesPage() {
                           '—'
                         )}
                       </TableCell>
+                      )}
+                      {isBaseVisible('position') && (
                       <TableCell className="max-w-44 truncate text-sm text-muted-foreground">
                         {cand.positions ?? '—'}
                       </TableCell>
+                      )}
+                      {isBaseVisible('salary') && (
                       <TableCell className="text-sm font-medium tabular-nums">
                         {formatSalary(cand.salary_expectation)}
                       </TableCell>
+                      )}
+                      {isBaseVisible('status') && (
                       <TableCell>
                         <FitBadge status={cand.fit_status} />
                       </TableCell>
+                      )}
+                      {isBaseVisible('score') && (
                       <TableCell className="text-center">
                         <ScoreBadge score={cand.ai_score} />
                       </TableCell>
+                      )}
+                      {isBaseVisible('apply_date') && (
                       <TableCell className="text-sm text-muted-foreground">
                         <span title={formatDate(cand.latest_submitted_at)}>
                           {formatRelativeTime(cand.latest_submitted_at)}
                         </span>
                       </TableCell>
+                      )}
                       {visibleQuestions.map((q) => (
                         <TableCell key={q.id} className="max-w-40 text-sm text-muted-foreground">
                           <span className="block truncate" title={cand.extra_answers?.[String(q.id)] ?? undefined}>
@@ -1168,6 +1250,7 @@ export default function CandidatesPage() {
                           </span>
                         </TableCell>
                       ))}
+                      {isBaseVisible('notes') && (
                       <TableCell className="text-center">
                         <button
                           type="button"
@@ -1185,6 +1268,7 @@ export default function CandidatesPage() {
                           {(cand.notes_count ?? 0) > 0 && <span>{cand.notes_count}</span>}
                         </button>
                       </TableCell>
+                      )}
                     </TableRow>
                   )
                 })}
