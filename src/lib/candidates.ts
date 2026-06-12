@@ -92,9 +92,11 @@ export async function fetchFilterOptions(): Promise<FilterOptions> {
 
 export async function fetchCandidates(
   q: string,
-  filters: ActiveFilters
+  filters: ActiveFilters,
+  offset = 0,
+  limit = 50
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
-  const params = new URLSearchParams({ q })
+  const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
   filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
   filters.fit_statuses.forEach((s) => params.append('fit_status', s))

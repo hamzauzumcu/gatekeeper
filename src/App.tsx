@@ -10,9 +10,9 @@ import { getUser, logout, type User } from '@/lib/auth'
 type ApiStatus = 'checking' | 'ok' | 'error'
 
 const STATUS_LABEL: Record<ApiStatus, string> = {
-  checking: 'kontrol ediliyor…',
-  ok: 'çalışıyor',
-  error: 'erişilemiyor',
+  checking: 'checking…',
+  ok: 'running',
+  error: 'unreachable',
 }
 
 export default function App() {
@@ -47,15 +47,15 @@ export default function App() {
           </Badge>
           <span className="text-sm text-muted-foreground">{user.fullName}</span>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
-            Çıkış
+            Sign out
           </Button>
         </div>
       </header>
 
       <Tabs defaultValue="candidates" className="mt-6">
         <TabsList>
-          <TabsTrigger value="candidates">Adaylar</TabsTrigger>
-          <TabsTrigger value="import">CSV İçe Aktar</TabsTrigger>
+          <TabsTrigger value="candidates">Candidates</TabsTrigger>
+          <TabsTrigger value="import">Import CSV</TabsTrigger>
         </TabsList>
 
         <TabsContent value="candidates" className="mt-4">

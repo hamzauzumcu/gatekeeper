@@ -60,7 +60,7 @@ function FitBadge({ status }: { status: string | null }) {
   )
 }
 
-// Generic multi-select dropdown (ülke ve fit_status için ortak)
+// Generic multi-select dropdown (shared for country and fit_status)
 function MultiSelect({
   values,
   onChange,
@@ -95,7 +95,7 @@ function MultiSelect({
       ? placeholder
       : selectedLabels.length === 1
         ? selectedLabels[0]
-        : `${selectedLabels.length} seçili`
+        : `${selectedLabels.length} selected`
 
   return (
     <div ref={ref} className="relative">
@@ -115,7 +115,7 @@ function MultiSelect({
       {open && (
         <div className="absolute left-0 z-50 mt-1 max-h-64 min-w-44 overflow-y-auto rounded-md border bg-popover shadow-md">
           {options.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-muted-foreground">Seçenek yok</div>
+            <div className="px-3 py-2 text-sm text-muted-foreground">No options</div>
           ) : (
             <>
               {values.length > 0 && (
@@ -125,7 +125,7 @@ function MultiSelect({
                     onClick={() => onChange([])}
                     className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
                   >
-                    Tümünü temizle
+                    Clear all
                   </button>
                   <div className="border-t" />
                 </>
@@ -159,7 +159,7 @@ function MultiSelect({
   )
 }
 
-// Single-select dropdown (pozisyon için)
+// Single-select dropdown (for position)
 function FilterSelect({
   value,
   onChange,
@@ -208,10 +208,16 @@ export default function CandidatesPage() {
   const [filters, setFilters] = useState<ActiveFilters>(loadSavedFilters)
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ countries: [], positions: [] })
 
+  const PAGE_SIZE = 50
+
   const [candidates, setCandidates] = useState<CandidateListItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const sentinelRef = useRef<HTMLTableRowElement>(null)
 
   const currentUser = getUser()!
 
@@ -224,30 +230,58 @@ export default function CandidatesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
+
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
   }, [])
 
+  // Reset + initial load when query or filters change
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true)
       setError(null)
-      fetchCandidates(q, filters)
-        .then(({ candidates, total }) => {
-          setCandidates(candidates)
+      setCandidates([])
+      setOffset(0)
+      setHasMore(false)
+      setSelectedIds(new Set())
+      fetchCandidates(q, filters, 0, PAGE_SIZE)
+        .then(({ candidates: page, total }) => {
+          setCandidates(page)
           setTotal(total)
-          // Mevcut sayfada olmayan seçimleri temizle
-          setSelectedIds((prev) => {
-            const ids = new Set(candidates.map((c) => c.id))
-            const next = new Set([...prev].filter((id) => ids.has(id)))
-            return next.size !== prev.size ? next : prev
-          })
+          setHasMore(page.length < total)
+          setOffset(page.length)
         })
         .catch((e) => setError(e instanceof Error ? e.message : 'hata'))
         .finally(() => setLoading(false))
     }, 250)
     return () => clearTimeout(t)
   }, [q, filters])
+
+  // Intersection observer for infinite scroll
+  useEffect(() => {
+    if (!sentinelRef.current) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
+          setLoadingMore(true)
+          fetchCandidates(q, filters, offset, PAGE_SIZE)
+            .then(({ candidates: page, total }) => {
+              setCandidates((prev) => {
+                const merged = [...prev, ...page]
+                setHasMore(merged.length < total)
+                setOffset(merged.length)
+                return merged
+              })
+            })
+            .catch(() => {})
+            .finally(() => setLoadingMore(false))
+        }
+      },
+      { rootMargin: '200px' }
+    )
+    obs.observe(sentinelRef.current)
+    return () => obs.disconnect()
+  }, [hasMore, loadingMore, loading, offset, q, filters])
 
   function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
     const next = { ...filters, [key]: value }
@@ -320,7 +354,7 @@ export default function CandidatesPage() {
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            Adaylar
+            Candidates
             {total > 0 && <span className="text-muted-foreground font-normal">({total})</span>}
           </CardTitle>
           {activeFilterCount > 0 && (
@@ -331,17 +365,17 @@ export default function CandidatesPage() {
               className="h-7 gap-1.5 text-xs text-muted-foreground"
             >
               <X className="size-3" />
-              {activeFilterCount} filtre temizle
+              Clear {activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''}
             </Button>
           )}
         </div>
 
-        {/* Arama + Filtreler */}
+        {/* Search + Filters */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <div className="relative min-w-48 flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="İsim veya e-posta ara…"
+              placeholder="Search by name or email…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className="pl-9"
@@ -354,25 +388,25 @@ export default function CandidatesPage() {
               values={filters.countries}
               onChange={(v) => updateFilter('countries', v)}
               options={countryOptions}
-              placeholder="Tüm ülkeler"
+              placeholder="All countries"
             />
             <FilterSelect
               value={filters.position}
               onChange={(v) => updateFilter('position', v)}
-              placeholder="Tüm pozisyonlar"
+              placeholder="All positions"
               options={filterOptions.positions}
             />
             <MultiSelect
               values={filters.fit_statuses}
               onChange={(v) => updateFilter('fit_statuses', v)}
               options={[...FIT_STATUS_OPTIONS]}
-              placeholder="Tüm durumlar"
+              placeholder="All statuses"
               minWidth="min-w-36"
             />
           </div>
         </div>
 
-        {/* Aktif filtre etiketleri */}
+        {/* Active filter tags */}
         {activeFilterCount > 0 && (
           <div className="mt-1 flex flex-wrap gap-1.5">
             {filters.countries.map((c) => (
@@ -418,7 +452,7 @@ export default function CandidatesPage() {
       </CardHeader>
 
       <CardContent className="relative pb-0">
-        {error && <p className="mb-2 text-sm text-destructive">Hata: {error}</p>}
+        {error && <p className="mb-2 text-sm text-destructive">Error: {error}</p>}
 
         <Table>
           <TableHeader>
@@ -435,25 +469,26 @@ export default function CandidatesPage() {
                         ? 'border-primary bg-primary/30'
                         : 'border-input',
                   ].join(' ')}
-                  aria-label="Tümünü seç"
+                  aria-label="Select all"
                 >
                   {(allSelected || someSelected) && <Check className="size-2.5" />}
                 </button>
               </TableHead>
-              <TableHead>Ad</TableHead>
-              <TableHead>Ülke</TableHead>
-              <TableHead>Pozisyon</TableHead>
-              <TableHead>Durum</TableHead>
-              <TableHead className="text-center">Başvuru</TableHead>
-              <TableHead>Son başvuru</TableHead>
-              <TableHead className="w-10 text-center">Not</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Country</TableHead>
+              <TableHead>Position</TableHead>
+              <TableHead>Salary Expectation</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-center">Applications</TableHead>
+              <TableHead>Last application</TableHead>
+              <TableHead className="w-10 text-center">Notes</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((__, j) => (
+                    {Array.from({ length: 9 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-full" />
                       </TableCell>
@@ -512,8 +547,11 @@ export default function CandidatesPage() {
                           '—'
                         )}
                       </TableCell>
-                      <TableCell className="max-w-50 truncate text-sm text-muted-foreground">
+                      <TableCell className="max-w-44 truncate text-sm text-muted-foreground">
                         {cand.positions ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-sm font-medium tabular-nums">
+                        {formatSalary(cand.salary_expectation)}
                       </TableCell>
                       <TableCell>
                         <FitBadge status={cand.fit_status} />
@@ -531,7 +569,7 @@ export default function CandidatesPage() {
                       <TableCell className="text-center">
                         <button
                           type="button"
-                          title={`${cand.notes_count ?? 0} not`}
+                          title={`${cand.notes_count ?? 0} note${(cand.notes_count ?? 0) !== 1 ? 's' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation()
                             openCandidate(cand.id, 'notes')
@@ -550,13 +588,21 @@ export default function CandidatesPage() {
                 })}
             {!loading && candidates.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-muted-foreground">
                   {activeFilterCount > 0 || q
-                    ? 'Bu filtrelere uygun aday bulunamadı.'
-                    : 'Aday bulunamadı.'}
+                    ? 'No candidates match the current filters.'
+                    : 'No candidates found.'}
                 </TableCell>
               </TableRow>
             )}
+            {/* Infinite scroll sentinel */}
+            <TableRow ref={sentinelRef} className="border-0">
+              {loadingMore && (
+                <TableCell colSpan={9} className="py-3 text-center text-sm text-muted-foreground">
+                  Loading…
+                </TableCell>
+              )}
+            </TableRow>
           </TableBody>
         </Table>
 
@@ -565,10 +611,10 @@ export default function CandidatesPage() {
           <div className="sticky bottom-0 left-0 right-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm font-medium text-foreground">
-                {selectedIds.size} aday seçildi
+                {selectedIds.size} candidate{selectedIds.size !== 1 ? 's' : ''} selected
               </span>
               <Separator orientation="vertical" className="h-5" />
-              <span className="text-xs text-muted-foreground">Durum ata:</span>
+              <span className="text-xs text-muted-foreground">Assign status:</span>
               {FIT_STATUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -643,6 +689,13 @@ function getInitials(name: string | null | undefined) {
     .join('')
 }
 
+const STATUS_OPTIONS = [
+  { value: 'new', label: 'Yeni' },
+  { value: 'reviewed', label: 'İncelendi' },
+  { value: 'shortlisted', label: 'Listeye Alındı' },
+  { value: 'rejected', label: 'Reddedildi' },
+] as const
+
 const STATUS_STYLES: Record<string, string> = {
   new: 'bg-slate-50 text-slate-700 border-slate-200',
   submitted: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -674,6 +727,20 @@ function CandidateDetailView({
 }) {
   const { applicant, applications } = detail
   const initials = getInitials(applicant.full_name)
+  const [appStatuses, setAppStatuses] = useState<Map<number, string>>(
+    () => new Map(applications.map((a) => [a.id, a.status]))
+  )
+
+  async function handleDetailStatusChange(appId: number, newStatus: string) {
+    const prev = appStatuses.get(appId) ?? 'new'
+    if (newStatus === prev) return
+    setAppStatuses((m) => new Map(m).set(appId, newStatus))
+    try {
+      await updateApplicationStatus(appId, newStatus)
+    } catch {
+      setAppStatuses((m) => new Map(m).set(appId, prev))
+    }
+  }
   const linkedinHref = applicant.linkedin_url
     ? applicant.linkedin_url.startsWith('http')
       ? applicant.linkedin_url
@@ -775,7 +842,15 @@ function CandidateDetailView({
                       )}
                     </div>
                   </div>
-                  <StatusBadge status={app.status} />
+                  <select
+                    value={appStatuses.get(app.id) ?? app.status}
+                    onChange={(e) => handleDetailStatusChange(app.id, e.target.value)}
+                    className="h-7 cursor-pointer rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    {STATUS_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="divide-y">
@@ -802,7 +877,11 @@ function CandidateDetailView({
                         {app.answers.map((a, i) => (
                           <div key={i} className="text-sm">
                             <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
-                            <dd className="font-medium">{a.value ?? '—'}</dd>
+                            <dd className="font-medium">
+                              {/salary|maaş|maas|ücret|ucret|wage|compensation/i.test(a.label)
+                                ? formatSalary(a.value)
+                                : (a.value ?? '—')}
+                            </dd>
                           </div>
                         ))}
                       </dl>

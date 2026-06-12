@@ -34,7 +34,7 @@ export default function LoginPage({ onLogin }: Props) {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="username">Kullanıcı adı</Label>
+              <Label htmlFor="username">Username</Label>
               <Input
                 id="username"
                 autoComplete="username"
@@ -47,7 +47,7 @@ export default function LoginPage({ onLogin }: Props) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="password">Şifre</Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -61,10 +61,10 @@ export default function LoginPage({ onLogin }: Props) {
               />
             </div>
             {error && (
-              <p className="text-sm text-destructive">Kullanıcı adı veya şifre hatalı.</p>
+              <p className="text-sm text-destructive">Invalid username or password.</p>
             )}
             <Button type="submit" className="w-full">
-              Giriş yap
+              Sign in
             </Button>
           </form>
         </CardContent>

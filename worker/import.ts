@@ -32,6 +32,7 @@ export type ImportSummary = {
   applicants: number
   applications: number
   answers: number
+  resumes_copied: number
 }
 
 const VALID_TYPES: QuestionType[] = ['text', 'number', 'boolean', 'file']
@@ -49,9 +50,18 @@ function assertPayload(p: ImportPayload): string | null {
   return null
 }
 
+const TALLY_ORIGIN = 'https://storage.tally.so'
+
+function r2Key(submissionId: string, tallyUrl: string): string {
+  const path = new URL(tallyUrl).pathname
+  const filename = path.split('/').pop() || 'resume'
+  return `${submissionId}/${filename}`
+}
+
 export async function importApplications(
   db: D1Database,
-  payload: ImportPayload
+  payload: ImportPayload,
+  r2?: R2Bucket
 ): Promise<ImportSummary> {
   const err = assertPayload(payload)
   if (err) throw new Error(err)
@@ -172,11 +182,39 @@ export async function importApplications(
   }
   if (answerStmts.length) await db.batch(answerStmts)
 
+  // 6) Tally resume URL'lerini R2'ye kopyala (sıralı — chunk küçük olduğu için sorun yok)
+  let resumes_copied = 0
+  if (r2) {
+    for (const row of payload.rows) {
+      if (!row.resume_url?.startsWith(TALLY_ORIGIN)) continue
+      const appId = applicationId.get(row.submission_id)
+      if (!appId) continue
+
+      const key = r2Key(row.submission_id, row.resume_url)
+
+      // Daha önce kopyalanmışsa atla
+      const existing = await r2.head(key)
+      if (existing) {
+        await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
+        continue
+      }
+
+      const res = await fetch(row.resume_url)
+      if (!res.ok || !res.body) continue
+
+      const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
+      await r2.put(key, res.body, { httpMetadata: { contentType } })
+      await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
+      resumes_copied++
+    }
+  }
+
   return {
     positionId,
     questions: questionId.size,
     applicants: applicantId.size,
     applications: applicationId.size,
     answers,
+    resumes_copied,
   }
 }

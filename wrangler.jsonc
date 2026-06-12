@@ -1,18 +1,23 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "gatekeeper",
-  "main": "worker/index.ts",
-  "compatibility_date": "2026-01-01",
-  "assets": {
-    "not_found_handling": "single-page-application"
-  },
-
-  "d1_databases": [
-    { "binding": "DB", "database_name": "gatekeeper", "database_id": "21808d75-bc19-4e6a-9547-66da059c569c" }
-  ]
-
-  // Resume'ları kendi storage'a alınca açılacak:
-  // "r2_buckets": [
-  //   { "binding": "RESUMES", "bucket_name": "gatekeeper-resumes" }
-  // ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "gatekeeper",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-01-01",
+	"assets": {
+		"not_found_handling": "single-page-application"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "gatekeeper",
+			"database_id": "21808d75-bc19-4e6a-9547-66da059c569c"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "RESUMES",
+			"bucket_name": "gatekeeper-resumes",
+			"remote": true
+		}
+	]
 }

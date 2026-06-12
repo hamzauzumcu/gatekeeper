@@ -3,13 +3,11 @@ import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
 import { listCandidates, getCandidate, getCandidateFilters, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
 
-// Bindings (DB, RESUMES vb.) wrangler.jsonc'de tanımlandıkça buraya eklenecek
 type Env = {
   Bindings: {
-    // Lokal: .dev.vars — Prod: wrangler secret put DEEPSEEK_API_KEY
     DEEPSEEK_API_KEY: string
-    // D1 — wrangler.jsonc'de tanımlı
     DB: D1Database
+    RESUMES: R2Bucket
   }
 }
 
@@ -35,7 +33,7 @@ app.post('/api/import', async (c) => {
     return c.json({ ok: false, error: 'geçersiz JSON' }, 400)
   }
   try {
-    const summary = await importApplications(c.env.DB, payload)
+    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES)
     return c.json({ ok: true, summary })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'import hatası' }, 400)
@@ -148,6 +146,18 @@ app.delete('/api/notes/:id', async (c) => {
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'not bulunamadı' }, 404)
   return c.json({ ok: true })
+})
+
+// R2'den resume serve et
+app.get('/api/resumes/*', async (c) => {
+  const key = c.req.path.replace('/api/resumes/', '')
+  if (!key) return c.json({ ok: false, error: 'key gerekli' }, 400)
+  const obj = await c.env.RESUMES.get(key)
+  if (!obj) return c.json({ ok: false, error: 'dosya bulunamadı' }, 404)
+  const headers = new Headers()
+  obj.writeHttpMetadata(headers)
+  headers.set('cache-control', 'private, max-age=3600')
+  return new Response(obj.body, { headers })
 })
 
 // İleride:
