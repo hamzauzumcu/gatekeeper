@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus, Sparkles,
@@ -89,19 +89,138 @@ function ScoreBadge({ score }: { score: number | null | undefined }) {
   )
 }
 
-// Generic multi-select dropdown
-function MultiSelect({
-  values,
-  onChange,
+// All filter kinds (besides per-question answer filters) that can be added
+const FIXED_FILTER_KINDS = [
+  { key: 'country', label: 'Country' },
+  { key: 'position', label: 'Position' },
+  { key: 'status', label: 'Status' },
+  { key: 'score', label: 'Score' },
+] as const
+
+// Shared checkbox list used inside multi-value filter chips
+function OptionCheckList({
   options,
-  placeholder,
-  minWidth = 'min-w-36',
+  values,
+  onToggle,
 }: {
-  values: string[]
-  onChange: (v: string[]) => void
   options: { value: string; label: string }[]
-  placeholder: string
-  minWidth?: string
+  values: string[]
+  onToggle: (v: string) => void
+}) {
+  if (options.length === 0) {
+    return <div className="px-2 py-1.5 text-sm text-muted-foreground">No options</div>
+  }
+  return (
+    <div className="max-h-64 overflow-y-auto">
+      {options.map((o) => {
+        const checked = values.includes(o.value)
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onToggle(o.value)}
+            className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+          >
+            <span
+              className={[
+                'flex size-4 shrink-0 items-center justify-center rounded border',
+                checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+              ].join(' ')}
+            >
+              {checked && <Check className="size-2.5" />}
+            </span>
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// A single active filter rendered as a removable chip with an editor popover.
+// Open state is lifted to the parent so only one chip popover is open at a time.
+function FilterChip({
+  id,
+  openChip,
+  setOpenChip,
+  label,
+  summary,
+  onRemove,
+  children,
+}: {
+  id: string
+  openChip: string | null
+  setOpenChip: (id: string | null) => void
+  label: string
+  summary: string | null
+  onRemove: () => void
+  children: ReactNode
+}) {
+  const open = openChip === id
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpenChip(null)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [open, setOpenChip])
+
+  const hasValue = summary != null
+
+  return (
+    <div ref={ref} className="relative">
+      <div
+        className={[
+          'flex h-8 items-center rounded-md border text-sm transition-colors',
+          hasValue ? 'border-primary/40 bg-primary/5' : 'border-input bg-background',
+        ].join(' ')}
+      >
+        <button
+          type="button"
+          onClick={() => setOpenChip(open ? null : id)}
+          className="flex h-full items-center gap-1.5 rounded-l-md pl-2.5 pr-1.5"
+        >
+          <span className="text-muted-foreground">{label}</span>
+          <span className={hasValue ? 'font-medium text-foreground' : 'text-muted-foreground/70'}>
+            {summary ?? 'Any'}
+          </span>
+          <ChevronDown
+            className={`size-3 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="flex h-full items-center rounded-r-md pl-1 pr-2 text-muted-foreground hover:text-foreground"
+          aria-label={`Remove ${label} filter`}
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 min-w-52 rounded-md border bg-popover p-1 shadow-md">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// "+ Add filter" menu listing every filter kind that isn't active yet
+function AddFilterMenu({
+  availableKinds,
+  questionColumns,
+  onAddKind,
+  onAddAnswer,
+}: {
+  availableKinds: { key: string; label: string }[]
+  questionColumns: QuestionColumn[]
+  onAddKind: (key: string) => void
+  onAddAnswer: (questionId: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -114,120 +233,65 @@ function MultiSelect({
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
 
-  function toggle(v: string) {
-    onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v])
-  }
-
-  const selectedLabels = options.filter((o) => values.includes(o.value)).map((o) => o.label)
-  const label =
-    selectedLabels.length === 0
-      ? placeholder
-      : selectedLabels.length === 1
-        ? selectedLabels[0]
-        : `${selectedLabels.length} selected`
+  // Group questions by position (mirrors ColumnPicker)
+  const byPosition = questionColumns.reduce<Record<string, QuestionColumn[]>>((acc, q) => {
+    const key = q.position_title
+    if (!acc[key]) acc[key] = []
+    acc[key].push(q)
+    return acc
+  }, {})
 
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className={[
-          `flex h-9 ${minWidth} items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm`,
-          'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-          values.length > 0 ? 'font-medium text-foreground' : 'text-muted-foreground',
-        ].join(' ')}
+        className="flex h-8 items-center gap-1.5 rounded-md border border-dashed border-input bg-background px-2.5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
       >
-        <span>{label}</span>
-        <ChevronDown className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <Plus className="size-3.5" />
+        Add filter
       </button>
 
       {open && (
-        <div className="absolute left-0 z-50 mt-1 max-h-64 min-w-44 overflow-y-auto rounded-md border bg-popover shadow-md">
-          {options.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-muted-foreground">No options</div>
-          ) : (
-            <>
-              {values.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => onChange([])}
-                    className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    Clear all
-                  </button>
-                  <div className="border-t" />
-                </>
-              )}
-              {options.map((o) => {
-                const checked = values.includes(o.value)
-                return (
-                  <button
-                    key={o.value}
-                    type="button"
-                    onClick={() => toggle(o.value)}
-                    className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-accent"
-                  >
-                    <span
-                      className={[
-                        'flex size-4 shrink-0 items-center justify-center rounded border',
-                        checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
-                      ].join(' ')}
-                    >
-                      {checked && <Check className="size-2.5" />}
-                    </span>
-                    {o.label}
-                  </button>
-                )
-              })}
-            </>
-          )}
+        <div className="absolute left-0 z-50 mt-1 w-64 overflow-hidden rounded-md border bg-popover shadow-md">
+          <div className="max-h-80 overflow-y-auto p-1">
+            {availableKinds.map((k) => (
+              <button
+                key={k.key}
+                type="button"
+                onClick={() => { onAddKind(k.key); setOpen(false) }}
+                className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+              >
+                {k.label}
+              </button>
+            ))}
+            {questionColumns.length > 0 && (
+              <>
+                {availableKinds.length > 0 && <div className="my-1 border-t" />}
+                {Object.entries(byPosition).map(([posTitle, qs]) => (
+                  <div key={posTitle}>
+                    <div className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {posTitle === 'AI Analysis' && <Sparkles className="size-3 text-violet-500" />}
+                      {posTitle}
+                    </div>
+                    {qs.map((q) => (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onClick={() => { onAddAnswer(q.id); setOpen(false) }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                      >
+                        <span className="flex-1 truncate">{q.label}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">{q.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
       )}
-    </div>
-  )
-}
-
-// Single-select dropdown (for position)
-function FilterSelect({
-  value,
-  onChange,
-  placeholder,
-  options,
-}: {
-  value: string
-  onChange: (v: string) => void
-  placeholder: string
-  options: string[]
-}) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={[
-          'h-9 rounded-md border border-input bg-background px-3 pr-8 text-sm',
-          'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-          'appearance-none cursor-pointer min-w-40',
-          value ? 'text-foreground font-medium' : 'text-muted-foreground',
-        ].join(' ')}
-      >
-        <option value="">{placeholder}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      <svg
-        className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth={2}
-      >
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-      </svg>
     </div>
   )
 }
@@ -280,7 +344,7 @@ function ColumnPicker({
         ].join(' ')}
       >
         <Columns3 className="size-3.5 shrink-0" />
-        Columns
+        <span className="hidden sm:inline">Columns</span>
         {active && (
           <span className="flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
             {visibleIds.length}
@@ -346,17 +410,15 @@ function ColumnPicker({
   )
 }
 
-// Single answer filter row
-function AnswerFilterRow({
+// Editor body for an answer (question) filter, shown inside a FilterChip popover
+function AnswerFilterEditor({
   filter,
   questionColumns,
   onChange,
-  onRemove,
 }: {
   filter: AnswerFilter
   questionColumns: QuestionColumn[]
   onChange: (f: AnswerFilter) => void
-  onRemove: () => void
 }) {
   const question = questionColumns.find((q) => q.id === filter.questionId)
   const opOptions = question ? getOpOptions(question.type) : []
@@ -375,7 +437,7 @@ function AnswerFilterRow({
   }
 
   const selectCls = [
-    'h-8 rounded-md border border-input bg-background px-2 text-sm appearance-none cursor-pointer',
+    'h-8 w-full rounded-md border border-input bg-background px-2 pr-7 text-sm appearance-none cursor-pointer',
     'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
   ].join(' ')
 
@@ -386,13 +448,13 @@ function AnswerFilterRow({
   )
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex w-56 flex-col gap-2 p-1.5">
       {/* Question select */}
       <div className="relative">
         <select
           value={filter.questionId || ''}
           onChange={(e) => handleQuestionChange(e.target.value)}
-          className={`${selectCls} min-w-40 pr-7 font-medium`}
+          className={`${selectCls} font-medium`}
         >
           <option value="" disabled>Select field…</option>
           {questionColumns.map((q) => (
@@ -404,11 +466,7 @@ function AnswerFilterRow({
 
       {/* Operator select */}
       <div className="relative">
-        <select
-          value={filter.op}
-          onChange={(e) => handleOpChange(e.target.value)}
-          className={`${selectCls} min-w-32 pr-7`}
-        >
+        <select value={filter.op} onChange={(e) => handleOpChange(e.target.value)} className={selectCls}>
           {opOptions.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
@@ -424,20 +482,11 @@ function AnswerFilterRow({
           onChange={(e) => onChange({ ...filter, value: e.target.value })}
           placeholder="value…"
           className={[
-            'h-8 w-28 rounded-md border border-input bg-background px-2 text-sm',
+            'h-8 w-full rounded-md border border-input bg-background px-2 text-sm',
             'ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
           ].join(' ')}
         />
       )}
-
-      {/* Remove */}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <X className="size-3.5" />
-      </button>
     </div>
   )
 }
@@ -448,6 +497,20 @@ export default function CandidatesPage() {
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ countries: [], positions: [] })
   const [questionColumns, setQuestionColumns] = useState<QuestionColumn[]>([])
   const [visibleQuestionIds, setVisibleQuestionIds] = useState<number[]>(loadSavedColumns)
+
+  // Which fixed-filter chips are shown (a chip can be visible before it has a value).
+  // Initialized from saved filters so persisted values reappear as chips on reload.
+  const [shownKinds, setShownKinds] = useState<Set<string>>(() => {
+    const s = new Set<string>()
+    const f = loadSavedFilters()
+    if (f.countries.length) s.add('country')
+    if (f.position) s.add('position')
+    if (f.fit_statuses.length) s.add('status')
+    if (f.min_score || f.max_score) s.add('score')
+    return s
+  })
+  // Id of the chip whose editor popover is currently open (only one at a time).
+  const [openChip, setOpenChip] = useState<string | null>(null)
 
   const PAGE_SIZE = 50
 
@@ -564,6 +627,8 @@ export default function CandidatesPage() {
     const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
     setFilters(cleared)
     saveFilters(cleared)
+    setShownKinds(new Set())
+    setOpenChip(null)
   }
 
   function updateVisibleColumns(ids: number[]) {
@@ -571,15 +636,38 @@ export default function CandidatesPage() {
     saveColumns(ids)
   }
 
-  function addAnswerFilter() {
-    if (questionColumns.length === 0) return
-    const col = questionColumns[0]
+  // Show a fixed-filter chip and immediately open its editor so the user can pick a value.
+  function addFilterKind(key: string) {
+    setShownKinds((prev) => new Set(prev).add(key))
+    setOpenChip(key)
+  }
+
+  // Hide a fixed-filter chip and clear whatever value it held.
+  function removeFilterKind(key: string) {
+    setShownKinds((prev) => { const next = new Set(prev); next.delete(key); return next })
+    setOpenChip(null)
+    if (key === 'country') updateFilter('countries', [])
+    else if (key === 'position') updateFilter('position', '')
+    else if (key === 'status') updateFilter('fit_statuses', [])
+    else if (key === 'score') {
+      const next = { ...filters, min_score: '', max_score: '' }
+      setFilters(next)
+      saveFilters(next)
+    }
+  }
+
+  // Add an answer filter for a specific question and open its editor.
+  function addAnswerFilterFor(questionId: number) {
+    const col = questionColumns.find((c) => c.id === questionId)
+    if (!col) return
     const newFilter: AnswerFilter = {
       questionId: col.id,
       op: defaultOpForType(col.type),
       value: '',
     }
+    const idx = filters.answerFilters.length
     updateFilter('answerFilters', [...filters.answerFilters, newFilter])
+    setOpenChip(`answer:${idx}`)
   }
 
   function updateAnswerFilter(i: number, f: AnswerFilter) {
@@ -588,6 +676,7 @@ export default function CandidatesPage() {
 
   function removeAnswerFilter(i: number) {
     updateFilter('answerFilters', filters.answerFilters.filter((_, idx) => idx !== i))
+    setOpenChip(null)
   }
 
   function openCandidate(id: number, tab = 'applications', idx = -1) {
@@ -753,7 +842,7 @@ export default function CandidatesPage() {
           )}
         </div>
 
-        {/* Search + Filters */}
+        {/* Search + Columns */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <div className="relative min-w-48 flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -764,145 +853,184 @@ export default function CandidatesPage() {
               className="pl-9"
             />
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <SlidersHorizontal className="size-4 shrink-0 text-muted-foreground" />
-            <MultiSelect
-              values={filters.countries}
-              onChange={(v) => updateFilter('countries', v)}
-              options={countryOptions}
-              placeholder="All countries"
-            />
-            <FilterSelect
-              value={filters.position}
-              onChange={(v) => updateFilter('position', v)}
-              placeholder="All positions"
-              options={filterOptions.positions}
-            />
-            <MultiSelect
-              values={filters.fit_statuses}
-              onChange={(v) => updateFilter('fit_statuses', v)}
-              options={[...FIT_STATUS_OPTIONS]}
-              placeholder="All statuses"
-              minWidth="min-w-36"
-            />
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
-              <input
-                type="number"
-                min="0"
-                max="100"
-                placeholder="min"
-                value={filters.min_score}
-                onChange={(e) => updateFilter('min_score', e.target.value)}
-                className={[
-                  'h-9 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  filters.min_score ? 'font-medium text-foreground' : 'text-muted-foreground',
-                ].join(' ')}
-              />
-              <span className="text-xs text-muted-foreground">–</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                placeholder="max"
-                value={filters.max_score}
-                onChange={(e) => updateFilter('max_score', e.target.value)}
-                className={[
-                  'h-9 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  filters.max_score ? 'font-medium text-foreground' : 'text-muted-foreground',
-                ].join(' ')}
-              />
-            </div>
-            <ColumnPicker
-              questionColumns={questionColumns}
-              visibleIds={visibleQuestionIds}
-              onChange={updateVisibleColumns}
-            />
-            {questionColumns.length > 0 && (
-              <button
-                type="button"
-                onClick={addAnswerFilter}
-                className="flex h-9 items-center gap-1.5 rounded-md border border-dashed border-input bg-background px-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground transition-colors"
-              >
-                <Plus className="size-3.5" />
-                Add filter
-              </button>
-            )}
-          </div>
+          <ColumnPicker
+            questionColumns={questionColumns}
+            visibleIds={visibleQuestionIds}
+            onChange={updateVisibleColumns}
+          />
         </div>
 
-        {/* Answer filter rows */}
-        {filters.answerFilters.length > 0 && (
-          <div className="mt-2 flex flex-col gap-2 pl-1">
-            {filters.answerFilters.map((f, i) => (
-              <AnswerFilterRow
-                key={i}
-                filter={f}
-                questionColumns={questionColumns}
-                onChange={(updated) => updateAnswerFilter(i, updated)}
-                onRemove={() => removeAnswerFilter(i)}
-              />
-            ))}
-          </div>
-        )}
+        {/* Filter chips — collapsed by default, added on demand via "Add filter" */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <SlidersHorizontal className="hidden size-4 shrink-0 text-muted-foreground sm:block" />
 
-        {/* Active filter tags (country, position, fit_status, score) */}
-        {(filters.countries.length > 0 || filters.position || filters.fit_statuses.length > 0 || filters.min_score || filters.max_score) && (
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {filters.countries.map((c) => (
-              <Badge key={c} variant="secondary" className="gap-1 pr-1">
-                {c}
+          {shownKinds.has('country') && (
+            <FilterChip
+              id="country"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Country"
+              summary={
+                filters.countries.length === 0
+                  ? null
+                  : filters.countries.length === 1
+                    ? filters.countries[0]
+                    : `${filters.countries.length} selected`
+              }
+              onRemove={() => removeFilterKind('country')}
+            >
+              <OptionCheckList
+                options={countryOptions}
+                values={filters.countries}
+                onToggle={(v) =>
+                  updateFilter(
+                    'countries',
+                    filters.countries.includes(v)
+                      ? filters.countries.filter((x) => x !== v)
+                      : [...filters.countries, v]
+                  )
+                }
+              />
+            </FilterChip>
+          )}
+
+          {shownKinds.has('position') && (
+            <FilterChip
+              id="position"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Position"
+              summary={filters.position || null}
+              onRemove={() => removeFilterKind('position')}
+            >
+              <div className="max-h-64 w-56 overflow-y-auto">
                 <button
-                  onClick={() => updateFilter('countries', filters.countries.filter((x) => x !== c))}
-                  className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
-                >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
-            {filters.position && (
-              <Badge variant="secondary" className="gap-1 pr-1">
-                {filters.position}
-                <button
+                  type="button"
                   onClick={() => updateFilter('position', '')}
-                  className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
+                  className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
                 >
-                  <X className="size-3" />
+                  <span className={['flex size-4 shrink-0 items-center justify-center rounded-full border', !filters.position ? 'border-primary' : 'border-input'].join(' ')}>
+                    {!filters.position && <span className="size-2 rounded-full bg-primary" />}
+                  </span>
+                  <span className="text-muted-foreground">Any position</span>
                 </button>
-              </Badge>
-            )}
-            {filters.fit_statuses.map((s) => {
-              const opt = FIT_STATUS_OPTIONS.find((o) => o.value === s)
-              return opt ? (
-                <Badge key={s} variant="secondary" className="gap-1 pr-1">
-                  {opt.label}
-                  <button
-                    onClick={() =>
-                      updateFilter('fit_statuses', filters.fit_statuses.filter((x) => x !== s))
-                    }
-                    className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </Badge>
-              ) : null
-            })}
-            {(filters.min_score || filters.max_score) && (
-              <Badge variant="secondary" className="gap-1 pr-1">
-                Score {filters.min_score || '0'}–{filters.max_score || '100'}
-                <button
-                  onClick={() => { updateFilter('min_score', ''); updateFilter('max_score', '') }}
-                  className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
-                >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            )}
-          </div>
-        )}
+                {filterOptions.positions.map((p) => {
+                  const checked = filters.position === p
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => { updateFilter('position', p); setOpenChip(null) }}
+                      className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                    >
+                      <span className={['flex size-4 shrink-0 items-center justify-center rounded-full border', checked ? 'border-primary' : 'border-input'].join(' ')}>
+                        {checked && <span className="size-2 rounded-full bg-primary" />}
+                      </span>
+                      <span className="truncate">{p}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </FilterChip>
+          )}
+
+          {shownKinds.has('status') && (
+            <FilterChip
+              id="status"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Status"
+              summary={
+                filters.fit_statuses.length === 0
+                  ? null
+                  : filters.fit_statuses.length === 1
+                    ? (FIT_STATUS_OPTIONS.find((o) => o.value === filters.fit_statuses[0])?.label ?? filters.fit_statuses[0])
+                    : `${filters.fit_statuses.length} selected`
+              }
+              onRemove={() => removeFilterKind('status')}
+            >
+              <OptionCheckList
+                options={[...FIT_STATUS_OPTIONS]}
+                values={filters.fit_statuses}
+                onToggle={(v) =>
+                  updateFilter(
+                    'fit_statuses',
+                    filters.fit_statuses.includes(v)
+                      ? filters.fit_statuses.filter((x) => x !== v)
+                      : [...filters.fit_statuses, v]
+                  )
+                }
+              />
+            </FilterChip>
+          )}
+
+          {shownKinds.has('score') && (
+            <FilterChip
+              id="score"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Score"
+              summary={(filters.min_score || filters.max_score) ? `${filters.min_score || '0'}–${filters.max_score || '100'}` : null}
+              onRemove={() => removeFilterKind('score')}
+            >
+              <div className="flex items-center gap-1.5 p-1.5">
+                <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder="min"
+                  value={filters.min_score}
+                  onChange={(e) => updateFilter('min_score', e.target.value)}
+                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                />
+                <span className="text-xs text-muted-foreground">–</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder="max"
+                  value={filters.max_score}
+                  onChange={(e) => updateFilter('max_score', e.target.value)}
+                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                />
+              </div>
+            </FilterChip>
+          )}
+
+          {filters.answerFilters.map((f, i) => {
+            const question = questionColumns.find((qc) => qc.id === f.questionId)
+            const opLabel = question
+              ? (getOpOptions(question.type).find((o) => o.value === f.op)?.label ?? f.op)
+              : f.op
+            const noValue = NO_VALUE_OPS.has(f.op as AnswerFilterOp)
+            const summary = noValue ? opLabel : (f.value ? `${opLabel} ${f.value}` : null)
+            return (
+              <FilterChip
+                key={i}
+                id={`answer:${i}`}
+                openChip={openChip}
+                setOpenChip={setOpenChip}
+                label={question?.label ?? 'Field'}
+                summary={summary}
+                onRemove={() => removeAnswerFilter(i)}
+              >
+                <AnswerFilterEditor
+                  filter={f}
+                  questionColumns={questionColumns}
+                  onChange={(updated) => updateAnswerFilter(i, updated)}
+                />
+              </FilterChip>
+            )
+          })}
+
+          <AddFilterMenu
+            availableKinds={FIXED_FILTER_KINDS.filter((k) => !shownKinds.has(k.key))}
+            questionColumns={questionColumns}
+            onAddKind={addFilterKind}
+            onAddAnswer={addAnswerFilterFor}
+          />
+        </div>
       </CardHeader>
 
       <CardContent className="relative pb-0 overflow-x-auto">
