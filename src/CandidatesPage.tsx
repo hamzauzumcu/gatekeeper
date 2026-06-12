@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check } from 'lucide-react'
+import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check, Mail, Phone, Globe, Download, MessageSquare, Trash2 } from 'lucide-react'
 import {
   fetchCandidates,
   fetchCandidate,
@@ -7,11 +7,20 @@ import {
   loadSavedFilters,
   saveFilters,
   formatDate,
+  formatSalary,
+  updateApplicationStatus,
+  updateApplicantsFitStatus,
+  fetchNotes,
+  addNote,
+  deleteNote,
+  FIT_STATUS_OPTIONS,
   type CandidateListItem,
   type CandidateDetail,
+  type CandidateNote,
   type FilterOptions,
   type ActiveFilters,
 } from './lib/candidates'
+import { getUser, type User } from './lib/auth'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -21,10 +30,10 @@ import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetContent,
-  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Table,
   TableBody,
@@ -34,15 +43,36 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-// Multi-select country dropdown
-function MultiCountrySelect({
+const FIT_STATUS_STYLES: Record<string, { badge: string; label: string }> = {
+  good_fit: { badge: 'bg-green-50 text-green-700 border-green-200', label: 'Good Fit' },
+  maybe: { badge: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Maybe' },
+  not_fit: { badge: 'bg-red-50 text-red-700 border-red-200', label: 'Not Fit' },
+}
+
+function FitBadge({ status }: { status: string | null }) {
+  if (!status) return null
+  const s = FIT_STATUS_STYLES[status]
+  if (!s) return null
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${s.badge}`}>
+      {s.label}
+    </span>
+  )
+}
+
+// Generic multi-select dropdown (ülke ve fit_status için ortak)
+function MultiSelect({
   values,
   onChange,
   options,
+  placeholder,
+  minWidth = 'min-w-36',
 }: {
   values: string[]
   onChange: (v: string[]) => void
-  options: string[]
+  options: { value: string; label: string }[]
+  placeholder: string
+  minWidth?: string
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -59,12 +89,13 @@ function MultiCountrySelect({
     onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v])
   }
 
+  const selectedLabels = options.filter((o) => values.includes(o.value)).map((o) => o.label)
   const label =
-    values.length === 0
-      ? 'Tüm ülkeler'
-      : values.length === 1
-        ? values[0]
-        : `${values.length} ülke`
+    selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length === 1
+        ? selectedLabels[0]
+        : `${selectedLabels.length} seçili`
 
   return (
     <div ref={ref} className="relative">
@@ -72,7 +103,7 @@ function MultiCountrySelect({
         type="button"
         onClick={() => setOpen((o) => !o)}
         className={[
-          'flex h-9 min-w-36 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm',
+          `flex h-9 ${minWidth} items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm`,
           'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
           values.length > 0 ? 'font-medium text-foreground' : 'text-muted-foreground',
         ].join(' ')}
@@ -84,7 +115,7 @@ function MultiCountrySelect({
       {open && (
         <div className="absolute left-0 z-50 mt-1 max-h-64 min-w-44 overflow-y-auto rounded-md border bg-popover shadow-md">
           {options.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-muted-foreground">Ülke yok</div>
+            <div className="px-3 py-2 text-sm text-muted-foreground">Seçenek yok</div>
           ) : (
             <>
               {values.length > 0 && (
@@ -100,12 +131,12 @@ function MultiCountrySelect({
                 </>
               )}
               {options.map((o) => {
-                const checked = values.includes(o)
+                const checked = values.includes(o.value)
                 return (
                   <button
-                    key={o}
+                    key={o.value}
                     type="button"
-                    onClick={() => toggle(o)}
+                    onClick={() => toggle(o.value)}
                     className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-accent"
                   >
                     <span
@@ -116,7 +147,7 @@ function MultiCountrySelect({
                     >
                       {checked && <Check className="size-2.5" />}
                     </span>
-                    {o}
+                    {o.label}
                   </button>
                 )
               })}
@@ -182,9 +213,16 @@ export default function CandidatesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const currentUser = getUser()!
+
   const [selected, setSelected] = useState<CandidateDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [open, setOpen] = useState(false)
+  const [sheetTab, setSheetTab] = useState('applications')
+
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [bulkLoading, setBulkLoading] = useState(false)
 
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
@@ -198,6 +236,12 @@ export default function CandidatesPage() {
         .then(({ candidates, total }) => {
           setCandidates(candidates)
           setTotal(total)
+          // Mevcut sayfada olmayan seçimleri temizle
+          setSelectedIds((prev) => {
+            const ids = new Set(candidates.map((c) => c.id))
+            const next = new Set([...prev].filter((id) => ids.has(id)))
+            return next.size !== prev.size ? next : prev
+          })
         })
         .catch((e) => setError(e instanceof Error ? e.message : 'hata'))
         .finally(() => setLoading(false))
@@ -212,12 +256,13 @@ export default function CandidatesPage() {
   }
 
   function clearFilters() {
-    const cleared: ActiveFilters = { countries: [], position: '' }
+    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [] }
     setFilters(cleared)
     saveFilters(cleared)
   }
 
-  function openCandidate(id: number) {
+  function openCandidate(id: number, tab = 'applications') {
+    setSheetTab(tab)
     setOpen(true)
     setSelected(null)
     setDetailLoading(true)
@@ -227,7 +272,48 @@ export default function CandidatesPage() {
       .finally(() => setDetailLoading(false))
   }
 
-  const activeFilterCount = (filters.countries.length > 0 ? 1 : 0) + (filters.position ? 1 : 0)
+  function toggleSelectId(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === candidates.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(candidates.map((c) => c.id)))
+    }
+  }
+
+  async function assignFitStatus(fitStatus: string | null) {
+    if (selectedIds.size === 0) return
+    setBulkLoading(true)
+    try {
+      await updateApplicantsFitStatus([...selectedIds], fitStatus)
+      setCandidates((prev) =>
+        prev.map((c) => (selectedIds.has(c.id) ? { ...c, fit_status: fitStatus } : c))
+      )
+      setSelectedIds(new Set())
+    } catch {
+      // silent
+    } finally {
+      setBulkLoading(false)
+    }
+  }
+
+  const activeFilterCount =
+    (filters.countries.length > 0 ? 1 : 0) +
+    (filters.position ? 1 : 0) +
+    (filters.fit_statuses.length > 0 ? 1 : 0)
+
+  const allSelected = candidates.length > 0 && selectedIds.size === candidates.length
+  const someSelected = selectedIds.size > 0 && !allSelected
+
+  const countryOptions = filterOptions.countries.map((c) => ({ value: c, label: c }))
 
   return (
     <Card>
@@ -264,16 +350,24 @@ export default function CandidatesPage() {
 
           <div className="flex items-center gap-2">
             <SlidersHorizontal className="size-4 shrink-0 text-muted-foreground" />
-            <MultiCountrySelect
+            <MultiSelect
               values={filters.countries}
               onChange={(v) => updateFilter('countries', v)}
-              options={filterOptions.countries}
+              options={countryOptions}
+              placeholder="Tüm ülkeler"
             />
             <FilterSelect
               value={filters.position}
               onChange={(v) => updateFilter('position', v)}
               placeholder="Tüm pozisyonlar"
               options={filterOptions.positions}
+            />
+            <MultiSelect
+              values={filters.fit_statuses}
+              onChange={(v) => updateFilter('fit_statuses', v)}
+              options={[...FIT_STATUS_OPTIONS]}
+              placeholder="Tüm durumlar"
+              minWidth="min-w-36"
             />
           </div>
         </div>
@@ -303,88 +397,160 @@ export default function CandidatesPage() {
                 </button>
               </Badge>
             )}
+            {filters.fit_statuses.map((s) => {
+              const opt = FIT_STATUS_OPTIONS.find((o) => o.value === s)
+              return opt ? (
+                <Badge key={s} variant="secondary" className="gap-1 pr-1">
+                  {opt.label}
+                  <button
+                    onClick={() =>
+                      updateFilter('fit_statuses', filters.fit_statuses.filter((x) => x !== s))
+                    }
+                    className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              ) : null
+            })}
           </div>
         )}
       </CardHeader>
 
-      <CardContent>
-        {error && <p className="text-sm text-destructive">Hata: {error}</p>}
+      <CardContent className="relative pb-0">
+        {error && <p className="mb-2 text-sm text-destructive">Hata: {error}</p>}
 
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <button
+                  type="button"
+                  onClick={toggleSelectAll}
+                  className={[
+                    'flex size-4 items-center justify-center rounded border',
+                    allSelected
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : someSelected
+                        ? 'border-primary bg-primary/30'
+                        : 'border-input',
+                  ].join(' ')}
+                  aria-label="Tümünü seç"
+                >
+                  {(allSelected || someSelected) && <Check className="size-2.5" />}
+                </button>
+              </TableHead>
               <TableHead>Ad</TableHead>
               <TableHead>Ülke</TableHead>
               <TableHead>Pozisyon</TableHead>
+              <TableHead>Durum</TableHead>
               <TableHead className="text-center">Başvuru</TableHead>
               <TableHead>Son başvuru</TableHead>
+              <TableHead className="w-10 text-center">Not</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading
               ? Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 5 }).map((__, j) => (
+                    {Array.from({ length: 8 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-full" />
                       </TableCell>
                     ))}
                   </TableRow>
                 ))
-              : candidates.map((cand) => (
-                  <TableRow
-                    key={cand.id}
-                    className="cursor-pointer"
-                    onClick={() => openCandidate(cand.id)}
-                  >
-                    <TableCell>
-                      <div className="font-medium">{cand.full_name ?? '—'}</div>
-                      <div className="text-xs text-muted-foreground">{cand.email ?? '—'}</div>
-                    </TableCell>
-                    <TableCell>
-                      {cand.country ? (
+              : candidates.map((cand) => {
+                  const checked = selectedIds.has(cand.id)
+                  return (
+                    <TableRow
+                      key={cand.id}
+                      className={`cursor-pointer ${checked ? 'bg-primary/5' : ''}`}
+                      onClick={() => openCandidate(cand.id)}
+                    >
+                      <TableCell onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
+                          onClick={() => toggleSelectId(cand.id)}
                           className={[
-                            'text-sm',
-                            filters.countries.includes(cand.country)
-                              ? 'font-semibold text-foreground underline underline-offset-2'
-                              : 'text-muted-foreground hover:text-foreground',
+                            'flex size-4 items-center justify-center rounded border',
+                            checked
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-input hover:border-primary/50',
                           ].join(' ')}
+                        >
+                          {checked && <Check className="size-2.5" />}
+                        </button>
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{cand.full_name ?? '—'}</div>
+                        <div className="text-xs text-muted-foreground">{cand.email ?? '—'}</div>
+                      </TableCell>
+                      <TableCell>
+                        {cand.country ? (
+                          <button
+                            className={[
+                              'text-sm',
+                              filters.countries.includes(cand.country)
+                                ? 'font-semibold text-foreground underline underline-offset-2'
+                                : 'text-muted-foreground hover:text-foreground',
+                            ].join(' ')}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const already = filters.countries.includes(cand.country!)
+                              updateFilter(
+                                'countries',
+                                already
+                                  ? filters.countries.filter((x) => x !== cand.country)
+                                  : [...filters.countries, cand.country!]
+                              )
+                            }}
+                          >
+                            {cand.country}
+                          </button>
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-50 truncate text-sm text-muted-foreground">
+                        {cand.positions ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        <FitBadge status={cand.fit_status} />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {cand.applications_count > 1 ? (
+                          <Badge variant="secondary">{cand.applications_count}</Badge>
+                        ) : (
+                          cand.applications_count
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDate(cand.latest_submitted_at)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <button
+                          type="button"
+                          title={`${cand.notes_count ?? 0} not`}
                           onClick={(e) => {
                             e.stopPropagation()
-                            const already = filters.countries.includes(cand.country!)
-                            updateFilter(
-                              'countries',
-                              already
-                                ? filters.countries.filter((x) => x !== cand.country)
-                                : [...filters.countries, cand.country!]
-                            )
+                            openCandidate(cand.id, 'notes')
                           }}
+                          className={[
+                            'inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent',
+                            (cand.notes_count ?? 0) > 0 ? 'text-primary' : 'text-muted-foreground',
+                          ].join(' ')}
                         >
-                          {cand.country}
+                          <MessageSquare className="size-3.5" />
+                          {(cand.notes_count ?? 0) > 0 && <span>{cand.notes_count}</span>}
                         </button>
-                      ) : (
-                        '—'
-                      )}
-                    </TableCell>
-                    <TableCell className="max-w-50 truncate text-sm text-muted-foreground">
-                      {cand.positions ?? '—'}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {cand.applications_count > 1 ? (
-                        <Badge variant="secondary">{cand.applications_count}</Badge>
-                      ) : (
-                        cand.applications_count
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDate(cand.latest_submitted_at)}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
             {!loading && candidates.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell colSpan={8} className="text-center text-muted-foreground">
                   {activeFilterCount > 0 || q
                     ? 'Bu filtrelere uygun aday bulunamadı.'
                     : 'Aday bulunamadı.'}
@@ -393,18 +559,73 @@ export default function CandidatesPage() {
             )}
           </TableBody>
         </Table>
+
+        {/* Bottom action bar — multi-select */}
+        {selectedIds.size > 0 && (
+          <div className="sticky bottom-0 left-0 right-0 border-t bg-background/95 px-4 py-3 backdrop-blur">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-foreground">
+                {selectedIds.size} aday seçildi
+              </span>
+              <Separator orientation="vertical" className="h-5" />
+              <span className="text-xs text-muted-foreground">Durum ata:</span>
+              {FIT_STATUS_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={bulkLoading}
+                  onClick={() => assignFitStatus(opt.value)}
+                  className={[
+                    'inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-opacity',
+                    FIT_STATUS_STYLES[opt.value]?.badge ?? '',
+                    bulkLoading ? 'opacity-50' : 'hover:opacity-80',
+                  ].join(' ')}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={bulkLoading}
+                onClick={() => assignFitStatus(null)}
+                className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
+              >
+                Temizle
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                Seçimi kaldır
+              </button>
+            </div>
+          </div>
+        )}
       </CardContent>
 
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+        <SheetContent className="flex w-full flex-col p-0 sm:max-w-2xl">
           {detailLoading || !selected ? (
-            <div className="space-y-3 p-6">
-              <Skeleton className="h-6 w-48" />
-              <Skeleton className="h-4 w-64" />
-              <Skeleton className="h-32 w-full" />
+            <div className="space-y-4 p-8">
+              <div className="flex items-center gap-4">
+                <Skeleton className="size-14 rounded-full" />
+                <div className="space-y-2">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-4 w-56" />
+                </div>
+              </div>
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-40 w-full" />
+              <Skeleton className="h-40 w-full" />
             </div>
           ) : (
-            <CandidateDetailView detail={selected} />
+            <CandidateDetailView
+              detail={selected}
+              activeTab={sheetTab}
+              onTabChange={setSheetTab}
+              currentUser={currentUser}
+            />
           )}
         </SheetContent>
       </Sheet>
@@ -412,75 +633,307 @@ export default function CandidatesPage() {
   )
 }
 
-function CandidateDetailView({ detail }: { detail: CandidateDetail }) {
-  const { applicant, applications } = detail
+function getInitials(name: string | null | undefined) {
+  if (!name) return '?'
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('')
+}
+
+const STATUS_STYLES: Record<string, string> = {
+  new: 'bg-slate-50 text-slate-700 border-slate-200',
+  submitted: 'bg-blue-50 text-blue-700 border-blue-200',
+  reviewed: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  shortlisted: 'bg-green-50 text-green-700 border-green-200',
+  rejected: 'bg-red-50 text-red-700 border-red-200',
+  hired: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const cls = STATUS_STYLES[status?.toLowerCase()] ?? 'bg-muted text-muted-foreground border-border'
   return (
-    <>
-      <SheetHeader>
-        <SheetTitle>{applicant.full_name ?? 'Aday'}</SheetTitle>
-        <SheetDescription>
-          {[applicant.email, applicant.phone, applicant.country].filter(Boolean).join(' · ') || '—'}
-        </SheetDescription>
-      </SheetHeader>
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
+      {status}
+    </span>
+  )
+}
 
-      <div className="space-y-5 px-4 pb-8">
-        {applicant.linkedin_url && (
-          <a
-            href={applicant.linkedin_url.startsWith('http') ? applicant.linkedin_url : `https://${applicant.linkedin_url}`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            <ExternalLink className="size-3.5" /> LinkedIn
-          </a>
-        )}
+function CandidateDetailView({
+  detail,
+  activeTab,
+  onTabChange,
+  currentUser,
+}: {
+  detail: CandidateDetail
+  activeTab: string
+  onTabChange: (tab: string) => void
+  currentUser: User
+}) {
+  const { applicant, applications } = detail
+  const initials = getInitials(applicant.full_name)
+  const linkedinHref = applicant.linkedin_url
+    ? applicant.linkedin_url.startsWith('http')
+      ? applicant.linkedin_url
+      : `https://${applicant.linkedin_url}`
+    : null
 
-        <div className="text-sm text-muted-foreground">
-          {applications.length} başvuru
-        </div>
-
-        {applications.map((app) => (
-          <div key={app.id} className="rounded-lg border p-4">
-            <div className="flex items-center justify-between">
-              <div className="font-medium">{app.position_title ?? 'Pozisyon'}</div>
-              <Badge variant="outline">{app.status}</Badge>
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Sticky header */}
+      <div className="shrink-0 border-b bg-background px-6 pb-5 pt-6">
+        <SheetHeader className="mb-0">
+          <div className="flex items-start gap-4">
+            <div className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary">
+              {initials}
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">{formatDate(app.submitted_at)}</div>
-
-            <Separator className="my-3" />
-
-            <dl className="space-y-2">
-              {app.answers.map((a, i) => (
-                <div key={i} className="grid grid-cols-[1fr_auto] gap-2 text-sm">
-                  <dt className="text-muted-foreground">{a.label}</dt>
-                  <dd className="text-right font-medium">{a.value ?? '—'}</dd>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <SheetTitle className="text-xl">{applicant.full_name ?? 'Aday'}</SheetTitle>
+                {applicant.fit_status && <FitBadge status={applicant.fit_status} />}
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                {applicant.email && (
+                  <a
+                    href={`mailto:${applicant.email}`}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <Mail className="size-3" />
+                    {applicant.email}
+                  </a>
+                )}
+                {applicant.phone && (
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Phone className="size-3" />
+                    {applicant.phone}
+                  </span>
+                )}
+                {applicant.country && (
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Globe className="size-3" />
+                    {applicant.country}
+                  </span>
+                )}
+              </div>
+              {linkedinHref && (
+                <div className="mt-3">
+                  <a
+                    href={linkedinHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                  >
+                    <ExternalLink className="size-3" />
+                    LinkedIn
+                  </a>
                 </div>
-              ))}
-            </dl>
-
-            {app.cover_letter && (
-              <>
-                <Separator className="my-3" />
-                <div className="text-xs font-medium text-muted-foreground">Cover Letter</div>
-                <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-sm">
-                  {app.cover_letter}
-                </p>
-              </>
-            )}
-
-            {app.resume_url && (
-              <a
-                href={app.resume_url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              >
-                <FileText className="size-3.5" /> CV (PDF)
-              </a>
-            )}
+              )}
+            </div>
           </div>
-        ))}
+        </SheetHeader>
       </div>
-    </>
+
+      {/* Tabs */}
+      <Tabs
+        value={activeTab}
+        onValueChange={onTabChange}
+        className="flex flex-1 flex-col overflow-hidden gap-0"
+      >
+        <TabsList className="mx-6 my-3 shrink-0 w-fit">
+          <TabsTrigger value="applications">
+            Başvurular
+            {applications.length > 1 && (
+              <Badge variant="secondary" className="ml-1.5 px-1.5 text-xs">
+                {applications.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="notes">
+            <MessageSquare className="size-3.5" />
+            Notlar
+            {(applicant.notes_count ?? 0) > 0 && (
+              <Badge variant="secondary" className="ml-1 px-1.5 text-xs">
+                {applicant.notes_count}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="applications" className="mt-0 flex-1 overflow-y-auto px-6 pb-6">
+          <div className="space-y-4">
+            {applications.map((app, idx) => (
+              <div key={app.id} className="overflow-hidden rounded-xl border">
+                <div className="flex items-start justify-between bg-muted/40 px-5 py-4">
+                  <div>
+                    <div className="font-semibold">{app.position_title ?? 'Pozisyon'}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      {formatDate(app.submitted_at)}
+                      {applications.length > 1 && (
+                        <span className="ml-2 font-medium text-foreground/50">#{idx + 1}</span>
+                      )}
+                    </div>
+                  </div>
+                  <StatusBadge status={app.status} />
+                </div>
+
+                <div className="divide-y">
+                  {app.resume_url && (
+                    <div className="px-5 py-3">
+                      <a
+                        href={app.resume_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 py-3 text-sm font-medium text-primary transition-colors hover:border-primary/60 hover:bg-primary/10"
+                      >
+                        <Download className="size-4" />
+                        CV'yi Aç / İndir
+                      </a>
+                    </div>
+                  )}
+
+                  {app.answers.length > 0 && (
+                    <div className="px-5 py-4">
+                      <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Başvuru Formu
+                      </div>
+                      <dl className="space-y-3">
+                        {app.answers.map((a, i) => (
+                          <div key={i} className="text-sm">
+                            <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
+                            <dd className="font-medium">{a.value ?? '—'}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  )}
+
+                  {app.cover_letter && (
+                    <div className="px-5 py-4">
+                      <div className="mb-2 flex items-center gap-1.5">
+                        <FileText className="size-3.5 text-muted-foreground" />
+                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Ön Yazı
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
+                        {app.cover_letter}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-6 pb-6">
+          <NotesSection applicantId={applicant.id} currentUser={currentUser} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function NotesSection({ applicantId, currentUser }: { applicantId: number; currentUser: User }) {
+  const [notes, setNotes] = useState<CandidateNote[]>([])
+  const [loading, setLoading] = useState(true)
+  const [text, setText] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchNotes(applicantId)
+      .then((n) => { if (!cancelled) setNotes(n) })
+      .catch(() => { if (!cancelled) setNotes([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [applicantId])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!text.trim()) return
+    setSubmitting(true)
+    setError(null)
+    try {
+      const note = await addNote(applicantId, text.trim(), currentUser.username, currentUser.fullName)
+      setNotes((prev) => [note, ...prev])
+      setText('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'not eklenemedi')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleDelete(noteId: number) {
+    try {
+      await deleteNote(noteId)
+      setNotes((prev) => prev.filter((n) => n.id !== noteId))
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="space-y-4 pt-1">
+      <form onSubmit={handleSubmit} className="space-y-2">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Not ekle…"
+          rows={3}
+          className={[
+            'w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm',
+            'ring-offset-background placeholder:text-muted-foreground',
+            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+          ].join(' ')}
+        />
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <Button type="submit" size="sm" disabled={!text.trim() || submitting}>
+          {submitting ? 'Ekleniyor…' : 'Not Ekle'}
+        </Button>
+      </form>
+
+      <Separator />
+
+      {loading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full" />
+          ))}
+        </div>
+      ) : notes.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">Henüz not eklenmemiş.</p>
+      ) : (
+        <div className="space-y-3">
+          {notes.map((note) => (
+            <div key={note.id} className="rounded-lg border p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="font-medium">{note.created_by_name}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
+                </div>
+                {note.created_by === currentUser.username && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(note.id)}
+                    title="Notu sil"
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

@@ -10,7 +10,20 @@ export type CandidateListItem = {
   applications_count: number
   latest_submitted_at: string | null
   positions: string | null
+  salary_expectation: string | null
+  latest_status: string | null
+  latest_application_id: number | null
+  fit_status: string | null
+  notes_count: number
 }
+
+export const FIT_STATUS_OPTIONS = [
+  { value: 'good_fit', label: 'Good Fit' },
+  { value: 'maybe', label: 'Maybe' },
+  { value: 'not_fit', label: 'Not Fit' },
+] as const
+
+export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'
 
 export type CandidateAnswer = { label: string; type: string; value: string | null }
 
@@ -37,6 +50,7 @@ export type FilterOptions = {
 export type ActiveFilters = {
   countries: string[]
   position: string
+  fit_statuses: string[]
 }
 
 const FILTER_STORAGE_KEY = 'gk_candidate_filters'
@@ -54,12 +68,13 @@ export function loadSavedFilters(): ActiveFilters {
             ? [parsed.country as string]
             : [],
         position: typeof parsed.position === 'string' ? parsed.position : '',
+        fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
       }
     }
   } catch {
     // ignore
   }
-  return { countries: [], position: '' }
+  return { countries: [], position: '', fit_statuses: [] }
 }
 
 export function saveFilters(f: ActiveFilters): void {
@@ -82,6 +97,7 @@ export async function fetchCandidates(
   const params = new URLSearchParams({ q })
   filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
+  filters.fit_statuses.forEach((s) => params.append('fit_status', s))
   const res = await fetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
@@ -95,6 +111,82 @@ export async function fetchCandidate(id: number): Promise<CandidateDetail> {
   const data = (await res.json()) as ({ ok: true } & CandidateDetail) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'detay alınamadı')
   return { applicant: data.applicant, applications: data.applications }
+}
+
+export function formatSalary(raw: string | null): string {
+  if (!raw) return '—'
+  const s = raw.trim()
+  if (!s) return '—'
+  // Replace all digit groups (≥ 3 digits) with locale-formatted numbers
+  return s.replace(/\d[\d,.]*\d|\d{3,}/g, (m) => {
+    const n = parseInt(m.replace(/[,.]/g, ''), 10)
+    if (isNaN(n) || n < 100) return m
+    return new Intl.NumberFormat('tr-TR').format(n)
+  })
+}
+
+export async function updateApplicationStatus(
+  applicationId: number,
+  status: string
+): Promise<void> {
+  const res = await fetch(`/api/applications/${applicationId}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'güncelleme hatası')
+}
+
+export async function updateApplicantsFitStatus(
+  ids: number[],
+  fit_status: string | null
+): Promise<void> {
+  const res = await fetch('/api/applicants/fit-status', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, fit_status }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'güncelleme hatası')
+}
+
+export type CandidateNote = {
+  id: number
+  applicant_id: number
+  content: string
+  created_by: string
+  created_by_name: string
+  created_at: string
+}
+
+export async function fetchNotes(applicantId: number): Promise<CandidateNote[]> {
+  const res = await fetch(`/api/candidates/${applicantId}/notes`)
+  const data = (await res.json()) as { ok: true; notes: CandidateNote[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'notlar alınamadı')
+  return data.notes
+}
+
+export async function addNote(
+  applicantId: number,
+  content: string,
+  createdBy: string,
+  createdByName: string
+): Promise<CandidateNote> {
+  const res = await fetch(`/api/candidates/${applicantId}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName }),
+  })
+  const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'not eklenemedi')
+  return data.note
+}
+
+export async function deleteNote(noteId: number): Promise<void> {
+  const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'not silinemedi')
 }
 
 export function formatDate(iso: string | null): string {

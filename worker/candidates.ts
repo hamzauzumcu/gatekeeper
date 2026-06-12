@@ -10,6 +10,11 @@ export type CandidateListItem = {
   applications_count: number
   latest_submitted_at: string | null
   positions: string | null // group_concat
+  salary_expectation: string | null
+  latest_status: string | null
+  latest_application_id: number | null
+  fit_status: string | null
+  notes_count: number
 }
 
 export type CandidateAnswer = { label: string; type: string; value: string | null }
@@ -47,11 +52,12 @@ export async function getCandidateFilters(db: D1Database): Promise<CandidateFilt
 
 export async function listCandidates(
   db: D1Database,
-  opts: { q?: string; countries?: string[]; position?: string; limit?: number; offset?: number }
+  opts: { q?: string; countries?: string[]; position?: string; fit_statuses?: string[]; limit?: number; offset?: number }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
+  const fit_statuses = (opts.fit_statuses ?? []).filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const offset = Math.max(opts.offset ?? 0, 0)
 
@@ -79,13 +85,37 @@ export async function listCandidates(
     bindings.push(position)
   }
 
+  if (fit_statuses.length > 0) {
+    const placeholders = fit_statuses.map(() => `?${++idx}`).join(', ')
+    conditions.push(`ap.fit_status IN (${placeholders})`)
+    bindings.push(...fit_statuses)
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const listSql = `
-    SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
+    SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url, ap.fit_status,
            count(a.id)            AS applications_count,
            max(a.submitted_at)    AS latest_submitted_at,
-           group_concat(DISTINCT p.title) AS positions
+           group_concat(DISTINCT p.title) AS positions,
+           (SELECT count(*) FROM candidate_notes cn WHERE cn.applicant_id = ap.id) AS notes_count,
+           (SELECT aa.value
+            FROM applications a_sal
+            JOIN application_answers aa ON aa.application_id = a_sal.id
+            JOIN position_questions pq ON pq.id = aa.question_id
+            WHERE a_sal.applicant_id = ap.id
+              AND (pq.field_key LIKE '%salary%'
+                OR lower(pq.label) LIKE '%salary%'
+                OR lower(pq.label) LIKE '%maaş%'
+                OR lower(pq.label) LIKE '%maas%')
+            ORDER BY a_sal.submitted_at DESC
+            LIMIT 1) AS salary_expectation,
+           (SELECT a_ls.status FROM applications a_ls
+            WHERE a_ls.applicant_id = ap.id
+            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_status,
+           (SELECT a_ls.id FROM applications a_ls
+            WHERE a_ls.applicant_id = ap.id
+            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id
     FROM applicants ap
     LEFT JOIN applications a ON a.applicant_id = ap.id
     LEFT JOIN job_positions p ON p.id = a.position_id
@@ -109,6 +139,40 @@ export async function listCandidates(
   return { candidates, total }
 }
 
+const VALID_STATUSES = ['new', 'reviewed', 'shortlisted', 'rejected'] as const
+export const VALID_FIT_STATUSES = ['not_fit', 'good_fit', 'maybe'] as const
+export type FitStatus = typeof VALID_FIT_STATUSES[number]
+
+export async function updateApplicationStatus(
+  db: D1Database,
+  applicationId: number,
+  status: string
+): Promise<boolean> {
+  if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('geçersiz status')
+  const res = await db
+    .prepare(`UPDATE applications SET status = ? WHERE id = ?`)
+    .bind(status, applicationId)
+    .run()
+  return (res.meta?.changes ?? 0) > 0
+}
+
+export async function updateApplicantsFitStatus(
+  db: D1Database,
+  ids: number[],
+  fit_status: string | null
+): Promise<number> {
+  if (ids.length === 0) return 0
+  if (fit_status !== null && !(VALID_FIT_STATUSES as readonly string[]).includes(fit_status)) {
+    throw new Error('geçersiz fit_status')
+  }
+  const placeholders = ids.map(() => '?').join(',')
+  const res = await db
+    .prepare(`UPDATE applicants SET fit_status = ? WHERE id IN (${placeholders})`)
+    .bind(fit_status, ...ids)
+    .run()
+  return res.meta?.changes ?? 0
+}
+
 export async function getCandidate(
   db: D1Database,
   id: number
@@ -118,7 +182,8 @@ export async function getCandidate(
       `SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
               count(a.id) AS applications_count,
               max(a.submitted_at) AS latest_submitted_at,
-              group_concat(DISTINCT p.title) AS positions
+              group_concat(DISTINCT p.title) AS positions,
+              (SELECT count(*) FROM candidate_notes cn WHERE cn.applicant_id = ap.id) AS notes_count
        FROM applicants ap
        LEFT JOIN applications a ON a.applicant_id = ap.id
        LEFT JOIN job_positions p ON p.id = a.position_id
