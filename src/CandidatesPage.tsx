@@ -1243,6 +1243,30 @@ const STATUS_STYLES: Record<string, string> = {
   hired: 'bg-emerald-50 text-emerald-700 border-emerald-200',
 }
 
+const LINK_LABELS: Record<string, string> = {
+  linkedin: 'LinkedIn',
+  github: 'GitHub',
+  portfolio: 'Portfolio',
+  twitter: 'Twitter',
+  website: 'Website',
+  other: 'Link',
+}
+
+function LinkTypeIcon({ type }: { type: string }) {
+  const cls = 'size-3'
+  switch (type) {
+    case 'github':
+      return <GitBranch className={cls} />
+    case 'twitter':
+      return <AtSign className={cls} />
+    case 'portfolio':
+    case 'website':
+      return <Globe className={cls} />
+    default:
+      return <ExternalLink className={cls} />
+  }
+}
+
 function CandidateDetailView({
   detail,
   activeTab,
@@ -1356,19 +1380,20 @@ function CandidateDetailView({
                   </span>
                 )}
               </div>
-              {(linkedinHref || firstResumeUrl) && (
+              {(linkButtons.length > 0 || firstResumeUrl) && (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {linkedinHref && (
+                  {linkButtons.map((l, i) => (
                     <a
-                      href={linkedinHref}
+                      key={i}
+                      href={l.url}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
                     >
-                      <ExternalLink className="size-3" />
-                      LinkedIn
+                      <LinkTypeIcon type={l.type} />
+                      {LINK_LABELS[l.type] ?? 'Link'}
                     </a>
-                  )}
+                  ))}
                   {firstResumeUrl && (
                     <a
                       href={firstResumeUrl}
@@ -1456,7 +1481,7 @@ function CandidateDetailView({
                           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Analysis</span>
                         </div>
                         {summary && (
-                          <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5 text-sm leading-relaxed text-foreground/90">
+                          <div className="mb-3 rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-2.5 text-sm leading-relaxed text-foreground">
                             {summary}
                           </div>
                         )}
