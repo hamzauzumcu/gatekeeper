@@ -1,12 +1,13 @@
-// CV parsing — PDF'ten metin çıkartır, DeepSeek ile yapısal veriyi parse eder.
-// PDF text extraction: BT...ET bloklarından okunabilir metin toplar.
-// Taranan (scanned) PDF'lerde boş döner; text-based CV'lerin tamamında çalışır.
+// CV parsing — extracts text from PDFs, parses structured data with DeepSeek.
+// Text-based PDFs: BT...ET regex extraction → DeepSeek text model.
+// Scanned PDFs: raw PDF buffer → GPT-4o (handles OCR natively).
 
 import { PARSE_VERSION, PARSE_SCHEMA, UNIVERSITY_MAP } from './cv-schema'
 import { deepseekChat } from './deepseek'
+import { openaiParsePdf } from './openai'
 
 function extractTextFromPdf(buffer: ArrayBuffer): string {
-  // PDF binary'sini latin-1 ile decode et — ASCII metin blokları okunabilir hale gelir
+  // Decode PDF binary as latin-1 so ASCII text blocks become readable
   const raw = new TextDecoder('latin1').decode(buffer)
 
   const parts: string[] = []
@@ -15,7 +16,7 @@ function extractTextFromPdf(buffer: ArrayBuffer): string {
 
   while ((m = btEtRe.exec(raw)) !== null) {
     const block = m[1]
-    // (metin) Tj  veya  [(metin)] TJ  — iki PDF text operatörü
+    // (text) Tj  or  [(text)] TJ — the two PDF text operators
     const strRe = /\(([^\\)]*(?:\\.[^\\)]*)*)\)\s*(?:Tj|TJ)/g
     let s: RegExpExecArray | null
     while ((s = strRe.exec(block)) !== null) {
@@ -69,40 +70,47 @@ export async function parseAndStoreResume(
   deepseekApiKey: string,
   r2Bucket?: R2Bucket,
   r2PublicUrl?: string,
+  openaiApiKey?: string,
 ): Promise<void> {
 
-  const resume_text = extractTextFromPdf(await fetchPdfBuffer(resumeUrl, r2Bucket, r2PublicUrl))
-  if (!resume_text) throw new Error('PDF metin çıkartılamadı (muhtemelen taranan görüntü)')
+  const buffer = await fetchPdfBuffer(resumeUrl, r2Bucket, r2PublicUrl)
+  const resume_text = extractTextFromPdf(buffer)
 
-  const raw = await deepseekChat(
-    deepseekApiKey,
-    [
-      {
-        role: 'system',
-        content: `Sen bir CV analiz uzmanısın. Verilen CV metninden yapısal veriyi çıkart ve SADECE geçerli JSON döndür — başka hiçbir şey yazma, kod bloğu da kullanma.
+  const systemPrompt = `You are a CV analysis expert. Extract structured data from the given CV and return ONLY valid JSON — no extra text, no code blocks.
 
-Döndürülecek format:
+Format to return:
 ${PARSE_SCHEMA}
 
-Kurallar:
-- total_experience_years: tüm iş deneyimlerinin toplamı, 1 ondalık hassasiyetle
-- work_history: en yeniden en eskiye sıralı
-- months: start/end verilmişse hesapla; yoksa CV'deki "X yıl Y ay" ifadesinden tahmin et
-- Bilinmeyen alanlarda null kullan, tahmin etme`,
-      },
-      {
-        role: 'user',
-        content: resume_text,
-      },
-    ],
-    { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true },
-  )
+Rules:
+- total_experience_years: sum of all work experience, 1 decimal precision
+- work_history: sorted newest to oldest
+- months: calculate from start/end dates if given; otherwise estimate from "X years Y months" in the CV
+- Use null for unknown fields, do not guess`
 
-  // Bazen ```json ... ``` bloğuna sarıyor, temizle
+  let raw: string
+  if (resume_text) {
+    raw = await deepseekChat(
+      deepseekApiKey,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: resume_text },
+      ],
+      { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true },
+    )
+  } else {
+    // Scanned PDF — send raw PDF to GPT-4o which handles OCR natively
+    if (!openaiApiKey) throw new Error('Scanned PDF requires OPENAI_API_KEY')
+    raw = await openaiParsePdf(
+      openaiApiKey,
+      buffer,
+      `${systemPrompt}\n\nExtract structured CV data from this scanned document and return ONLY valid JSON.`,
+    )
+  }
+
+  // Strip ```json ... ``` wrapper if the model adds one
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()
   const fields = JSON.parse(jsonText)
 
-  // Üniversite isimlerini normalize et
   if (Array.isArray(fields.education)) {
     for (const entry of fields.education) {
       if (typeof entry.school === 'string') {

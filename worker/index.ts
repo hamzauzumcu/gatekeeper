@@ -10,6 +10,7 @@ import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, SCORE_V
 type Env = {
   Bindings: {
     DEEPSEEK_API_KEY: string
+    OPENAI_API_KEY?: string
     DB: D1Database
     RESUMES: R2Bucket
     R2_PUBLIC_URL: string
@@ -198,7 +199,7 @@ app.post('/api/admin/sync-cv', async (c) => {
 
   for (const row of results) {
     try {
-      await parseAndStoreResume(c.env.DB, row.id, row.resume_url, c.env.DEEPSEEK_API_KEY, c.env.RESUMES, c.env.R2_PUBLIC_URL)
+      await parseAndStoreResume(c.env.DB, row.id, row.resume_url, c.env.DEEPSEEK_API_KEY, c.env.RESUMES, c.env.R2_PUBLIC_URL, c.env.OPENAI_API_KEY)
       processed++
     } catch (e) {
       failed++
