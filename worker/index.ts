@@ -39,7 +39,7 @@ app.post('/api/import', async (c) => {
     return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
-    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES, c.env.R2_PUBLIC_URL, c.env.DEEPSEEK_API_KEY)
+    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES, c.env.R2_PUBLIC_URL)
     return c.json({ ok: true, summary })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'import error' }, 400)
@@ -194,22 +194,24 @@ app.post('/api/admin/sync-cv', async (c) => {
 
   let processed = 0
   let failed = 0
+  const errors: { id: number; error: string }[] = []
+
   for (const row of results) {
     try {
-      await parseAndStoreResume(c.env.DB, row.id, row.resume_url, c.env.DEEPSEEK_API_KEY)
+      await parseAndStoreResume(c.env.DB, row.id, row.resume_url, c.env.DEEPSEEK_API_KEY, c.env.RESUMES, c.env.R2_PUBLIC_URL)
       processed++
-    } catch {
+    } catch (e) {
       failed++
+      errors.push({ id: row.id, error: e instanceof Error ? e.message : 'unknown error' })
     }
   }
 
-  // Hâlâ bekleyen var mı?
-  const { results: remaining } = await c.env.DB
+  const { results: rem } = await c.env.DB
     .prepare(`SELECT COUNT(*) as n FROM applications WHERE resume_url IS NOT NULL AND resume_parse_version < ?`)
     .bind(PARSE_VERSION)
     .all<{ n: number }>()
 
-  return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
+  return c.json({ ok: true, processed, failed, remaining: rem[0]?.n ?? 0, errors })
 })
 
 // Scoring prompts — list all positions with their prompts
@@ -283,7 +285,6 @@ app.post('/api/webhook/tally', async (c) => {
     c.env.DB,
     c.env.RESUMES,
     c.env.R2_PUBLIC_URL,
-    c.env.DEEPSEEK_API_KEY
   )
   return c.json(result.body, result.status as 200 | 400 | 401 | 500)
 })

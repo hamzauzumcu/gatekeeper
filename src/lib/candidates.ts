@@ -354,6 +354,42 @@ export async function syncScores(opts: { limit?: number; dryRun?: boolean } = {}
   return data
 }
 
+export type CvSyncResult = {
+  pending?: number
+  processed?: number
+  failed?: number
+  remaining?: number
+  errors?: { id: number; error: string }[]
+}
+
+export async function syncCv(opts: { limit?: number; dryRun?: boolean } = {}): Promise<CvSyncResult> {
+  const res = await fetch('/api/admin/sync-cv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  })
+  const data = (await res.json()) as ({ ok: true } & CvSyncResult) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'sync failed')
+  return data
+}
+
+export function formatRelativeTime(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const diff = Date.now() - d.getTime()
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs} hr`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months} mo`
+  return `${Math.floor(months / 12)} yr`
+}
+
 export function formatDateShort(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)

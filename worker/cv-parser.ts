@@ -41,16 +41,37 @@ function normalizeUniversity(name: string): string {
   return name
 }
 
+async function fetchPdfBuffer(
+  resumeUrl: string,
+  r2Bucket?: R2Bucket,
+  r2PublicUrl?: string,
+): Promise<ArrayBuffer> {
+  // Prefer reading from R2 directly (works in local dev + avoids public URL dependency)
+  if (r2Bucket && r2PublicUrl) {
+    const prefix = r2PublicUrl.endsWith('/') ? r2PublicUrl : `${r2PublicUrl}/`
+    if (resumeUrl.startsWith(prefix)) {
+      const key = resumeUrl.slice(prefix.length)
+      const obj = await r2Bucket.get(key)
+      if (!obj) throw new Error(`R2 object not found: ${key}`)
+      return obj.arrayBuffer()
+    }
+  }
+  // Fallback: HTTP fetch (Tally URLs or any external URL)
+  const res = await fetch(resumeUrl)
+  if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`)
+  return res.arrayBuffer()
+}
+
 export async function parseAndStoreResume(
   db: D1Database,
   applicationId: number,
   resumeUrl: string,
   deepseekApiKey: string,
+  r2Bucket?: R2Bucket,
+  r2PublicUrl?: string,
 ): Promise<void> {
-  const pdfRes = await fetch(resumeUrl)
-  if (!pdfRes.ok) throw new Error(`PDF fetch failed: ${pdfRes.status}`)
 
-  const resume_text = extractTextFromPdf(await pdfRes.arrayBuffer())
+  const resume_text = extractTextFromPdf(await fetchPdfBuffer(resumeUrl, r2Bucket, r2PublicUrl))
   if (!resume_text) throw new Error('PDF metin çıkartılamadı (muhtemelen taranan görüntü)')
 
   const raw = await deepseekChat(

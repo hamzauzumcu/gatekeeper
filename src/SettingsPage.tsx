@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
-import { fetchScoringPrompts, saveScoringPrompt, syncScores, type PositionWithPrompt } from './lib/candidates'
+import { ChevronDown, Sparkles } from 'lucide-react'
+import { fetchScoringPrompts, saveScoringPrompt, syncScores, syncCv, type PositionWithPrompt } from './lib/candidates'
 import { formatDate } from './lib/candidates'
 
 function getDefaultPrompt(positionTitle: string): string {
@@ -63,6 +63,7 @@ Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence e
 }
 
 function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSaved: (pos: PositionWithPrompt) => void }) {
+  const [open, setOpen] = useState(false)
   const [text, setText] = useState(position.prompt ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,7 +95,11 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
 
   return (
     <div className="rounded-xl border overflow-hidden">
-      <div className="flex items-start justify-between bg-muted/40 px-5 py-4">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between bg-muted/40 px-5 py-4 text-left hover:bg-muted/60 transition-colors"
+      >
         <div>
           <div className="font-semibold">{position.title}</div>
           {position.updated_at ? (
@@ -105,62 +110,62 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
             <div className="mt-0.5 text-xs text-amber-600 font-medium">No prompt saved yet</div>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {!text && (
-            <Button variant="outline" size="sm" onClick={loadDefault}>
-              Load Default
-            </Button>
-          )}
-          {text && text !== defaultPrompt && !position.prompt && (
-            <Button variant="outline" size="sm" onClick={loadDefault}>
-              Load Default
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="p-5 space-y-3">
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={12}
-          placeholder="Enter scoring prompt…"
-          className={[
-            'w-full resize-none rounded-lg border bg-background px-3 py-2.5 text-sm font-mono leading-relaxed',
-            'placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-            'border-input',
-          ].join(' ')}
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
+      </button>
 
-        {error && <p className="text-xs text-destructive">{error}</p>}
+      {open && (
+        <div className="p-5 space-y-3">
+          <div className="flex justify-end">
+            {(!text || (text && text !== defaultPrompt && !position.prompt)) && (
+              <Button variant="outline" size="sm" onClick={loadDefault}>
+                Load Default
+              </Button>
+            )}
+          </div>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={12}
+            placeholder="Enter scoring prompt…"
+            className={[
+              'w-full resize-none rounded-lg border bg-background px-3 py-2.5 text-sm font-mono leading-relaxed',
+              'placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+              'border-input',
+            ].join(' ')}
+          />
 
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={saving || isEmpty || !isDirty}
-          >
-            {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Prompt'}
-          </Button>
-          {!text.trim() && (
-            <Button variant="outline" size="sm" onClick={loadDefault}>
-              Use Default Prompt
-            </Button>
-          )}
-          {isDirty && text.trim() && (
-            <button
-              type="button"
-              onClick={() => setText(position.prompt ?? '')}
-              className="text-xs text-muted-foreground hover:text-foreground"
+          {error && <p className="text-xs text-destructive">{error}</p>}
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || isEmpty || !isDirty}
             >
-              Discard changes
-            </button>
-          )}
-          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-            {text.length} chars
-          </span>
+              {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Prompt'}
+            </Button>
+            {!text.trim() && (
+              <Button variant="outline" size="sm" onClick={loadDefault}>
+                Use Default Prompt
+              </Button>
+            )}
+            {isDirty && text.trim() && (
+              <button
+                type="button"
+                onClick={() => setText(position.prompt ?? '')}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Discard changes
+              </button>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+              {text.length} chars
+            </span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -170,11 +175,14 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const [syncPending, setSyncPending] = useState<number | null>(null)
+  const [syncTotal, setSyncTotal] = useState<number | null>(null)
+  const [syncProcessed, setSyncProcessed] = useState(0)
+  const [syncFailed, setSyncFailed] = useState(0)
+  const [syncRemaining, setSyncRemaining] = useState<number | null>(null)
   const [syncRunning, setSyncRunning] = useState(false)
-  const [syncResult, setSyncResult] = useState<{ processed: number; failed: number; remaining: number } | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
-  const [syncLimit, setSyncLimit] = useState('10')
+  const [batchSize, setBatchSize] = useState(5)
+  const stopRef = useRef(false)
 
   useEffect(() => {
     setLoading(true)
@@ -188,30 +196,99 @@ export default function SettingsPage() {
     setPositions((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
   }
 
-  async function handleCheckPending() {
-    setSyncError(null)
-    try {
-      const r = await syncScores({ dryRun: true })
-      setSyncPending(r.pending ?? 0)
-    } catch (e) {
-      setSyncError(e instanceof Error ? e.message : 'Check failed')
-    }
-  }
-
-  async function handleRunSync() {
+  async function handleStartSync() {
+    stopRef.current = false
     setSyncRunning(true)
     setSyncError(null)
-    setSyncResult(null)
+    setSyncProcessed(0)
+    setSyncFailed(0)
+    setSyncTotal(null)
+    setSyncRemaining(null)
+
     try {
-      const limit = Math.min(50, Math.max(1, Number(syncLimit) || 10))
-      const r = await syncScores({ limit })
-      setSyncResult({ processed: r.processed ?? 0, failed: r.failed ?? 0, remaining: r.remaining ?? 0 })
-      setSyncPending(r.remaining ?? 0)
+      const initial = await syncScores({ dryRun: true })
+      const total = initial.pending ?? 0
+      setSyncTotal(total)
+      setSyncRemaining(total)
+
+      if (total === 0) return
+
+      let remaining = total
+      let processed = 0
+      let failed = 0
+
+      while (remaining > 0 && !stopRef.current) {
+        const r = await syncScores({ limit: batchSize })
+        processed += r.processed ?? 0
+        failed += r.failed ?? 0
+        remaining = r.remaining ?? 0
+        setSyncProcessed(processed)
+        setSyncFailed(failed)
+        setSyncRemaining(remaining)
+      }
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : 'Sync failed')
     } finally {
       setSyncRunning(false)
     }
+  }
+
+  function handleStop() {
+    stopRef.current = true
+  }
+
+  // ── CV Enhancer state ──────────────────────────────────────────────────────
+  const [cvTotal, setCvTotal] = useState<number | null>(null)
+  const [cvProcessed, setCvProcessed] = useState(0)
+  const [cvFailed, setCvFailed] = useState(0)
+  const [cvRemaining, setCvRemaining] = useState<number | null>(null)
+  const [cvRunning, setCvRunning] = useState(false)
+  const [cvError, setCvError] = useState<string | null>(null)
+  const [cvErrors, setCvErrors] = useState<{ id: number; error: string }[]>([])
+  const [cvBatchSize, setCvBatchSize] = useState(5)
+  const cvStopRef = useRef(false)
+
+  async function handleStartCvSync() {
+    cvStopRef.current = false
+    setCvRunning(true)
+    setCvError(null)
+    setCvErrors([])
+    setCvProcessed(0)
+    setCvFailed(0)
+    setCvTotal(null)
+    setCvRemaining(null)
+
+    try {
+      const initial = await syncCv({ dryRun: true })
+      const total = initial.pending ?? 0
+      setCvTotal(total)
+      setCvRemaining(total)
+
+      if (total === 0) return
+
+      let remaining = total
+      let processed = 0
+      let failed = 0
+
+      while (remaining > 0 && !cvStopRef.current) {
+        const r = await syncCv({ limit: cvBatchSize })
+        processed += r.processed ?? 0
+        failed += r.failed ?? 0
+        remaining = r.remaining ?? 0
+        if (r.errors?.length) setCvErrors((prev) => [...prev, ...(r.errors ?? [])])
+        setCvProcessed(processed)
+        setCvFailed(failed)
+        setCvRemaining(remaining)
+      }
+    } catch (e) {
+      setCvError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setCvRunning(false)
+    }
+  }
+
+  function handleStopCv() {
+    cvStopRef.current = true
   }
 
   const promptedCount = positions.filter((p) => p.prompt).length
@@ -266,52 +343,160 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" size="sm" onClick={handleCheckPending} disabled={syncRunning}>
-              Check Pending
-            </Button>
-            {syncPending !== null && (
-              <span className="text-sm text-muted-foreground">
-                {syncPending === 0 ? 'All up to date.' : `${syncPending} application${syncPending !== 1 ? 's' : ''} pending scoring.`}
-              </span>
-            )}
-          </div>
-
-          <Separator />
-
-          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <label htmlFor="sync-limit" className="text-sm text-muted-foreground whitespace-nowrap">
+              <label htmlFor="batch-size" className="text-sm text-muted-foreground whitespace-nowrap">
                 Batch size:
               </label>
               <input
-                id="sync-limit"
+                id="batch-size"
                 type="number"
                 min="1"
-                max="50"
-                value={syncLimit}
-                onChange={(e) => setSyncLimit(e.target.value)}
-                className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                max="20"
+                value={batchSize}
+                onChange={(e) => setBatchSize(Math.min(20, Math.max(1, Number(e.target.value) || 5)))}
+                disabled={syncRunning}
+                className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
               />
             </div>
-            <Button size="sm" onClick={handleRunSync} disabled={syncRunning || promptedCount === 0}>
-              {syncRunning ? 'Running…' : 'Run Sync'}
-            </Button>
-            {promptedCount === 0 && (
+            {syncRunning ? (
+              <Button size="sm" variant="destructive" onClick={handleStop}>
+                Stop
+              </Button>
+            ) : (
+              <Button size="sm" onClick={handleStartSync} disabled={promptedCount === 0}>
+                Start Sync
+              </Button>
+            )}
+            {promptedCount === 0 && !syncRunning && (
               <span className="text-xs text-muted-foreground">Save at least one prompt first.</span>
             )}
           </div>
 
-          {syncResult && (
-            <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm space-y-0.5">
-              <div>Processed: <span className="font-medium text-green-700">{syncResult.processed}</span></div>
-              {syncResult.failed > 0 && (
-                <div>Failed: <span className="font-medium text-red-600">{syncResult.failed}</span></div>
-              )}
-              <div>Remaining: <span className="font-medium">{syncResult.remaining}</span></div>
+          {syncTotal !== null && (
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{
+                    width: syncTotal === 0
+                      ? '100%'
+                      : `${((syncTotal - (syncRemaining ?? syncTotal)) / syncTotal) * 100}%`,
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  {syncTotal === 0
+                    ? 'All up to date — nothing to score.'
+                    : syncRunning
+                    ? `Processing… ${syncTotal - (syncRemaining ?? syncTotal)} / ${syncTotal}`
+                    : syncRemaining === 0
+                    ? `Done — ${syncProcessed} scored${syncFailed > 0 ? `, ${syncFailed} failed` : ''}`
+                    : `Stopped — ${syncProcessed} scored, ${syncRemaining} remaining`}
+                </span>
+                {syncFailed > 0 && (
+                  <span className="text-destructive">{syncFailed} failed</span>
+                )}
+              </div>
             </div>
           )}
 
           {syncError && <p className="text-sm text-destructive">{syncError}</p>}
+        </CardContent>
+      </Card>
+
+      {/* Candidate Enhancer AI */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            Candidate Enhancer AI
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Parses uploaded CVs with AI and extracts structured data. Run manually to process new or
+            unprocessed CVs without re-importing.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {['Deneyim (yıl)', 'Üniversite', 'Bölüm', 'İş Geçmişi', 'Beceriler', 'Diller'].map((label) => (
+              <span
+                key={label}
+                className="inline-flex items-center rounded-full border bg-muted/50 px-2.5 py-0.5 text-xs font-medium text-muted-foreground"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label htmlFor="cv-batch-size" className="text-sm text-muted-foreground whitespace-nowrap">
+                Batch size:
+              </label>
+              <input
+                id="cv-batch-size"
+                type="number"
+                min="1"
+                max="20"
+                value={cvBatchSize}
+                onChange={(e) => setCvBatchSize(Math.min(20, Math.max(1, Number(e.target.value) || 5)))}
+                disabled={cvRunning}
+                className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+              />
+            </div>
+            {cvRunning ? (
+              <Button size="sm" variant="destructive" onClick={handleStopCv}>
+                Stop
+              </Button>
+            ) : (
+              <Button size="sm" onClick={handleStartCvSync}>
+                Start Sync
+              </Button>
+            )}
+          </div>
+
+          {cvTotal !== null && (
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-violet-500 rounded-full transition-all duration-300"
+                  style={{
+                    width: cvTotal === 0
+                      ? '100%'
+                      : `${((cvProcessed + cvFailed) / cvTotal) * 100}%`,
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  {cvTotal === 0
+                    ? 'All up to date — no CVs to parse.'
+                    : cvRunning
+                    ? `Processing… ${cvProcessed + cvFailed} / ${cvTotal}`
+                    : cvRemaining === 0
+                    ? `Done — ${cvProcessed} parsed${cvFailed > 0 ? `, ${cvFailed} failed` : ''}`
+                    : `Stopped — ${cvProcessed} parsed, ${cvRemaining} remaining`}
+                </span>
+                {cvFailed > 0 && (
+                  <span className="text-destructive">{cvFailed} failed</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {cvError && <p className="text-sm text-destructive">{cvError}</p>}
+
+          {cvErrors.length > 0 && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-1 max-h-48 overflow-y-auto">
+              <p className="text-xs font-medium text-destructive mb-2">Parse errors ({cvErrors.length})</p>
+              {cvErrors.map((e, i) => (
+                <div key={i} className="text-xs text-muted-foreground font-mono">
+                  <span className="text-destructive font-semibold">#{e.id}</span> — {e.error}
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

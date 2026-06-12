@@ -13,6 +13,7 @@ import {
   loadSavedColumns,
   saveColumns,
   formatDate,
+  formatRelativeTime,
   formatSalary,
   updateApplicationStatus,
   updateApplicantsFitStatus,
@@ -899,7 +900,7 @@ export default function CandidatesPage() {
                   Score
                 </span>
               </TableHead>
-              <TableHead>Last application</TableHead>
+              <TableHead>Apply date</TableHead>
               {visibleQuestions.map((q) => (
                 <TableHead key={q.id} className="max-w-40">
                   <span className="block truncate" title={q.label}>{q.label}</span>
@@ -989,7 +990,9 @@ export default function CandidatesPage() {
                         <ScoreBadge score={cand.ai_score} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(cand.latest_submitted_at)}
+                        <span title={formatDate(cand.latest_submitted_at)}>
+                          {formatRelativeTime(cand.latest_submitted_at)}
+                        </span>
                       </TableCell>
                       {visibleQuestions.map((q) => (
                         <TableCell key={q.id} className="max-w-40 text-sm text-muted-foreground">
