@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Search, ExternalLink, FileText, X, SlidersHorizontal } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, Check } from 'lucide-react'
 import {
   fetchCandidates,
   fetchCandidate,
@@ -34,6 +34,101 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+// Multi-select country dropdown
+function MultiCountrySelect({
+  values,
+  onChange,
+  options,
+}: {
+  values: string[]
+  onChange: (v: string[]) => void
+  options: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [])
+
+  function toggle(v: string) {
+    onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v])
+  }
+
+  const label =
+    values.length === 0
+      ? 'Tüm ülkeler'
+      : values.length === 1
+        ? values[0]
+        : `${values.length} ülke`
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={[
+          'flex h-9 min-w-36 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm',
+          'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+          values.length > 0 ? 'font-medium text-foreground' : 'text-muted-foreground',
+        ].join(' ')}
+      >
+        <span>{label}</span>
+        <ChevronDown className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 max-h-64 min-w-44 overflow-y-auto rounded-md border bg-popover shadow-md">
+          {options.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">Ülke yok</div>
+          ) : (
+            <>
+              {values.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onChange([])}
+                    className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Tümünü temizle
+                  </button>
+                  <div className="border-t" />
+                </>
+              )}
+              {options.map((o) => {
+                const checked = values.includes(o)
+                return (
+                  <button
+                    key={o}
+                    type="button"
+                    onClick={() => toggle(o)}
+                    className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-accent"
+                  >
+                    <span
+                      className={[
+                        'flex size-4 shrink-0 items-center justify-center rounded border',
+                        checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
+                      ].join(' ')}
+                    >
+                      {checked && <Check className="size-2.5" />}
+                    </span>
+                    {o}
+                  </button>
+                )
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Single-select dropdown (pozisyon için)
 function FilterSelect({
   value,
   onChange,
@@ -53,7 +148,7 @@ function FilterSelect({
         className={[
           'h-9 rounded-md border border-input bg-background px-3 pr-8 text-sm',
           'ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-          'appearance-none cursor-pointer min-w-36',
+          'appearance-none cursor-pointer min-w-40',
           value ? 'text-foreground font-medium' : 'text-muted-foreground',
         ].join(' ')}
       >
@@ -91,12 +186,10 @@ export default function CandidatesPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [open, setOpen] = useState(false)
 
-  // Filtre seçeneklerini bir kere yükle
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
   }, [])
 
-  // Aday listesi — q veya filtreler değişince yenile
   useEffect(() => {
     const t = setTimeout(() => {
       setLoading(true)
@@ -112,14 +205,14 @@ export default function CandidatesPage() {
     return () => clearTimeout(t)
   }, [q, filters])
 
-  function updateFilter(key: keyof ActiveFilters, value: string) {
+  function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
     const next = { ...filters, [key]: value }
     setFilters(next)
     saveFilters(next)
   }
 
   function clearFilters() {
-    const cleared: ActiveFilters = { country: '', position: '' }
+    const cleared: ActiveFilters = { countries: [], position: '' }
     setFilters(cleared)
     saveFilters(cleared)
   }
@@ -134,7 +227,7 @@ export default function CandidatesPage() {
       .finally(() => setDetailLoading(false))
   }
 
-  const activeFilterCount = [filters.country, filters.position].filter(Boolean).length
+  const activeFilterCount = (filters.countries.length > 0 ? 1 : 0) + (filters.position ? 1 : 0)
 
   return (
     <Card>
@@ -171,10 +264,9 @@ export default function CandidatesPage() {
 
           <div className="flex items-center gap-2">
             <SlidersHorizontal className="size-4 shrink-0 text-muted-foreground" />
-            <FilterSelect
-              value={filters.country}
-              onChange={(v) => updateFilter('country', v)}
-              placeholder="Tüm ülkeler"
+            <MultiCountrySelect
+              values={filters.countries}
+              onChange={(v) => updateFilter('countries', v)}
               options={filterOptions.countries}
             />
             <FilterSelect
@@ -189,17 +281,17 @@ export default function CandidatesPage() {
         {/* Aktif filtre etiketleri */}
         {activeFilterCount > 0 && (
           <div className="mt-1 flex flex-wrap gap-1.5">
-            {filters.country && (
-              <Badge variant="secondary" className="gap-1 pr-1">
-                {filters.country}
+            {filters.countries.map((c) => (
+              <Badge key={c} variant="secondary" className="gap-1 pr-1">
+                {c}
                 <button
-                  onClick={() => updateFilter('country', '')}
+                  onClick={() => updateFilter('countries', filters.countries.filter((x) => x !== c))}
                   className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
                 >
                   <X className="size-3" />
                 </button>
               </Badge>
-            )}
+            ))}
             {filters.position && (
               <Badge variant="secondary" className="gap-1 pr-1">
                 {filters.position}
@@ -254,13 +346,19 @@ export default function CandidatesPage() {
                         <button
                           className={[
                             'text-sm',
-                            filters.country === cand.country
+                            filters.countries.includes(cand.country)
                               ? 'font-semibold text-foreground underline underline-offset-2'
                               : 'text-muted-foreground hover:text-foreground',
                           ].join(' ')}
                           onClick={(e) => {
                             e.stopPropagation()
-                            updateFilter('country', filters.country === cand.country ? '' : cand.country!)
+                            const already = filters.countries.includes(cand.country!)
+                            updateFilter(
+                              'countries',
+                              already
+                                ? filters.countries.filter((x) => x !== cand.country)
+                                : [...filters.countries, cand.country!]
+                            )
                           }}
                         >
                           {cand.country}
