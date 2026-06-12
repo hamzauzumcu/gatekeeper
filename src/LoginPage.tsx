@@ -3,7 +3,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Sun, Moon } from 'lucide-react'
 import { login, type User } from '@/lib/auth'
+import { useDarkMode } from '@/lib/theme'
 
 interface Props {
   onLogin: (user: User) => void
@@ -13,6 +15,7 @@ export default function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(false)
+  const [dark, setDark] = useDarkMode()
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -26,7 +29,16 @@ export default function LoginPage({ onLogin }: Props) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="relative flex min-h-screen items-center justify-center bg-background px-4">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="absolute right-4 top-4"
+        onClick={() => setDark(!dark)}
+        aria-label="Toggle theme"
+      >
+        {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      </Button>
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl tracking-tight">Gatekeeper</CardTitle>

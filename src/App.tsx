@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Sun, Moon } from 'lucide-react'
 import ImportPage from './ImportPage'
 import CandidatesPage from './CandidatesPage'
 import LoginPage from './LoginPage'
 import { getUser, logout, type User } from '@/lib/auth'
+import { useDarkMode } from '@/lib/theme'
 
 type ApiStatus = 'checking' | 'ok' | 'error'
 
@@ -18,6 +20,7 @@ const STATUS_LABEL: Record<ApiStatus, string> = {
 export default function App() {
   const [user, setUser] = useState<User | null>(() => getUser())
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
+  const [dark, setDark] = useDarkMode()
 
   useEffect(() => {
     if (!user) return
@@ -48,6 +51,9 @@ export default function App() {
           <span className="text-sm text-muted-foreground">{user.fullName}</span>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             Sign out
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => setDark(!dark)} aria-label="Toggle theme">
+            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
         </div>
       </header>

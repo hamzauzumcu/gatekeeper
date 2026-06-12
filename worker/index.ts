@@ -8,6 +8,7 @@ type Env = {
     DEEPSEEK_API_KEY: string
     DB: D1Database
     RESUMES: R2Bucket
+    R2_PUBLIC_URL: string
   }
 }
 
@@ -33,7 +34,7 @@ app.post('/api/import', async (c) => {
     return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
-    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES)
+    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES, c.env.R2_PUBLIC_URL)
     return c.json({ ok: true, summary })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'import error' }, 400)
@@ -146,18 +147,6 @@ app.delete('/api/notes/:id', async (c) => {
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   return c.json({ ok: true })
-})
-
-// Serve resume from R2
-app.get('/api/resumes/*', async (c) => {
-  const key = c.req.path.replace('/api/resumes/', '')
-  if (!key) return c.json({ ok: false, error: 'key required' }, 400)
-  const obj = await c.env.RESUMES.get(key)
-  if (!obj) return c.json({ ok: false, error: 'file not found' }, 404)
-  const headers = new Headers()
-  obj.writeHttpMetadata(headers)
-  headers.set('cache-control', 'private, max-age=3600')
-  return new Response(obj.body, { headers })
 })
 
 // Future:

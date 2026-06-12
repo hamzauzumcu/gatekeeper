@@ -61,7 +61,8 @@ function r2Key(submissionId: string, tallyUrl: string): string {
 export async function importApplications(
   db: D1Database,
   payload: ImportPayload,
-  r2?: R2Bucket
+  r2?: R2Bucket,
+  r2PublicUrl?: string
 ): Promise<ImportSummary> {
   const err = assertPayload(payload)
   if (err) throw new Error(err)
@@ -184,29 +185,32 @@ export async function importApplications(
 
   // 6) Copy Tally resume URLs to R2 (sequential — chunk is small enough)
   let resumes_copied = 0
-  if (r2) {
+  if (r2 && r2PublicUrl) {
     for (const row of payload.rows) {
       if (!row.resume_url?.startsWith(TALLY_ORIGIN)) continue
       const appId = applicationId.get(row.submission_id)
       if (!appId) continue
 
-      const key = r2Key(row.submission_id, row.resume_url)
+      try {
+        const key = r2Key(row.submission_id, row.resume_url)
 
-      // Skip if already copied
-      const existing = await r2.head(key)
-      if (existing) {
-        await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
-        continue
+        const existing = await r2.head(key)
+        if (existing) {
+          await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`${r2PublicUrl}/${key}`, appId).run()
+          continue
+        }
+
+        const res = await fetch(row.resume_url)
+        if (!res.ok) continue
+
+        const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
+        const buffer = await res.arrayBuffer()
+        await r2.put(key, buffer, { httpMetadata: { contentType } })
+        await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`${r2PublicUrl}/${key}`, appId).run()
+        resumes_copied++
+      } catch {
+        // CV kopyalanamadı — Tally URL'i DB'de kalır, import devam eder
       }
-
-      const res = await fetch(row.resume_url)
-      if (!res.ok) continue
-
-      const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
-      const buffer = await res.arrayBuffer()
-      await r2.put(key, buffer, { httpMetadata: { contentType } })
-      await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`/api/resumes/${key}`, appId).run()
-      resumes_copied++
     }
   }
 
