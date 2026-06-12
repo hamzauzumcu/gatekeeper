@@ -166,7 +166,9 @@ export async function listCandidates(
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
-  const fit_statuses = (opts.fit_statuses ?? []).filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
+  const fit_statuses_raw = opts.fit_statuses ?? []
+  const includeNullStatus = fit_statuses_raw.includes('none')
+  const fit_statuses = fit_statuses_raw.filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const offset = Math.max(opts.offset ?? 0, 0)
   const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n > 0)
@@ -198,10 +200,15 @@ export async function listCandidates(
     bindings.push(position)
   }
 
-  if (fit_statuses.length > 0) {
-    const placeholders = fit_statuses.map(() => `?${++idx}`).join(', ')
-    conditions.push(`ap.fit_status IN (${placeholders})`)
-    bindings.push(...fit_statuses)
+  if (fit_statuses.length > 0 || includeNullStatus) {
+    const parts: string[] = []
+    if (fit_statuses.length > 0) {
+      const placeholders = fit_statuses.map(() => `?${++idx}`).join(', ')
+      parts.push(`ap.fit_status IN (${placeholders})`)
+      bindings.push(...fit_statuses)
+    }
+    if (includeNullStatus) parts.push('ap.fit_status IS NULL')
+    conditions.push(parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`)
   }
 
   for (const f of answerFilters) {

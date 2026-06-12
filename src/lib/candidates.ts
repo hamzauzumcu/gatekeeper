@@ -22,6 +22,7 @@ export const FIT_STATUS_OPTIONS = [
   { value: 'good_fit', label: 'Good Fit' },
   { value: 'maybe', label: 'Maybe' },
   { value: 'not_fit', label: 'Not Fit' },
+  { value: 'none', label: 'No Status' },
 ] as const
 
 export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'

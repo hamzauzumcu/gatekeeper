@@ -440,6 +440,7 @@ export default function CandidatesPage() {
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [exitingIds, setExitingIds] = useState<Set<number>>(new Set())
   const sentinelRef = useRef<HTMLTableRowElement>(null)
 
   const currentUser = getUser()!
@@ -600,6 +601,8 @@ export default function CandidatesPage() {
 
   async function assignFitStatus(fitStatus: string | null) {
     if (selectedIds.size === 0) return
+    const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
+    const exitIds = willExit ? [...selectedIds] : []
     setBulkLoading(true)
     try {
       await updateApplicantsFitStatus([...selectedIds], fitStatus)
@@ -607,6 +610,13 @@ export default function CandidatesPage() {
         prev.map((c) => (selectedIds.has(c.id) ? { ...c, fit_status: fitStatus } : c))
       )
       setSelectedIds(new Set())
+      if (willExit && exitIds.length > 0) {
+        setExitingIds(new Set(exitIds))
+        setTimeout(() => {
+          setCandidates((prev) => prev.filter((c) => !exitIds.includes(c.id)))
+          setExitingIds(new Set())
+        }, 350)
+      }
     } catch {
       // silent
     } finally {
@@ -615,9 +625,17 @@ export default function CandidatesPage() {
   }
 
   async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
+    const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     try {
       await updateApplicantsFitStatus([candId], fitStatus)
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+      if (willExit) {
+        setExitingIds((prev) => new Set([...prev, candId]))
+        setTimeout(() => {
+          setCandidates((prev) => prev.filter((c) => c.id !== candId))
+          setExitingIds((prev) => { const next = new Set(prev); next.delete(candId); return next })
+        }, 350)
+      }
     } catch {
       // silent
     }
@@ -842,7 +860,7 @@ export default function CandidatesPage() {
                   return (
                     <TableRow
                       key={cand.id}
-                      className={`cursor-pointer ${checked ? 'bg-primary/5' : ''}`}
+                      className={`cursor-pointer transition-opacity duration-300 ${checked ? 'bg-primary/5' : ''} ${exitingIds.has(cand.id) ? 'opacity-0' : ''}`}
                       onClick={() => openCandidate(cand.id)}
                       onContextMenu={(e) => {
                         e.preventDefault()

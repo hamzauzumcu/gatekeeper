@@ -1,6 +1,9 @@
 // CSV import — idempotent writes to D1.
 // Browser sends a normalized ImportPayload; we upsert it.
 // Dedup: applicants.respondent_id (person), applications.tally_submission_id (application).
+// Step 7: R2'ye yüklenen CV'ler Claude ile parse edilir (ANTHROPIC_API_KEY gerekli).
+
+import { parseAndStoreResume } from './cv-parser'
 
 type QuestionType = 'text' | 'number' | 'boolean' | 'file'
 
@@ -33,6 +36,7 @@ export type ImportSummary = {
   applications: number
   answers: number
   resumes_copied: number
+  resumes_parsed: number
 }
 
 const VALID_TYPES: QuestionType[] = ['text', 'number', 'boolean', 'file']
@@ -62,7 +66,8 @@ export async function importApplications(
   db: D1Database,
   payload: ImportPayload,
   r2?: R2Bucket,
-  r2PublicUrl?: string
+  r2PublicUrl?: string,
+  deepseekApiKey?: string,
 ): Promise<ImportSummary> {
   const err = assertPayload(payload)
   if (err) throw new Error(err)
@@ -185,6 +190,8 @@ export async function importApplications(
 
   // 6) Copy Tally resume URLs to R2 (sequential — chunk is small enough)
   let resumes_copied = 0
+  // appId → R2 public URL — step 7'de parse için kullanılır
+  const finalResumeUrl = new Map<number, string>()
   if (r2 && r2PublicUrl) {
     for (const row of payload.rows) {
       if (!row.resume_url?.startsWith(TALLY_ORIGIN)) continue
@@ -193,10 +200,12 @@ export async function importApplications(
 
       try {
         const key = r2Key(row.submission_id, row.resume_url)
+        const publicUrl = `${r2PublicUrl}/${key}`
 
         const existing = await r2.head(key)
         if (existing) {
-          await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`${r2PublicUrl}/${key}`, appId).run()
+          await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(publicUrl, appId).run()
+          finalResumeUrl.set(appId, publicUrl)
           continue
         }
 
@@ -206,10 +215,24 @@ export async function importApplications(
         const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
         const buffer = await res.arrayBuffer()
         await r2.put(key, buffer, { httpMetadata: { contentType } })
-        await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(`${r2PublicUrl}/${key}`, appId).run()
+        await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(publicUrl, appId).run()
+        finalResumeUrl.set(appId, publicUrl)
         resumes_copied++
       } catch {
         // CV kopyalanamadı — Tally URL'i DB'de kalır, import devam eder
+      }
+    }
+  }
+
+  // 7) Parse CVs with AI — hata olursa resume_parse_version 0 kalır, sync sonradan halleder
+  let resumes_parsed = 0
+  if (deepseekApiKey && finalResumeUrl.size > 0) {
+    for (const [appId, url] of finalResumeUrl) {
+      try {
+        await parseAndStoreResume(db, appId, url, deepseekApiKey)
+        resumes_parsed++
+      } catch {
+        // parse başarısız — devam et
       }
     }
   }
@@ -221,5 +244,6 @@ export async function importApplications(
     applications: applicationId.size,
     answers,
     resumes_copied,
+    resumes_parsed,
   }
 }

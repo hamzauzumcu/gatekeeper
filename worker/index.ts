@@ -3,6 +3,8 @@ import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
 import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
 import { handleTallyWebhook } from './tally-webhook'
+import { parseAndStoreResume } from './cv-parser'
+import { PARSE_VERSION } from './cv-schema'
 
 type Env = {
   Bindings: {
@@ -36,7 +38,7 @@ app.post('/api/import', async (c) => {
     return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
-    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES, c.env.R2_PUBLIC_URL)
+    const summary = await importApplications(c.env.DB, payload, c.env.RESUMES, c.env.R2_PUBLIC_URL, c.env.DEEPSEEK_API_KEY)
     return c.json({ ok: true, summary })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'import error' }, 400)
@@ -162,6 +164,49 @@ app.delete('/api/notes/:id', async (c) => {
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   return c.json({ ok: true })
+})
+
+// CV parsing sync — parse_version < PARSE_VERSION olan CV'leri (yeniden) parse eder.
+// dryRun: true ile kaç kayıt etkileneceğini görürsün.
+// limit: tek çağrıda işlenecek maksimum CV sayısı (default 10, max 50).
+app.post('/api/admin/sync-cv', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+
+  let body: { limit?: number; dryRun?: boolean } = {}
+  try { body = await c.req.json() } catch { /* body opsiyonel */ }
+
+  const limit = Math.min(body.limit ?? 10, 50)
+  const dryRun = body.dryRun ?? false
+
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT id, resume_url FROM applications
+       WHERE resume_url IS NOT NULL AND resume_parse_version < ?
+       LIMIT ?`,
+    )
+    .bind(PARSE_VERSION, limit)
+    .all<{ id: number; resume_url: string }>()
+
+  if (dryRun) return c.json({ ok: true, pending: results.length, parse_version: PARSE_VERSION })
+
+  let processed = 0
+  let failed = 0
+  for (const row of results) {
+    try {
+      await parseAndStoreResume(c.env.DB, row.id, row.resume_url, c.env.DEEPSEEK_API_KEY)
+      processed++
+    } catch {
+      failed++
+    }
+  }
+
+  // Hâlâ bekleyen var mı?
+  const { results: remaining } = await c.env.DB
+    .prepare(`SELECT COUNT(*) as n FROM applications WHERE resume_url IS NOT NULL AND resume_parse_version < ?`)
+    .bind(PARSE_VERSION)
+    .all<{ n: number }>()
+
+  return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
 })
 
 // Tally webhook — new form responses arrive automatically
