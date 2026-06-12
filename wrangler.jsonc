@@ -18,5 +18,8 @@
 			"binding": "RESUMES",
 			"bucket_name": "gatekeeper-resumes"
 		}
-	]
+	],
+	"vars": {
+		"R2_PUBLIC_URL": "https://pub-63b663a358ae4694826a4342acd1f84c.r2.dev"
+	}
 }

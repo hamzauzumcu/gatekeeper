@@ -130,6 +130,7 @@ export default function ImportPage() {
           | { ok: true; summary: Summary }
           | { ok: false; error: string }
         if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'import error')
+        if (data.summary._r2_debug?.length) console.debug('[r2]', data.summary._r2_debug)
         acc.positionId = data.summary.positionId
         acc.questions = Math.max(acc.questions, data.summary.questions)
         acc.applicants += data.summary.applicants

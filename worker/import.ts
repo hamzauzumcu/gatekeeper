@@ -33,6 +33,7 @@ export type ImportSummary = {
   applications: number
   answers: number
   resumes_copied: number
+  _r2_debug?: string[]
 }
 
 const VALID_TYPES: QuestionType[] = ['text', 'number', 'boolean', 'file']
@@ -185,11 +186,15 @@ export async function importApplications(
 
   // 6) Copy Tally resume URLs to R2 (sequential — chunk is small enough)
   let resumes_copied = 0
-  if (r2 && r2PublicUrl) {
+  const _r2_debug: string[] = []
+  if (!r2) _r2_debug.push('skip: no r2 binding')
+  else if (!r2PublicUrl) _r2_debug.push('skip: r2PublicUrl empty')
+  else {
     for (const row of payload.rows) {
-      if (!row.resume_url?.startsWith(TALLY_ORIGIN)) continue
+      if (!row.resume_url) { _r2_debug.push(`row ${row.submission_id}: resume_url null`); continue }
+      if (!row.resume_url.startsWith(TALLY_ORIGIN)) { _r2_debug.push(`row ${row.submission_id}: url not tally (${row.resume_url.slice(0, 40)})`); continue }
       const appId = applicationId.get(row.submission_id)
-      if (!appId) continue
+      if (!appId) { _r2_debug.push(`row ${row.submission_id}: no appId`); continue }
 
       try {
         const key = r2Key(row.submission_id, row.resume_url)
@@ -198,19 +203,22 @@ export async function importApplications(
         const existing = await r2.head(key)
         if (existing) {
           await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(publicUrl, appId).run()
+          _r2_debug.push(`row ${row.submission_id}: already in r2`)
+          resumes_copied++
           continue
         }
 
         const res = await fetch(row.resume_url)
-        if (!res.ok) continue
+        if (!res.ok) { _r2_debug.push(`row ${row.submission_id}: fetch ${res.status} ${res.statusText}`); continue }
 
         const contentType = res.headers.get('content-type') ?? 'application/octet-stream'
         const buffer = await res.arrayBuffer()
         await r2.put(key, buffer, { httpMetadata: { contentType } })
         await db.prepare(`UPDATE applications SET resume_url = ? WHERE id = ?`).bind(publicUrl, appId).run()
         resumes_copied++
-      } catch {
-        // CV kopyalanamadı — Tally URL'i DB'de kalır, import devam eder
+        _r2_debug.push(`row ${row.submission_id}: ok`)
+      } catch (e) {
+        _r2_debug.push(`row ${row.submission_id}: error: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
   }
@@ -222,5 +230,6 @@ export async function importApplications(
     applications: applicationId.size,
     answers,
     resumes_copied,
+    _r2_debug,
   }
 }

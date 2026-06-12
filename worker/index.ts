@@ -169,9 +169,9 @@ app.delete('/api/notes/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-// CV parsing sync — parse_version < PARSE_VERSION olan CV'leri (yeniden) parse eder.
-// dryRun: true ile kaç kayıt etkileneceğini görürsün.
-// limit: tek çağrıda işlenecek maksimum CV sayısı (default 10, max 50).
+// CV parsing sync — re-parses CVs whose parse_version < PARSE_VERSION.
+// dryRun: true returns the count of affected rows without processing.
+// limit: max CVs to process per call (default 10, max 50).
 app.post('/api/admin/sync-cv', async (c) => {
   if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
 
@@ -272,6 +272,33 @@ app.post('/api/admin/sync-scores', async (c) => {
     .all<{ n: number }>()
 
   return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
+})
+
+// Danger Zone — destructive data operations
+app.delete('/api/admin/data', async (c) => {
+  let body: { scope: string }
+  try { body = await c.req.json() } catch { return c.json({ ok: false, error: 'invalid JSON' }, 400) }
+
+  if (body.scope === 'cv_data') {
+    const result = await c.env.DB.prepare(
+      `UPDATE applications SET resume_text = NULL, resume_parsed = NULL, resume_parse_version = 0`
+    ).run()
+    return c.json({ ok: true, updated: result.meta.changes ?? 0 })
+  }
+
+  if (body.scope === 'scores') {
+    const result = await c.env.DB.prepare(
+      `UPDATE applications SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = 0`
+    ).run()
+    return c.json({ ok: true, updated: result.meta.changes ?? 0 })
+  }
+
+  if (body.scope === 'all_candidates') {
+    const result = await c.env.DB.prepare(`DELETE FROM applicants`).run()
+    return c.json({ ok: true, deleted: result.meta.changes ?? 0 })
+  }
+
+  return c.json({ ok: false, error: 'invalid scope' }, 400)
 })
 
 // Tally webhook — new form responses arrive automatically

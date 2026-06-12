@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { ChevronDown, Sparkles } from 'lucide-react'
-import { fetchScoringPrompts, saveScoringPrompt, syncScores, syncCv, type PositionWithPrompt } from './lib/candidates'
+import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react'
+import { fetchScoringPrompts, saveScoringPrompt, syncScores, syncCv, clearData, type PositionWithPrompt } from './lib/candidates'
 import { formatDate } from './lib/candidates'
 
 function getDefaultPrompt(positionTitle: string): string {
@@ -293,6 +293,28 @@ export default function SettingsPage() {
 
   const promptedCount = positions.filter((p) => p.prompt).length
 
+  // ── Danger Zone state ──────────────────────────────────────────────────────
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
+  const [deleteRunning, setDeleteRunning] = useState(false)
+  const [deleteResult, setDeleteResult] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  async function handleDeleteAll() {
+    setDeleteRunning(true)
+    setDeleteResult(null)
+    setDeleteError(null)
+    setDeleteConfirming(false)
+    try {
+      const res = await clearData('all_candidates')
+      const n = res.deleted ?? 0
+      setDeleteResult(`All data deleted — ${n} candidate${n !== 1 ? 's' : ''} removed.`)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Operation failed')
+    } finally {
+      setDeleteRunning(false)
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* AI Scoring Prompts */}
@@ -496,6 +518,48 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Danger Zone */}
+      <Card className="border-destructive/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-destructive">
+            <TriangleAlert className="h-4 w-4" />
+            Danger Zone
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Permanently deletes all candidates, applications, answers, and notes. This cannot be undone.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {deleteConfirming ? (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Are you sure?</span>
+              <Button size="sm" variant="destructive" onClick={handleDeleteAll}>
+                Yes, delete all
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setDeleteConfirming(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleteRunning}
+              onClick={() => { setDeleteResult(null); setDeleteError(null); setDeleteConfirming(true) }}
+            >
+              {deleteRunning ? 'Deleting…' : 'Delete All Data'}
+            </Button>
+          )}
+
+          {deleteResult && (
+            <p className="text-sm text-emerald-600 font-medium">{deleteResult}</p>
+          )}
+          {deleteError && (
+            <p className="text-sm text-destructive">{deleteError}</p>
           )}
         </CardContent>
       </Card>

@@ -373,6 +373,17 @@ export async function syncCv(opts: { limit?: number; dryRun?: boolean } = {}): P
   return data
 }
 
+export async function clearData(scope: 'cv_data' | 'scores' | 'all_candidates'): Promise<{ deleted?: number; updated?: number }> {
+  const res = await fetch('/api/admin/data', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope }),
+  })
+  const data = (await res.json()) as ({ ok: true; deleted?: number; updated?: number }) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'operation failed')
+  return data
+}
+
 export function formatRelativeTime(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
