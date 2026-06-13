@@ -154,15 +154,27 @@ function slugify(input: string, maxLen = 60): string {
   return s.slice(0, maxLen).replace(/_+$/, '') || 'field'
 }
 
+// Mirrors normalizePositionName in src/lib/import.ts — keep in sync.
+// Ensures a webhook form name resolves to the SAME slug as the CSV import,
+// so both write to one position instead of creating "… Job application" dupes.
+function normalizePositionName(raw: string): { title: string; slug: string } {
+  let base = (raw ?? '').trim()
+  base = base.replace(/\.csv$/i, '')
+  base = base.split(/_submissions/i)[0]
+  base = base.replace(/\bjob application\b/i, '')
+  base = base.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const title = base || 'New Position'
+  return { title, slug: slugify(title) }
+}
+
 // ── Main: Tally payload → ImportPayload ────────────────────────────────────
 
 export function tallyToImportPayload(raw: TallyWebhookPayload): ImportPayload {
   const { data } = raw
 
-  // Position: derive slug from form name (same logic as guessPosition)
-  const formName = data.formName?.trim() || 'Application'
-  const slug = slugify(formName, 60)
-  const position = { slug, title: formName }
+  // Position: normalize the form name so a webhook and a CSV import of the same
+  // role resolve to one position (see normalizePositionName).
+  const position = normalizePositionName(data.formName?.trim() || 'Application')
 
   // Classify each field: known applicant field OR position question
   const questionsByKey = new Map<string, { field_key: string; label: string; type: 'text' | 'number' | 'boolean' | 'file' }>()

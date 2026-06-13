@@ -175,12 +175,21 @@ export function normalizeRow(
   }
 }
 
-// "...Job application_Submissions_2026-06-12.csv" → {title, slug}
-export function guessPosition(fileName: string): { title: string; slug: string } {
-  let base = fileName.replace(/\.csv$/i, '')
-  base = base.split(/_submissions/i)[0]
-  base = base.replace(/job application/i, '').trim()
+// Single source of truth for turning a raw position label (CSV filename OR
+// Tally form name) into a stable {title, slug}. Both import paths MUST use this
+// so the same role always resolves to the same slug → one position, not dupes.
+// Mirrored in worker/tally-webhook.ts — keep in sync.
+export function normalizePositionName(raw: string): { title: string; slug: string } {
+  let base = (raw ?? '').trim()
+  base = base.replace(/\.csv$/i, '') // drop extension (filename input)
+  base = base.split(/_submissions/i)[0] // drop Tally "_Submissions_<date>" tail
+  base = base.replace(/\bjob application\b/i, '') // drop boilerplate suffix
   base = base.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
   const title = base || 'New Position'
   return { title, slug: slugify(title) }
+}
+
+// "...Job application_Submissions_2026-06-12.csv" → {title, slug}
+export function guessPosition(fileName: string): { title: string; slug: string } {
+  return normalizePositionName(fileName)
 }
