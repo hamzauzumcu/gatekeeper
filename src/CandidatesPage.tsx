@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
-  Mail, Phone, Globe, Download, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
+  Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 import {
@@ -1623,6 +1623,7 @@ function CandidateDetailView({
     () => new Map(applications.map((a) => [a.id, a.status]))
   )
   const [fitStatus, setFitStatus] = useState<string | null>(applicant.fit_status ?? null)
+  const [cvOpen, setCvOpen] = useState(false)
   const [fx, setFx] = useState<FxRates | null>(null)
   // Locally-applied salary corrections, keyed by `${applicationId}:${questionId}`.
   const [answerOverrides, setAnswerOverrides] = useState<Map<string, string>>(new Map())
@@ -1763,15 +1764,14 @@ function CandidateDetailView({
                     </a>
                   ))}
                   {firstResumeUrl && (
-                    <a
-                      href={firstResumeUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => setCvOpen(true)}
                       className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
                     >
-                      <Download className="size-3" />
+                      <FileText className="size-3" />
                       CV
-                    </a>
+                    </button>
                   )}
                 </div>
               )}
@@ -2046,6 +2046,30 @@ function CandidateDetailView({
           </button>
         </div>
       </div>
+
+      {firstResumeUrl && (
+        <Sheet open={cvOpen} onOpenChange={setCvOpen}>
+          <SheetContent side="bottom" className="flex h-[92vh] flex-col gap-0 p-0">
+            <SheetHeader className="flex-row items-center justify-between border-b px-4 py-3">
+              <SheetTitle className="text-base">CV</SheetTitle>
+              <a
+                href={firstResumeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mr-8 inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+              >
+                <ExternalLink className="size-3" />
+                Open in new tab
+              </a>
+            </SheetHeader>
+            <iframe
+              src={firstResumeUrl}
+              title="CV preview"
+              className="min-h-0 w-full flex-1 border-0"
+            />
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   )
 }
