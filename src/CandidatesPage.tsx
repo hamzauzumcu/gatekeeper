@@ -1367,13 +1367,13 @@ export default function CandidatesPage() {
 
         {/* Floating bulk pill — multi-select */}
         {selectedIds.size > 0 && (
-          <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
-            <div className="flex items-center gap-2 rounded-2xl border bg-background/95 px-4 py-2.5 shadow-xl backdrop-blur">
+          <div className="fixed inset-x-3 bottom-6 z-50 mx-auto w-fit max-w-[calc(100vw-1.5rem)]">
+            <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border bg-background/95 px-4 py-2.5 shadow-xl backdrop-blur">
               <span className="text-sm font-medium text-foreground whitespace-nowrap">
                 {selectedIds.size} candidate{selectedIds.size !== 1 ? 's' : ''} selected
               </span>
-              <Separator orientation="vertical" className="h-4" />
-              <span className="text-xs text-muted-foreground whitespace-nowrap">Assign:</span>
+              <Separator orientation="vertical" className="hidden h-4 sm:block" />
+              <span className="hidden text-xs text-muted-foreground whitespace-nowrap sm:inline">Assign:</span>
               {FIT_STATUS_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}

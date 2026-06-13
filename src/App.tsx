@@ -23,11 +23,11 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1800px] px-6 py-8">
-      <header className="flex items-center justify-between border-b pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Gatekeeper</h1>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">{user.fullName}</span>
+    <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 sm:py-8">
+      <header className="flex items-center justify-between gap-3 border-b pb-4">
+        <h1 className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl">Gatekeeper</h1>
+        <div className="flex min-w-0 items-center gap-1 sm:gap-3">
+          <span className="hidden max-w-[12rem] truncate text-sm text-muted-foreground sm:inline">{user.fullName}</span>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
             Sign out
           </Button>
@@ -38,7 +38,7 @@ export default function App() {
       </header>
 
       <Tabs defaultValue="candidates" className="mt-6">
-        <TabsList>
+        <TabsList className="max-w-full overflow-x-auto">
           <TabsTrigger value="candidates">Candidates</TabsTrigger>
           <TabsTrigger value="import">Import CSV</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
