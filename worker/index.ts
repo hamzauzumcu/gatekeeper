@@ -330,7 +330,7 @@ app.post('/api/admin/score-application/:id', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   try {
-    await scoreApplication(c.env.DB, id, c.env.DEEPSEEK_API_KEY)
+    await scoreApplication(c.env.DB, id, c.env)
     return c.json({ ok: true })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'score failed' }, 500)
@@ -356,7 +356,7 @@ app.post('/api/admin/sync-scores', async (c) => {
   let failed = 0
   for (const row of results) {
     try {
-      await scoreApplication(c.env.DB, row.id, c.env.DEEPSEEK_API_KEY)
+      await scoreApplication(c.env.DB, row.id, c.env)
       processed++
     } catch {
       failed++

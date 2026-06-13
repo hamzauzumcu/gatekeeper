@@ -193,10 +193,15 @@ function FilterChip({
         <button
           type="button"
           onClick={() => setOpenChip(open ? null : id)}
-          className="flex h-full items-center gap-1.5 rounded-l-md pl-2.5 pr-1.5"
+          className="flex h-full min-w-0 items-center gap-1.5 rounded-l-md pl-2.5 pr-1.5"
         >
-          <span className="text-muted-foreground">{label}</span>
-          <span className={hasValue ? 'font-medium text-foreground' : 'text-muted-foreground/70'}>
+          <span className="shrink-0 text-muted-foreground">{label}</span>
+          <span
+            className={[
+              'truncate max-w-[40vw] sm:max-w-[16rem]',
+              hasValue ? 'font-medium text-foreground' : 'text-muted-foreground/70',
+            ].join(' ')}
+          >
             {summary ?? 'Any'}
           </span>
           <ChevronDown
@@ -372,7 +377,7 @@ function ColumnPicker({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-1 w-96 overflow-hidden rounded-md border bg-popover shadow-md">
+        <div className="absolute right-0 z-50 mt-1 w-[min(24rem,calc(100vw-1.5rem))] overflow-hidden rounded-md border bg-popover shadow-md">
           {/* Default columns — always available, can be shown/hidden */}
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -589,6 +594,8 @@ function SortHeader({
 
 export default function CandidatesPage() {
   const [q, setQ] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false) // mobile: search field hidden until toggled
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [filters, setFilters] = useState<ActiveFilters>(loadSavedFilters)
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ countries: [], positions: [] })
   const [questionColumns, setQuestionColumns] = useState<QuestionColumn[]>([])
@@ -970,14 +977,52 @@ export default function CandidatesPage() {
 
         {/* Search + Columns */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-48 flex-1">
+          {/* Mobile: search hidden until this button is tapped. Desktop: always shown. */}
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen((o) => {
+                const next = !o
+                if (next) setTimeout(() => searchInputRef.current?.focus(), 0)
+                return next
+              })
+            }}
+            aria-label="Toggle search"
+            className={[
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors sm:hidden',
+              searchOpen || q
+                ? 'border-primary bg-primary/5 text-primary'
+                : 'border-input bg-background text-muted-foreground hover:text-foreground',
+            ].join(' ')}
+          >
+            <Search className="size-4" />
+          </button>
+          <div
+            className={[
+              'relative min-w-48 flex-1',
+              searchOpen ? 'block' : 'hidden',
+              'sm:block',
+            ].join(' ')}
+          >
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={searchInputRef}
+              type="search"
               placeholder="Search by ID, name or email…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              className="pl-9"
+              className="pl-9 pr-9"
             />
+            {q && (
+              <button
+                type="button"
+                onClick={() => setQ('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="size-4" />
+              </button>
+            )}
           </div>
           <ColumnPicker
             questionColumns={questionColumns}

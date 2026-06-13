@@ -229,7 +229,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
 
   private async processOne(kind: SyncKind, id: number): Promise<void> {
     if (kind === 'scores') {
-      await scoreApplication(this.env.DB, id, this.env.DEEPSEEK_API_KEY)
+      await scoreApplication(this.env.DB, id, this.env)
       return
     }
     const row = await this.env.DB

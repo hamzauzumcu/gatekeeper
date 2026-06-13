@@ -3,8 +3,19 @@
 // upsertScoringPrompt resets ai_score_version for that position so sync re-scores everything.
 
 import { deepseekChat } from './deepseek'
+import { parseAndStoreResume, parsedRawText, synthesizeCvText, looksLikeText } from './cv-parser'
 
-export const SCORE_VERSION = 1
+// v2: scoring now reads the recovered CV text (resume_parsed / re-OCR) instead of the
+// often-empty resume_text column, so every candidate is re-scored with their real CV.
+export const SCORE_VERSION = 2
+
+// Minimal env surface scoreApplication needs (lazy CV recovery may re-OCR via GPT-4o).
+export type ScoreEnv = {
+  DEEPSEEK_API_KEY: string
+  OPENAI_API_KEY?: string
+  RESUMES?: R2Bucket
+  R2_PUBLIC_URL?: string
+}
 
 // Shared pending-scores predicate, used by the sync endpoints and the SyncJobDO.
 // An application needs (re)scoring when: the scoring schema version advanced, OR it was
@@ -65,11 +76,11 @@ export async function upsertScoringPrompt(
 export async function scoreApplication(
   db: D1Database,
   applicationId: number,
-  deepseekApiKey: string
+  env: ScoreEnv
 ): Promise<void> {
   const row = await db
     .prepare(
-      `SELECT a.id, a.cover_letter, a.resume_text,
+      `SELECT a.id, a.cover_letter, a.resume_text, a.resume_parsed, a.resume_url,
               jp.title AS position_title,
               sp.prompt AS scoring_prompt,
               sp.updated_at AS prompt_updated_at
@@ -83,12 +94,49 @@ export async function scoreApplication(
       id: number
       cover_letter: string | null
       resume_text: string | null
+      resume_parsed: string | null
+      resume_url: string | null
       position_title: string
       scoring_prompt: string | null
       prompt_updated_at: string | null
     }>()
 
   if (!row || !row.scoring_prompt) return
+
+  // Recover the CV text lazily. The resume_text column is empty for most rows (the regex
+  // PDF extractor fails on scanned/compressed PDFs), so: cached verbatim text from
+  // resume_parsed first (free), then re-OCR the PDF via GPT-4o, then a structured-field
+  // synthesis as last resort. Cache whatever we recover back into resume_text.
+  let cvText: string | null = looksLikeText(row.resume_text) ? row.resume_text : null
+  if (!cvText) {
+    cvText = parsedRawText(row.resume_parsed)
+    if (!cvText && row.resume_url && env.OPENAI_API_KEY) {
+      await parseAndStoreResume(
+        db,
+        applicationId,
+        row.resume_url,
+        env.DEEPSEEK_API_KEY,
+        env.RESUMES,
+        env.R2_PUBLIC_URL,
+        env.OPENAI_API_KEY
+      )
+      const refreshed = await db
+        .prepare(`SELECT resume_text, resume_parsed FROM applications WHERE id = ?`)
+        .bind(applicationId)
+        .first<{ resume_text: string | null; resume_parsed: string | null }>()
+      cvText = (refreshed?.resume_text?.trim() ? refreshed.resume_text : null) ?? parsedRawText(refreshed?.resume_parsed ?? null)
+    }
+    if (!cvText && row.resume_parsed) {
+      try {
+        cvText = synthesizeCvText(JSON.parse(row.resume_parsed)) || null
+      } catch {
+        /* leave cvText null */
+      }
+    }
+    if (cvText) {
+      await db.prepare(`UPDATE applications SET resume_text = ? WHERE id = ?`).bind(cvText, applicationId).run()
+    }
+  }
 
   const answersRes = await db
     .prepare(
@@ -104,7 +152,7 @@ export async function scoreApplication(
   const answers = answersRes.results ?? []
 
   const parts: string[] = []
-  if (row.resume_text?.trim()) parts.push(`=== CV / Resume ===\n${row.resume_text}`)
+  if (cvText?.trim()) parts.push(`=== CV / Resume ===\n${cvText}`)
   if (row.cover_letter?.trim()) parts.push(`=== Cover Letter ===\n${row.cover_letter}`)
   if (answers.length > 0) {
     const answersText = answers.map((a) => `${a.label}: ${a.value ?? '—'}`).join('\n')
@@ -125,7 +173,7 @@ export async function scoreApplication(
   }
 
   const raw = await deepseekChat(
-    deepseekApiKey,
+    env.DEEPSEEK_API_KEY,
     [
       { role: 'system', content: row.scoring_prompt },
       { role: 'user', content: parts.join('\n\n') },

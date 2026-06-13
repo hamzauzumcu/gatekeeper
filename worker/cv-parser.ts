@@ -34,6 +34,48 @@ function extractTextFromPdf(buffer: ArrayBuffer): string {
   return parts.join(' ').replace(/\s+/g, ' ').trim()
 }
 
+export const MIN_CV_TEXT_LEN = 200
+
+// The regex PDF extractor sometimes emits a few dozen chars of binary garbage that is
+// non-empty but useless ("corrupted/unreadable" to the scoring models). Treat text as a
+// real CV only if it's long enough AND mostly readable letters/spaces — latin1-decoded
+// PDF noise fails the ratio test, and short extractions fail the length test.
+export function looksLikeText(s: string | null | undefined): boolean {
+  const t = (s ?? '').trim()
+  if (t.length < MIN_CV_TEXT_LEN) return false
+  const readable = (t.match(/[\p{L}\s]/gu) || []).length
+  return readable / t.length > 0.6
+}
+
+// Build a readable CV text from the structured parsed fields. Last-resort fallback
+// when neither the regex extraction nor the model's verbatim resume_text is available.
+export function synthesizeCvText(fields: any): string {
+  const lines: string[] = []
+  if (fields?.summary) lines.push(`Summary: ${fields.summary}`)
+  if (fields?.total_experience_years != null) lines.push(`Total experience (years): ${fields.total_experience_years}`)
+  if (fields?.seniority) lines.push(`Seniority: ${fields.seniority}`)
+  if (Array.isArray(fields?.education) && fields.education.length) {
+    lines.push('Education:\n' + fields.education.map((e: any) => `- ${e?.degree ?? ''} @ ${e?.school ?? ''}${e?.year ? ` (${e.year})` : ''}`).join('\n'))
+  }
+  if (Array.isArray(fields?.work_history) && fields.work_history.length) {
+    lines.push('Work history:\n' + fields.work_history.map((w: any) => `- ${w?.role ?? ''} @ ${w?.company ?? ''} (${w?.start ?? '?'}–${w?.end ?? 'present'}${w?.months ? `, ${w.months} mo` : ''})`).join('\n'))
+  }
+  if (Array.isArray(fields?.skills) && fields.skills.length) lines.push('Skills: ' + fields.skills.join(', '))
+  return lines.join('\n')
+}
+
+// Recover the verbatim CV text cached in a resume_parsed JSON blob, if present.
+export function parsedRawText(resumeParsed: string | null | undefined): string | null {
+  if (!resumeParsed) return null
+  try {
+    const p = JSON.parse(resumeParsed)
+    const t = typeof p?.resume_text === 'string' ? p.resume_text.trim() : ''
+    return looksLikeText(t) ? t : null
+  } catch {
+    return null
+  }
+}
+
 function normalizeUniversity(name: string): string {
   const lower = ` ${name.toLowerCase()} `
   for (const [pattern, canonical] of UNIVERSITY_MAP) {
@@ -93,7 +135,7 @@ Rules:
 - Use null for unknown fields, do not guess`
 
   let raw: string
-  if (resume_text) {
+  if (looksLikeText(resume_text)) {
     raw = await deepseekChat(
       deepseekApiKey,
       [
@@ -151,12 +193,20 @@ Rules:
         : null
   }
 
+  // resume_text column must never be empty: prefer the regex extraction, then the
+  // model's verbatim resume_text, then a synthesized version from structured fields.
+  // The verbatim text lives in the column, so drop it from resume_parsed to avoid
+  // storing the (often large) CV body twice.
+  const modelText = typeof fields.resume_text === 'string' ? fields.resume_text.trim() : ''
+  delete fields.resume_text
+  const fullText = looksLikeText(resume_text) ? resume_text : modelText || synthesizeCvText(fields)
+
   await db
     .prepare(
       `UPDATE applications
        SET resume_text = ?, resume_parsed = ?, resume_parse_version = ?
        WHERE id = ?`,
     )
-    .bind(resume_text, JSON.stringify(fields), PARSE_VERSION, applicationId)
+    .bind(fullText, JSON.stringify(fields), PARSE_VERSION, applicationId)
     .run()
 }

@@ -54,8 +54,16 @@ const DB_NAME = 'gatekeeper'
 const REQUEST_TIMEOUT_MS = 120_000
 const MAX_TOKENS = 8192 // generous so reasoning-heavy models don't truncate the JSON
 
-const SAMPLE_SIZE = Number(process.argv[2]) || 50
+const PER_POSITION = Number(process.argv[2]) || 5
 const CONCURRENCY = Number(process.argv[3]) || 6
+
+// Sample PER_POSITION candidates from each of these positions, preferring ones that
+// actually have a CV (so the comparison is meaningful — models that require CV evidence
+// score 0 when none is present).
+const POSITIONS = [
+  { label: 'Backend', like: 'Backend Engineer' },
+  { label: 'Apple Search Ads', like: 'Apple Search Ads Campaign Manager' },
+]
 
 // NOTE: GPT-5.x and Gemini 3.5 model IDs are post-knowledge-cutoff guesses — adjust
 // the `model` strings below if a provider returns a 404 / "model not found".
@@ -149,6 +157,7 @@ async function callOpenai(model, system, user) {
         { role: 'user', content: user },
       ],
       max_completion_tokens: MAX_TOKENS,
+      reasoning_effort: 'low', // minimize reasoning tokens — faster / cheaper
       response_format: {
         type: 'json_schema',
         json_schema: { name: 'candidate_score', strict: true, schema: SCORE_SCHEMA },
@@ -195,6 +204,7 @@ async function callGoogle(model, system, user) {
         maxOutputTokens: MAX_TOKENS,
         responseMimeType: 'application/json',
         responseSchema: { type: 'OBJECT', properties: { score: { type: 'INTEGER' }, reasoning: { type: 'STRING' } }, required: ['score', 'reasoning'] },
+        thinkingConfig: { thinkingBudget: 0 }, // disable thinking — faster / cheaper
       },
     }
   )
@@ -224,9 +234,47 @@ function parseScore(raw) {
 
 // --- Build the same prompt payload scoreApplication() uses ---------------------------
 
+// The CV text the scorer should see. Mirrors the proposed fix: use resume_text when
+// present, otherwise recover it from resume_parsed (the cached OCR result) — its
+// resume_text field when available, else synthesized from the structured fields.
+// Mirror worker/cv-parser.ts looksLikeText: the regex extractor emits short binary
+// garbage that is non-empty but unreadable — treat only long, mostly-readable text as real.
+const MIN_CV_TEXT_LEN = 200
+function looksLikeText(s) {
+  const t = (s ?? '').trim()
+  if (t.length < MIN_CV_TEXT_LEN) return false
+  const readable = (t.match(/[\p{L}\s]/gu) || []).length
+  return readable / t.length > 0.6
+}
+
+function cvText(app) {
+  if (looksLikeText(app.resume_text)) return app.resume_text
+  if (!app.resume_parsed) return null
+  let p
+  try {
+    p = JSON.parse(app.resume_parsed)
+  } catch {
+    return null
+  }
+  if (looksLikeText(p.resume_text)) return p.resume_text
+  const lines = []
+  if (p.summary) lines.push(`Summary: ${p.summary}`)
+  if (p.total_experience_years != null) lines.push(`Total experience (years): ${p.total_experience_years}`)
+  if (p.seniority) lines.push(`Seniority: ${p.seniority}`)
+  if (Array.isArray(p.education) && p.education.length) {
+    lines.push('Education:\n' + p.education.map((e) => `- ${e.degree ?? ''} @ ${e.school ?? ''}${e.year ? ` (${e.year})` : ''}`).join('\n'))
+  }
+  if (Array.isArray(p.work_history) && p.work_history.length) {
+    lines.push('Work history:\n' + p.work_history.map((w) => `- ${w.role ?? ''} @ ${w.company ?? ''} (${w.start ?? '?'}–${w.end ?? 'present'}${w.months ? `, ${w.months} mo` : ''})`).join('\n'))
+  }
+  if (Array.isArray(p.skills) && p.skills.length) lines.push('Skills: ' + p.skills.join(', '))
+  return lines.length ? lines.join('\n') : null
+}
+
 function buildUserContent(app, answers) {
   const parts = []
-  if (app.resume_text?.trim()) parts.push(`=== CV / Resume ===\n${app.resume_text}`)
+  const cv = cvText(app)
+  if (cv?.trim()) parts.push(`=== CV / Resume ===\n${cv}`)
   if (app.cover_letter?.trim()) parts.push(`=== Cover Letter ===\n${app.cover_letter}`)
   const own = answers.filter((a) => a.application_id === app.id)
   if (own.length > 0) {
@@ -270,16 +318,21 @@ async function main() {
     console.log(`Skipping (no API key): ${skipped.map((v) => v.key).join(', ')}`)
   }
 
-  console.log(`Fetching ${SAMPLE_SIZE} random applications from remote D1 (${DB_NAME})…`)
-  const apps = await d1Query(
-    `SELECT a.id, a.cover_letter, a.resume_text, a.ai_score AS prod_score,
-            jp.title AS position_title, sp.prompt AS scoring_prompt
-     FROM applications a
-     JOIN job_positions jp ON jp.id = a.position_id
-     JOIN scoring_prompts sp ON sp.position_id = a.position_id
-     ORDER BY RANDOM()
-     LIMIT ${SAMPLE_SIZE}`
-  )
+  const cols = `a.id, a.applicant_id, ap.full_name, a.cover_letter, a.resume_text, a.resume_parsed,
+                a.ai_score AS prod_score, jp.title AS position_title, sp.prompt AS scoring_prompt`
+  const sub = (like) =>
+    `SELECT * FROM (
+       SELECT ${cols}
+       FROM applications a
+       JOIN applicants ap ON ap.id = a.applicant_id
+       JOIN job_positions jp ON jp.id = a.position_id
+       JOIN scoring_prompts sp ON sp.position_id = a.position_id
+       WHERE jp.title LIKE '${like}'
+       ORDER BY (CASE WHEN a.resume_text IS NOT NULL AND TRIM(a.resume_text) <> '' THEN 0 ELSE 1 END), RANDOM()
+       LIMIT ${PER_POSITION}
+     )`
+  console.log(`Fetching ${PER_POSITION} per position [${POSITIONS.map((p) => p.label).join(', ')}] from remote D1 (${DB_NAME})…`)
+  const apps = await d1Query(POSITIONS.map((p) => sub(p.like)).join('\n     UNION ALL\n'))
   if (apps.length === 0) {
     console.error('No applications with a scoring prompt found.')
     process.exit(1)
@@ -302,6 +355,7 @@ async function main() {
       tasks.push(async () => {
         try {
           const raw = await CALLERS[v.provider](v.model, row.app.scoring_prompt, row.content)
+          if (process.env.DEBUG) console.error(`  [DEBUG] app ${row.app.id} / ${v.key} raw: ${JSON.stringify(raw).slice(0, 400)}`)
           row.scores[v.key] = parseScore(raw)
         } catch (e) {
           const m = e.message || String(e)
@@ -318,7 +372,7 @@ async function main() {
 
   // Table
   const header =
-    pad('ID', 6) + pad('Position', 22) + padLeft('prod', 6) +
+    pad('appID', 6) + pad('applID', 7) + pad('Name', 16) + pad('Position', 16) + padLeft('prod', 6) +
     active.map((v) => padLeft(v.key, 9)).join('') + '  ' + padLeft('spread', 7)
   console.log(header)
   console.log('-'.repeat(header.length))
@@ -326,7 +380,7 @@ async function main() {
   const sums = Object.fromEntries(active.map((v) => [v.key, { total: 0, n: 0 }]))
   for (const row of rows) {
     if (!row.content) {
-      console.log(pad(row.app.id, 6) + pad(row.app.position_title, 22) + '  (no scorable content — skipped)')
+      console.log(pad(row.app.id, 6) + pad(row.app.applicant_id, 7) + pad(row.app.full_name ?? '—', 16) + pad(row.app.position_title, 16) + '  (no scorable content — skipped)')
       continue
     }
     const vals = active.map((v) => row.scores[v.key])
@@ -341,7 +395,9 @@ async function main() {
     }
     console.log(
       pad(row.app.id, 6) +
-        pad(row.app.position_title, 22) +
+        pad(row.app.applicant_id, 7) +
+        pad(row.app.full_name ?? '—', 16) +
+        pad(row.app.position_title, 16) +
         padLeft(row.app.prod_score ?? '—', 6) +
         vals.map((s) => padLeft(s ?? '—', 9)).join('') +
         '  ' +
@@ -351,7 +407,7 @@ async function main() {
 
   console.log('-'.repeat(header.length))
   console.log(
-    pad('', 6) + pad('AVERAGE', 22) + padLeft('', 6) +
+    pad('', 6) + pad('', 7) + pad('', 16) + pad('AVERAGE', 16) + padLeft('', 6) +
     active.map((v) => padLeft(sums[v.key].n ? (sums[v.key].total / sums[v.key].n).toFixed(1) : '—', 9)).join('')
   )
   console.log('\nLegend: ds-flash = current production setup. spread = max−min across the models (excludes prod).')
