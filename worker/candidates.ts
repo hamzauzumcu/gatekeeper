@@ -254,9 +254,19 @@ export async function listCandidates(
   let idx = 0
 
   if (q) {
-    idx++
-    conditions.push(`(ap.full_name LIKE ?${idx} OR ap.email LIKE ?${idx})`)
-    bindings.push(`%${q}%`)
+    // A purely numeric query is treated as an applicant ID lookup, while still
+    // matching name/email so e.g. "6052" finds the candidate whose id is 6052.
+    const asId = /^\d+$/.test(q.trim()) ? Number(q.trim()) : null
+    if (asId !== null && Number.isSafeInteger(asId)) {
+      const likeIdx = ++idx
+      const idIdx = ++idx
+      conditions.push(`(ap.full_name LIKE ?${likeIdx} OR ap.email LIKE ?${likeIdx} OR ap.id = ?${idIdx})`)
+      bindings.push(`%${q}%`, asId)
+    } else {
+      idx++
+      conditions.push(`(ap.full_name LIKE ?${idx} OR ap.email LIKE ?${idx})`)
+      bindings.push(`%${q}%`)
+    }
   }
 
   if (countries.length > 0) {

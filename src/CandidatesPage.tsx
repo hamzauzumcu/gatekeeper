@@ -973,7 +973,7 @@ export default function CandidatesPage() {
           <div className="relative min-w-48 flex-1">
             <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search by name or email…"
+              placeholder="Search by ID, name or email…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className="pl-9"
