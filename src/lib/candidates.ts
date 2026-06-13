@@ -259,6 +259,102 @@ export async function fetchCandidate(id: number): Promise<CandidateDetail> {
   return { applicant: data.applicant, applications: data.applications }
 }
 
+// --- FX / USD salary estimate ---------------------------------------------
+
+export type FxRates = { base: 'USD'; rates: Record<string, number>; fetched_at: number | null }
+
+const FX_CACHE_KEY = 'gatekeeper:fx'
+const FX_TTL_MS = 24 * 60 * 60 * 1000 // 1 day
+
+let fxCache: Promise<FxRates | null> | null = null
+
+function readFxFromStorage(): FxRates | null {
+  try {
+    const raw = localStorage.getItem(FX_CACHE_KEY)
+    if (!raw) return null
+    const { at, data } = JSON.parse(raw) as { at: number; data: FxRates }
+    if (Date.now() - at > FX_TTL_MS) return null
+    return data
+  } catch {
+    return null
+  }
+}
+
+function writeFxToStorage(data: FxRates) {
+  try {
+    localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ at: Date.now(), data }))
+  } catch {
+    // storage full / unavailable — fall back to network next time
+  }
+}
+
+// Fetch USD-based rates, cached for a day in localStorage (per browser) and at
+// the edge. Module-level promise dedupes concurrent calls within a page load.
+export function fetchFxRates(): Promise<FxRates | null> {
+  if (!fxCache) {
+    const cached = readFxFromStorage()
+    if (cached) {
+      fxCache = Promise.resolve(cached)
+    } else {
+      fxCache = fetch('/api/fx')
+        .then(async (res) => {
+          const data = (await res.json()) as
+            | ({ ok: true } & FxRates)
+            | { ok: false; error: string }
+          if (!res.ok || !data.ok) return null
+          const fx: FxRates = { base: 'USD', rates: data.rates, fetched_at: data.fetched_at }
+          writeFxToStorage(fx)
+          return fx
+        })
+        .catch(() => null)
+    }
+  }
+  return fxCache
+}
+
+// Map common currency notations to ISO codes. Default is TRY (Turkish app).
+function detectCurrency(s: string): string {
+  const t = s.toLowerCase()
+  if (/\$|usd|dollar|dolar/.test(t)) return 'USD'
+  if (/€|eur|euro/.test(t)) return 'EUR'
+  if (/£|gbp|sterling|pound/.test(t)) return 'GBP'
+  if (/₺|\btl\b|try|lira/.test(t)) return 'TRY'
+  return 'TRY'
+}
+
+// Pull numeric amounts out of a salary string, handling "40.000", "40,000",
+// "40k" and ranges like "40000-50000".
+function parseAmounts(s: string): number[] {
+  const out: number[] = []
+  const re = /(\d[\d.,]*)\s*(k|bin|m)?/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    let n = parseInt(m[1].replace(/[.,]/g, ''), 10)
+    if (isNaN(n)) continue
+    const suffix = (m[2] ?? '').toLowerCase()
+    if (suffix === 'k' || suffix === 'bin') n *= 1000
+    else if (suffix === 'm') n *= 1_000_000
+    if (n >= 100) out.push(n)
+  }
+  return out
+}
+
+// Estimate a USD value (or range) for a salary answer. Returns a display string
+// like "≈ $1,500" / "≈ $1,500–$1,900", or null if it can't be estimated.
+export function estimateUsdSalary(raw: string | null, fx: FxRates | null): string | null {
+  if (!raw || !fx) return null
+  const currency = detectCurrency(raw)
+  const rate = currency === 'USD' ? 1 : fx.rates[currency]
+  if (currency === 'USD' || !rate) return null // already USD or unknown currency
+  const amounts = parseAmounts(raw)
+  if (amounts.length === 0) return null
+  const fmt = (n: number) =>
+    '$' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.round(n / rate))
+  const lo = Math.min(...amounts)
+  const hi = Math.max(...amounts)
+  return lo === hi ? `≈ ${fmt(lo)}` : `≈ ${fmt(lo)}–${fmt(hi)}`
+}
+
 export function formatSalary(raw: string | null): string {
   if (!raw) return '—'
   const s = raw.trim()

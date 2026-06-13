@@ -26,7 +26,7 @@ export async function openaiParsePdf(apiKey: string, pdfBuffer: ArrayBuffer, pro
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        max_tokens: 2048,
+        max_tokens: 4096,
         messages: [
           {
             role: 'user',

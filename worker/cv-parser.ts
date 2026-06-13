@@ -100,7 +100,7 @@ Rules:
         { role: 'system', content: systemPrompt },
         { role: 'user', content: resume_text },
       ],
-      { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true },
+      { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true, maxTokens: 8192 },
     )
   } else {
     // Scanned PDF — send raw PDF to GPT-4o which handles OCR natively
@@ -114,7 +114,22 @@ Rules:
 
   // Strip ```json ... ``` wrapper if the model adds one
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()
-  const fields = JSON.parse(jsonText)
+
+  if (!jsonText) throw new Error(`CV parse: empty model response (app ${applicationId})`)
+
+  // Surface what the model actually returned when parsing fails — otherwise the raw
+  // JSON.parse error ("Unterminated string…", "I'm sorry,"…) hides the cause:
+  // truncation (output cut mid-string), a refusal (prose instead of JSON), or malformed JSON.
+  let fields: any
+  try {
+    fields = JSON.parse(jsonText)
+  } catch (e) {
+    const snippet =
+      jsonText.length > 600 ? `${jsonText.slice(0, 300)} … ${jsonText.slice(-300)}` : jsonText
+    throw new Error(
+      `CV parse failed (app ${applicationId}, ${jsonText.length} chars): ${(e as Error).message} — model output: ${snippet}`
+    )
+  }
 
   if (Array.isArray(fields.education)) {
     for (const entry of fields.education) {

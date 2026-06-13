@@ -34,6 +34,33 @@ app.get('/api/llm/ping', async (c) => {
   return c.json({ ok: true, reply })
 })
 
+// Live FX rates (USD base). Used to show an estimated USD salary on the
+// candidate detail page. Cached at the edge for 24h — rates barely move and the
+// upstream is a free, key-less endpoint.
+app.get('/api/fx', async (c) => {
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/USD', {
+      cf: { cacheTtl: 86400, cacheEverything: true },
+    })
+    const data = (await res.json()) as {
+      result?: string
+      rates?: Record<string, number>
+      time_last_update_unix?: number
+    }
+    if (data.result !== 'success' || !data.rates) {
+      return c.json({ ok: false, error: 'fx upstream error' }, 502)
+    }
+    return c.json({
+      ok: true,
+      base: 'USD',
+      rates: data.rates,
+      fetched_at: data.time_last_update_unix ?? null,
+    })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'fx error' }, 502)
+  }
+})
+
 // CSV import — browser sends normalized rows in chunks.
 // NOTE: no auth for now (admin tool). Shared secret / Access will be added in prod.
 app.post('/api/import', async (c) => {

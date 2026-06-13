@@ -19,6 +19,9 @@ import {
   formatDate,
   formatRelativeTime,
   formatSalary,
+  fetchFxRates,
+  estimateUsdSalary,
+  type FxRates,
   updateApplicationStatus,
   updateApplicantsFitStatus,
   fetchNotes,
@@ -1504,10 +1507,21 @@ function CandidateDetailView({
     () => new Map(applications.map((a) => [a.id, a.status]))
   )
   const [fitStatus, setFitStatus] = useState<string | null>(applicant.fit_status ?? null)
+  const [fx, setFx] = useState<FxRates | null>(null)
 
   useEffect(() => {
     setFitStatus(applicant.fit_status ?? null)
   }, [applicant.id])
+
+  useEffect(() => {
+    let active = true
+    fetchFxRates().then((rates) => {
+      if (active) setFx(rates)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   function handleFitClick(status: string) {
     const next = fitStatus === status ? null : status
@@ -1773,16 +1787,23 @@ function CandidateDetailView({
                         Application Form
                       </div>
                       <dl className="space-y-3">
-                        {app.answers.map((a, i) => (
-                          <div key={i} className="text-sm">
-                            <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
-                            <dd className="font-medium">
-                              {/salary|maaş|maas|ücret|ucret|wage|compensation/i.test(a.label)
-                                ? formatSalary(a.value)
-                                : (a.value ?? '—')}
-                            </dd>
-                          </div>
-                        ))}
+                        {app.answers.map((a, i) => {
+                          const isSalary = /salary|maaş|maas|ücret|ucret|wage|compensation/i.test(a.label)
+                          const usd = isSalary ? estimateUsdSalary(a.value, fx) : null
+                          return (
+                            <div key={i} className="text-sm">
+                              <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
+                              <dd className="font-medium">
+                                {isSalary ? formatSalary(a.value) : (a.value ?? '—')}
+                                {usd && (
+                                  <span className="ml-1.5 font-normal text-muted-foreground">
+                                    {usd} <span className="text-xs">(est. USD)</span>
+                                  </span>
+                                )}
+                              </dd>
+                            </div>
+                          )
+                        })}
                       </dl>
                     </div>
                   )}

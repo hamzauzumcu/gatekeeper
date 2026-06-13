@@ -68,7 +68,6 @@ export const CV_COLUMNS: CvColumnDef[] = [
 // JSON schema description sent to the model.
 // Add any new field here as well.
 export const PARSE_SCHEMA = `{
-  "resume_text": "full CV content as plain text — keep section headings",
   "summary": "concise 2-sentence professional summary in English, e.g. '5 years of React experience, last 2 years as frontend lead at Getir.'",
   "total_experience_years": "total work experience in years (decimal, e.g. 3.5), null if unknown",
   "seniority": "exactly one of: intern, junior, mid, senior, lead — inferred from titles and total experience; null if unclear",
