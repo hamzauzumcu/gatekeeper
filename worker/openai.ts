@@ -7,12 +7,23 @@ const OPENAI_BASE_URL = 'https://api.openai.com'
 // job's alarm loop indefinitely. See the same guard in deepseek.ts.
 const REQUEST_TIMEOUT_MS = 120_000
 
+// Reject oversized PDFs before encoding. base64-encoding holds several copies of the file
+// in memory at once (raw bytes → binary string → base64 → data URL → JSON body ≈ 5×), so a
+// single large scan can exceed the Durable Object's 128 MB isolate limit on its own and
+// reset the whole job. Fail this one item cleanly instead. ~12 MB ⇒ ~60 MB peak, safe.
+const MAX_PDF_BYTES = 12 * 1024 * 1024
+
 export async function openaiParsePdf(
   apiKey: string,
   pdfBuffer: ArrayBuffer,
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  if (pdfBuffer.byteLength > MAX_PDF_BYTES) {
+    throw new Error(
+      `PDF too large for OCR: ${(pdfBuffer.byteLength / 1024 / 1024).toFixed(1)} MB (max ${MAX_PDF_BYTES / 1024 / 1024} MB)`,
+    )
+  }
   const bytes = new Uint8Array(pdfBuffer)
   let binary = ''
   for (let i = 0; i < bytes.length; i += 0x8000) {
