@@ -7,9 +7,12 @@
 // time) until none remain or the job is stopped. Within each page it processes BATCH-size
 // items concurrently per alarm() tick, so /stop stays responsive and each tick stays cheap.
 //
-// Failed items keep their old version, so the pending query would return them forever —
-// we track their IDs in `failedIds` and exclude them from later pages. This guarantees
-// every item is attempted at most once and the job always terminates.
+// Failed items keep their old version, so the pending query would return them forever.
+// We page by an id watermark (`cursorId`): each page is the next block of pending rows
+// with `id > cursorId`, processed in id order, and the watermark advances to the page's
+// max id. Failed rows stay below the watermark, so they're never refetched. This keeps
+// the bound-parameter count constant, guarantees every item is attempted at most once,
+// and ensures the job always terminates.
 
 import { DurableObject } from 'cloudflare:workers'
 import { scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
@@ -26,8 +29,8 @@ export interface SyncJobState {
   processed: number
   failed: number
   cursor: number
+  cursorId: number
   batchSize: number
-  failedIds: number[]
   errors: { id: number; error: string }[]
   fatalError: string | null
   startedAt: string | null
@@ -55,8 +58,8 @@ function idleState(): SyncJobState {
     processed: 0,
     failed: 0,
     cursor: 0,
+    cursorId: 0,
     batchSize: 5,
-    failedIds: [],
     errors: [],
     fatalError: null,
     startedAt: null,
@@ -76,7 +79,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     let firstPage: number[]
     try {
       total = await this.countPending(kind)
-      firstPage = total === 0 ? [] : await this.fetchPendingPage(kind, [], PAGE_SIZE)
+      firstPage = total === 0 ? [] : await this.fetchPendingPage(kind, 0, PAGE_SIZE)
     } catch (e) {
       const state: SyncJobState = {
         ...idleState(),
@@ -97,14 +100,15 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
       processed: 0,
       failed: 0,
       cursor: 0,
+      cursorId: 0,
       batchSize: Math.max(1, Math.min(20, Math.round(batchSize) || 5)),
-      failedIds: [],
       errors: [],
       fatalError: null,
       startedAt: now,
       finishedAt: total === 0 ? now : null,
     }
 
+    await this.ctx.storage.delete('stopRequested')
     await this.ctx.storage.put('page', firstPage)
     await this.ctx.storage.put('state', state)
     if (state.status === 'running') {
@@ -114,13 +118,27 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
   }
 
   async status(): Promise<SyncJobState> {
-    return this.getState()
+    const state = await this.getState()
+    // Self-heal: a job marked running/stopping must always have a pending alarm.
+    // If none is scheduled, the alarm loop died (eviction, deploy, or an invocation
+    // killed mid-batch) — re-kick it. The browser polls status() every ~1.5s, so a
+    // stalled job resumes on its own. alarm() guards on status, so this is idempotent.
+    if (state.status === 'running' || state.status === 'stopping') {
+      const pending = await this.ctx.storage.getAlarm()
+      if (pending === null) await this.ctx.storage.setAlarm(Date.now())
+    }
+    return state
   }
 
-  // Request a stop. The alarm loop finalizes to 'stopped' before the next batch.
+  // Request a stop. We set a dedicated `stopRequested` flag (the source of truth for
+  // the stop signal) separately from the mutable progress `state`. The alarm loop owns
+  // `state` and may hold a stale copy across a long LLM batch; if stop only mutated
+  // `state`, the alarm's end-of-batch persist would clobber it (lost update) and the
+  // job would never stop. The flag survives that persist because the alarm re-reads it.
   async stop(): Promise<SyncJobState> {
     const state = await this.getState()
     if (state.status === 'running') {
+      await this.ctx.storage.put('stopRequested', true)
       state.status = 'stopping'
       await this.ctx.storage.put('state', state)
     }
@@ -133,11 +151,9 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     const state = await this.getState()
     if (state.status !== 'running' && state.status !== 'stopping') return
 
-    if (state.status === 'stopping') {
-      state.status = 'stopped'
-      state.finishedAt = new Date().toISOString()
-      await this.ctx.storage.put('state', state)
-      return
+    // Honor a stop requested before this tick (or while it was waiting to fire).
+    if (state.status === 'stopping' || (await this.ctx.storage.get<boolean>('stopRequested'))) {
+      return this.finalizeStopped(state)
     }
 
     let page = (await this.ctx.storage.get<number[]>('page')) ?? []
@@ -146,7 +162,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     if (state.cursor >= page.length) {
       let next: number[]
       try {
-        next = await this.fetchPendingPage(state.kind!, state.failedIds, PAGE_SIZE)
+        next = await this.fetchPendingPage(state.kind!, state.cursorId, PAGE_SIZE)
       } catch (e) {
         state.status = 'error'
         state.fatalError = e instanceof Error ? e.message : 'failed to load next page'
@@ -173,15 +189,31 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
         state.processed++
       } else {
         state.failed++
-        state.failedIds.push(chunk[i])
         const msg = r.reason instanceof Error ? r.reason.message : 'failed'
         if (state.errors.length < MAX_ERRORS) state.errors.push({ id: chunk[i], error: msg })
       }
     }
     state.cursor += chunk.length
+    // Advance the watermark past everything in this chunk (page is ordered by id, so the
+    // last element is the max). Failed rows stay below it and are never refetched.
+    if (chunk.length > 0) state.cursorId = chunk[chunk.length - 1]
+
+    // A stop may have arrived during the (long) batch await above. Re-check the flag
+    // before persisting/rescheduling so we don't write our now-stale `running` state
+    // back over the stop request. We keep this batch's progress counters either way.
+    if (await this.ctx.storage.get<boolean>('stopRequested')) {
+      return this.finalizeStopped(state)
+    }
 
     await this.ctx.storage.put('state', state)
     await this.ctx.storage.setAlarm(Date.now())
+  }
+
+  private async finalizeStopped(state: SyncJobState): Promise<void> {
+    state.status = 'stopped'
+    state.finishedAt = new Date().toISOString()
+    await this.ctx.storage.put('state', state)
+    await this.ctx.storage.delete('stopRequested')
   }
 
   private async getState(): Promise<SyncJobState> {
@@ -227,25 +259,24 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     return row?.n ?? 0
   }
 
-  // One page of pending IDs, ordered by id, excluding the given (failed) IDs.
-  private async fetchPendingPage(kind: SyncKind, excludeIds: number[], pageSize: number): Promise<number[]> {
+  // One page of pending IDs with id > afterId, ordered by id. The fixed three-parameter
+  // shape never grows with the failure count, so it can't hit D1's bound-parameter limit.
+  private async fetchPendingPage(kind: SyncKind, afterId: number, pageSize: number): Promise<number[]> {
     if (kind === 'scores') {
-      const exclude = excludeIds.length > 0 ? ` AND a.id NOT IN (${excludeIds.map(() => '?').join(',')})` : ''
       const { results } = await this.env.DB
-        .prepare(`SELECT a.id ${PENDING_SCORES_FROM_WHERE}${exclude} ORDER BY a.id LIMIT ?`)
-        .bind(...excludeIds, pageSize)
+        .prepare(`SELECT a.id ${PENDING_SCORES_FROM_WHERE} AND a.id > ? ORDER BY a.id LIMIT ?`)
+        .bind(afterId, pageSize)
         .all<{ id: number }>()
       return results.map((r) => r.id)
     }
-    const exclude = excludeIds.length > 0 ? ` AND id NOT IN (${excludeIds.map(() => '?').join(',')})` : ''
     const { results } = await this.env.DB
       .prepare(
         `SELECT id FROM applications
-         WHERE resume_url IS NOT NULL AND resume_parse_version < ?${exclude}
+         WHERE resume_url IS NOT NULL AND resume_parse_version < ? AND id > ?
          ORDER BY id
          LIMIT ?`,
       )
-      .bind(PARSE_VERSION, ...excludeIds, pageSize)
+      .bind(PARSE_VERSION, afterId, pageSize)
       .all<{ id: number }>()
     return results.map((r) => r.id)
   }

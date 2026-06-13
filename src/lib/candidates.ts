@@ -439,8 +439,8 @@ export type SyncJobState = {
   processed: number
   failed: number
   cursor: number
+  cursorId: number
   batchSize: number
-  failedIds: number[]
   errors: { id: number; error: string }[]
   fatalError: string | null
   startedAt: string | null
