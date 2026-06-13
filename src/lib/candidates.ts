@@ -427,6 +427,51 @@ export async function syncCv(opts: { limit?: number; dryRun?: boolean } = {}): P
   return data
 }
 
+// ── Cloud sync jobs (Durable Object) ───────────────────────────────────────
+
+export type SyncJobKind = 'scores' | 'cv'
+export type SyncJobStatus = 'idle' | 'running' | 'stopping' | 'done' | 'stopped' | 'error'
+
+export type SyncJobState = {
+  kind: SyncJobKind | null
+  status: SyncJobStatus
+  total: number
+  processed: number
+  failed: number
+  cursor: number
+  batchSize: number
+  failedIds: number[]
+  errors: { id: number; error: string }[]
+  fatalError: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export async function startSyncJob(kind: SyncJobKind, batchSize: number): Promise<SyncJobState> {
+  const res = await fetch(`/api/admin/sync/${kind}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ batchSize }),
+  })
+  const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to start sync')
+  return data.state
+}
+
+export async function fetchSyncStatus(kind: SyncJobKind): Promise<SyncJobState> {
+  const res = await fetch(`/api/admin/sync/${kind}/status`)
+  const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch status')
+  return data.state
+}
+
+export async function stopSyncJob(kind: SyncJobKind): Promise<SyncJobState> {
+  const res = await fetch(`/api/admin/sync/${kind}/stop`, { method: 'POST' })
+  const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to stop sync')
+  return data.state
+}
+
 export async function clearData(scope: 'cv_data' | 'scores' | 'all_candidates'): Promise<{ deleted?: number; updated?: number }> {
   const res = await fetch('/api/admin/data', {
     method: 'DELETE',

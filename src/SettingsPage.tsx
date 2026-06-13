@@ -5,12 +5,13 @@ import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react'
 import {
   fetchScoringPrompts,
   saveScoringPrompt,
-  fetchPendingScoreIds,
-  scoreOneApplication,
-  fetchPendingCvIds,
-  parseSingleCv,
+  startSyncJob,
+  fetchSyncStatus,
+  stopSyncJob,
   clearData,
   type PositionWithPrompt,
+  type SyncJobKind,
+  type SyncJobState,
 } from './lib/candidates'
 import { formatDate } from './lib/candidates'
 
@@ -326,6 +327,102 @@ function SyncPanel({
   )
 }
 
+// ── Cloud sync job hook (start / poll / stop) ──────────────────────────────
+
+function isTerminal(status: SyncJobState['status']): boolean {
+  return status === 'idle' || status === 'done' || status === 'stopped' || status === 'error'
+}
+
+function toPhase(state: SyncJobState | null, starting: boolean): SyncPhase {
+  if (starting) return 'fetching'
+  if (!state) return 'idle'
+  switch (state.status) {
+    case 'running':
+    case 'stopping':
+      return 'running'
+    case 'done':
+      return 'done'
+    case 'stopped':
+      return 'stopped'
+    case 'error':
+      return 'error'
+    default:
+      return 'idle'
+  }
+}
+
+const POLL_INTERVAL_MS = 1500
+
+function useSyncJob(kind: SyncJobKind) {
+  const [state, setState] = useState<SyncJobState | null>(null)
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function stopPolling() {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  function startPolling() {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await fetchSyncStatus(kind)
+        setState(s)
+        if (isTerminal(s.status)) stopPolling()
+      } catch {
+        // transient network error — keep last state and keep polling
+      }
+    }, POLL_INTERVAL_MS)
+  }
+
+  // On mount, load current status and resume polling if a job is already running.
+  useEffect(() => {
+    let cancelled = false
+    fetchSyncStatus(kind)
+      .then((s) => {
+        if (cancelled) return
+        setState(s)
+        if (!isTerminal(s.status)) startPolling()
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      stopPolling()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind])
+
+  async function start(batchSize: number) {
+    setError(null)
+    setStarting(true)
+    try {
+      const s = await startSyncJob(kind, batchSize)
+      setState(s)
+      if (!isTerminal(s.status)) startPolling()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to start')
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  async function stop() {
+    try {
+      const s = await stopSyncJob(kind)
+      setState(s)
+      if (!isTerminal(s.status)) startPolling()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to stop')
+    }
+  }
+
+  return { state, starting, error, start, stop }
+}
+
 // ── Main settings page ─────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -345,133 +442,12 @@ export default function SettingsPage() {
     setPositions((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
   }
 
-  // ── Sync AI Scores state ───────────────────────────────────────────────
-  const [scoresPhase, setScoresPhase] = useState<SyncPhase>('idle')
-  const [scoresTotal, setScoresTotal] = useState(0)
-  const [scoresProcessed, setScoresProcessed] = useState(0)
-  const [scoresFailed, setScoresFailed] = useState(0)
-  const [scoresErrors, setScoresErrors] = useState<{ id: number; error: string }[]>([])
-  const [scoresFatalError, setScoresFatalError] = useState<string | null>(null)
+  // ── Cloud sync jobs (run server-side, survive tab close) ────────────────
+  const scores = useSyncJob('scores')
+  const cv = useSyncJob('cv')
+
   const [scoresBatchSize, setScoresBatchSize] = useState(5)
-  const scoresStopRef = useRef(false)
-
-  async function handleStartSync() {
-    scoresStopRef.current = false
-    setScoresPhase('fetching')
-    setScoresErrors([])
-    setScoresFatalError(null)
-    setScoresProcessed(0)
-    setScoresFailed(0)
-    setScoresTotal(0)
-
-    try {
-      const ids = await fetchPendingScoreIds()
-      setScoresTotal(ids.length)
-
-      if (ids.length === 0) {
-        setScoresPhase('done')
-        return
-      }
-
-      setScoresPhase('running')
-      let processed = 0
-      let failed = 0
-
-      for (let i = 0; i < ids.length; i += scoresBatchSize) {
-        if (scoresStopRef.current) break
-        const chunk = ids.slice(i, i + scoresBatchSize)
-        const results = await Promise.allSettled(chunk.map((id) => scoreOneApplication(id)))
-        for (let j = 0; j < results.length; j++) {
-          const r = results[j]
-          if (r.status === 'fulfilled') {
-            processed++
-          } else {
-            failed++
-            const msg = r.reason instanceof Error ? r.reason.message : 'score failed'
-            console.error(`[sync-scores] #${chunk[j]} failed:`, msg)
-            setScoresErrors((prev) => [...prev, { id: chunk[j], error: msg }])
-          }
-        }
-        setScoresProcessed(processed)
-        setScoresFailed(failed)
-      }
-
-      setScoresPhase(scoresStopRef.current ? 'stopped' : 'done')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Sync failed'
-      console.error('[sync-scores] fatal:', msg)
-      setScoresFatalError(msg)
-      setScoresPhase('error')
-    }
-  }
-
-  function handleStopScores() {
-    scoresStopRef.current = true
-  }
-
-  // ── CV Enhancer state ──────────────────────────────────────────────────
-  const [cvPhase, setCvPhase] = useState<SyncPhase>('idle')
-  const [cvTotal, setCvTotal] = useState(0)
-  const [cvProcessed, setCvProcessed] = useState(0)
-  const [cvFailed, setCvFailed] = useState(0)
-  const [cvErrors, setCvErrors] = useState<{ id: number; error: string }[]>([])
-  const [cvFatalError, setCvFatalError] = useState<string | null>(null)
   const [cvBatchSize, setCvBatchSize] = useState(5)
-  const cvStopRef = useRef(false)
-
-  async function handleStartCvSync() {
-    cvStopRef.current = false
-    setCvPhase('fetching')
-    setCvErrors([])
-    setCvFatalError(null)
-    setCvProcessed(0)
-    setCvFailed(0)
-    setCvTotal(0)
-
-    try {
-      const ids = await fetchPendingCvIds()
-      setCvTotal(ids.length)
-
-      if (ids.length === 0) {
-        setCvPhase('done')
-        return
-      }
-
-      setCvPhase('running')
-      let processed = 0
-      let failed = 0
-
-      for (let i = 0; i < ids.length; i += cvBatchSize) {
-        if (cvStopRef.current) break
-        const chunk = ids.slice(i, i + cvBatchSize)
-        const results = await Promise.allSettled(chunk.map((id) => parseSingleCv(id)))
-        for (let j = 0; j < results.length; j++) {
-          const r = results[j]
-          if (r.status === 'fulfilled') {
-            processed++
-          } else {
-            failed++
-            const msg = r.reason instanceof Error ? r.reason.message : 'parse failed'
-            console.error(`[cv-enhancer] #${chunk[j]} failed:`, msg)
-            setCvErrors((prev) => [...prev, { id: chunk[j], error: msg }])
-          }
-        }
-        setCvProcessed(processed)
-        setCvFailed(failed)
-      }
-
-      setCvPhase(cvStopRef.current ? 'stopped' : 'done')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Sync failed'
-      console.error('[cv-enhancer] fatal:', msg)
-      setCvFatalError(msg)
-      setCvPhase('error')
-    }
-  }
-
-  function handleStopCv() {
-    cvStopRef.current = true
-  }
 
   const promptedCount = positions.filter((p) => p.prompt).length
 
@@ -548,16 +524,16 @@ export default function SettingsPage() {
         <CardContent>
           <SyncPanel
             accent="bg-primary"
-            phase={scoresPhase}
-            total={scoresTotal}
-            processed={scoresProcessed}
-            failed={scoresFailed}
-            errors={scoresErrors}
-            fatalError={scoresFatalError}
+            phase={toPhase(scores.state, scores.starting)}
+            total={scores.state?.total ?? 0}
+            processed={scores.state?.processed ?? 0}
+            failed={scores.state?.failed ?? 0}
+            errors={scores.state?.errors ?? []}
+            fatalError={scores.state?.fatalError ?? scores.error}
             batchSize={scoresBatchSize}
             onBatchSizeChange={setScoresBatchSize}
-            onStart={handleStartSync}
-            onStop={handleStopScores}
+            onStart={() => scores.start(scoresBatchSize)}
+            onStop={scores.stop}
             disabled={promptedCount === 0}
             disabledHint="Save at least one prompt first."
             itemLabel="scored"
@@ -591,16 +567,16 @@ export default function SettingsPage() {
 
           <SyncPanel
             accent="bg-violet-500"
-            phase={cvPhase}
-            total={cvTotal}
-            processed={cvProcessed}
-            failed={cvFailed}
-            errors={cvErrors}
-            fatalError={cvFatalError}
+            phase={toPhase(cv.state, cv.starting)}
+            total={cv.state?.total ?? 0}
+            processed={cv.state?.processed ?? 0}
+            failed={cv.state?.failed ?? 0}
+            errors={cv.state?.errors ?? []}
+            fatalError={cv.state?.fatalError ?? cv.error}
             batchSize={cvBatchSize}
             onBatchSizeChange={setCvBatchSize}
-            onStart={handleStartCvSync}
-            onStop={handleStopCv}
+            onStart={() => cv.start(cvBatchSize)}
+            onStop={cv.stop}
             itemLabel="parsed"
           />
         </CardContent>

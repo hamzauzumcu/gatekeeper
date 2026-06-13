@@ -6,6 +6,18 @@ import { deepseekChat } from './deepseek'
 
 export const SCORE_VERSION = 1
 
+// Shared pending-scores predicate, used by the sync endpoints and the SyncJobDO.
+// An application needs (re)scoring when: the scoring schema version advanced, OR it was
+// never scored, OR it was scored before the position's prompt was last updated. The last
+// case means a prompt edit auto-re-queues affected candidates — no manual reset needed.
+export const PENDING_SCORES_FROM_WHERE = `FROM applications a
+  JOIN scoring_prompts sp ON sp.position_id = a.position_id
+  WHERE (
+    a.ai_score_version < ${SCORE_VERSION}
+    OR a.ai_scored_prompt_at IS NULL
+    OR a.ai_scored_prompt_at < sp.updated_at
+  )`
+
 export type ScoringPromptRow = {
   id: number
   position_id: number
@@ -38,18 +50,16 @@ export async function upsertScoringPrompt(
   positionId: number,
   prompt: string
 ): Promise<void> {
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO scoring_prompts (position_id, prompt, updated_at)
-         VALUES (?, ?, datetime('now'))
-         ON CONFLICT(position_id) DO UPDATE SET prompt = excluded.prompt, updated_at = excluded.updated_at`
-      )
-      .bind(positionId, prompt),
-    db
-      .prepare(`UPDATE applications SET ai_score_version = 0 WHERE position_id = ?`)
-      .bind(positionId),
-  ])
+  // Bumping updated_at is enough to re-queue this position's candidates: the pending
+  // query compares each application's ai_scored_prompt_at against this timestamp.
+  await db
+    .prepare(
+      `INSERT INTO scoring_prompts (position_id, prompt, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(position_id) DO UPDATE SET prompt = excluded.prompt, updated_at = excluded.updated_at`
+    )
+    .bind(positionId, prompt)
+    .run()
 }
 
 export async function scoreApplication(
@@ -61,7 +71,8 @@ export async function scoreApplication(
     .prepare(
       `SELECT a.id, a.cover_letter, a.resume_text,
               jp.title AS position_title,
-              sp.prompt AS scoring_prompt
+              sp.prompt AS scoring_prompt,
+              sp.updated_at AS prompt_updated_at
        FROM applications a
        JOIN job_positions jp ON jp.id = a.position_id
        LEFT JOIN scoring_prompts sp ON sp.position_id = jp.id
@@ -74,6 +85,7 @@ export async function scoreApplication(
       resume_text: string | null
       position_title: string
       scoring_prompt: string | null
+      prompt_updated_at: string | null
     }>()
 
   if (!row || !row.scoring_prompt) return
@@ -101,8 +113,13 @@ export async function scoreApplication(
 
   if (parts.length === 0) {
     await db
-      .prepare(`UPDATE applications SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = ? WHERE id = ?`)
-      .bind(SCORE_VERSION, applicationId)
+      .prepare(
+        `UPDATE applications
+         SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = ?,
+             ai_scored_prompt_at = ?, ai_scored_at = datetime('now')
+         WHERE id = ?`
+      )
+      .bind(SCORE_VERSION, row.prompt_updated_at, applicationId)
       .run()
     return
   }
@@ -123,8 +140,11 @@ export async function scoreApplication(
 
   await db
     .prepare(
-      `UPDATE applications SET ai_score = ?, ai_score_reasoning = ?, ai_score_version = ? WHERE id = ?`
+      `UPDATE applications
+       SET ai_score = ?, ai_score_reasoning = ?, ai_score_version = ?,
+           ai_scored_prompt_at = ?, ai_scored_at = datetime('now')
+       WHERE id = ?`
     )
-    .bind(score, reasoning, SCORE_VERSION, applicationId)
+    .bind(score, reasoning, SCORE_VERSION, row.prompt_updated_at, applicationId)
     .run()
 }

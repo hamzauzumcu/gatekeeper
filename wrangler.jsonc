@@ -19,6 +19,20 @@
 			"bucket_name": "gatekeeper-resumes"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SYNC_JOB",
+				"class_name": "SyncJobDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["SyncJobDO"]
+		}
+	],
 	"vars": {
 		"R2_PUBLIC_URL": "https://pub-63b663a358ae4694826a4342acd1f84c.r2.dev"
 	}

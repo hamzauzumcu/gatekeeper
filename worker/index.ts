@@ -5,7 +5,10 @@ import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, 
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
-import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, SCORE_VERSION } from './ai-scorer'
+import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
+import { SyncJobDO } from './sync-job-do'
+
+export { SyncJobDO }
 
 type Env = {
   Bindings: {
@@ -15,6 +18,7 @@ type Env = {
     RESUMES: R2Bucket
     R2_PUBLIC_URL: string
     TALLY_WEBHOOK_SECRET?: string
+    SYNC_JOB: DurableObjectNamespace<SyncJobDO>
   }
 }
 
@@ -264,13 +268,7 @@ app.put('/api/admin/scoring-prompts/:positionId', async (c) => {
 // Pending scores — returns application IDs that need scoring
 app.get('/api/admin/pending-scores', async (c) => {
   const { results } = await c.env.DB
-    .prepare(
-      `SELECT a.id FROM applications a
-       JOIN scoring_prompts sp ON sp.position_id = a.position_id
-       WHERE a.ai_score_version < ?
-       LIMIT 1000`
-    )
-    .bind(SCORE_VERSION)
+    .prepare(`SELECT a.id ${PENDING_SCORES_FROM_WHERE} LIMIT 1000`)
     .all<{ id: number }>()
   return c.json({ ok: true, ids: results.map((r) => r.id) })
 })
@@ -297,13 +295,8 @@ app.post('/api/admin/sync-scores', async (c) => {
   const dryRun = body.dryRun ?? false
 
   const { results } = await c.env.DB
-    .prepare(
-      `SELECT a.id FROM applications a
-       JOIN scoring_prompts sp ON sp.position_id = a.position_id
-       WHERE a.ai_score_version < ?
-       LIMIT ?`
-    )
-    .bind(SCORE_VERSION, limit)
+    .prepare(`SELECT a.id ${PENDING_SCORES_FROM_WHERE} LIMIT ?`)
+    .bind(limit)
     .all<{ id: number }>()
 
   if (dryRun) return c.json({ ok: true, pending: results.length })
@@ -320,15 +313,49 @@ app.post('/api/admin/sync-scores', async (c) => {
   }
 
   const { results: remaining } = await c.env.DB
-    .prepare(
-      `SELECT COUNT(*) AS n FROM applications a
-       JOIN scoring_prompts sp ON sp.position_id = a.position_id
-       WHERE a.ai_score_version < ?`
-    )
-    .bind(SCORE_VERSION)
+    .prepare(`SELECT COUNT(*) AS n ${PENDING_SCORES_FROM_WHERE}`)
     .all<{ n: number }>()
 
   return c.json({ ok: true, processed, failed, remaining: remaining[0]?.n ?? 0 })
+})
+
+// ── Cloud sync jobs (Durable Object) ───────────────────────────────────────
+// A single server-side job per kind ('scores' | 'cv') that the browser starts,
+// polls, and can stop. The job keeps running even if the tab closes.
+
+function resolveSyncKind(raw: string): 'scores' | 'cv' | null {
+  return raw === 'scores' || raw === 'cv' ? raw : null
+}
+
+function syncStub(c: { env: Env['Bindings'] }, kind: 'scores' | 'cv') {
+  return c.env.SYNC_JOB.get(c.env.SYNC_JOB.idFromName(kind))
+}
+
+// Start (or restart) a sync job
+app.post('/api/admin/sync/:kind/start', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  const kind = resolveSyncKind(c.req.param('kind'))
+  if (!kind) return c.json({ ok: false, error: 'invalid kind' }, 400)
+  let body: { batchSize?: number } = {}
+  try { body = await c.req.json() } catch { /* body optional */ }
+  const state = await syncStub(c, kind).start(kind, Number(body.batchSize) || 5)
+  return c.json({ ok: true, state })
+})
+
+// Live status of a sync job
+app.get('/api/admin/sync/:kind/status', async (c) => {
+  const kind = resolveSyncKind(c.req.param('kind'))
+  if (!kind) return c.json({ ok: false, error: 'invalid kind' }, 400)
+  const state = await syncStub(c, kind).status()
+  return c.json({ ok: true, state })
+})
+
+// Request a sync job to stop
+app.post('/api/admin/sync/:kind/stop', async (c) => {
+  const kind = resolveSyncKind(c.req.param('kind'))
+  if (!kind) return c.json({ ok: false, error: 'invalid kind' }, 400)
+  const state = await syncStub(c, kind).stop()
+  return c.json({ ok: true, state })
 })
 
 // Danger Zone — destructive data operations
@@ -345,7 +372,8 @@ app.delete('/api/admin/data', async (c) => {
 
   if (body.scope === 'scores') {
     const result = await c.env.DB.prepare(
-      `UPDATE applications SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = 0`
+      `UPDATE applications SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = 0,
+        ai_scored_prompt_at = NULL, ai_scored_at = NULL`
     ).run()
     return c.json({ ok: true, updated: result.meta.changes ?? 0 })
   }
