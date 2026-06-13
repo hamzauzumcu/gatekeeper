@@ -433,7 +433,7 @@ export async function getCandidate(
 ): Promise<CandidateDetail | null> {
   const applicant = await db
     .prepare(
-      `SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
+      `SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url, ap.fit_status,
               count(a.id) AS applications_count,
               max(a.submitted_at) AS latest_submitted_at,
               group_concat(DISTINCT p.title) AS positions,
