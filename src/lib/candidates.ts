@@ -28,7 +28,7 @@ export const FIT_STATUS_OPTIONS = [
 
 export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'
 
-export type CandidateAnswer = { label: string; type: string; value: string | null }
+export type CandidateAnswer = { question_id: number; label: string; type: string; value: string | null }
 
 export type CandidateApplication = {
   id: number
@@ -138,8 +138,32 @@ export type ActiveFilters = {
   max_score: string
 }
 
+// Table sort state. `key` is a column identifier: a base column ('name',
+// 'country', 'score', 'apply_date') or a question column as `q:<id>`.
+// `numeric` selects numeric (CAST) vs lexical ordering on the server.
+export type SortState = { key: string; dir: 'asc' | 'desc'; numeric: boolean }
+
 const FILTER_STORAGE_KEY = 'gk_candidate_filters'
 const COLUMN_STORAGE_KEY = 'gk_candidate_columns'
+const SORT_STORAGE_KEY = 'gk_candidate_sort'
+
+export function loadSavedSort(): SortState | null {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY)
+    if (raw) {
+      const p = JSON.parse(raw) as Record<string, unknown>
+      if (typeof p.key === 'string' && (p.dir === 'asc' || p.dir === 'desc')) {
+        return { key: p.key, dir: p.dir, numeric: p.numeric === true }
+      }
+    }
+  } catch {}
+  return null
+}
+
+export function saveSort(sort: SortState | null): void {
+  if (sort) localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort))
+  else localStorage.removeItem(SORT_STORAGE_KEY)
+}
 
 export function loadSavedFilters(): ActiveFilters {
   try {
@@ -230,7 +254,8 @@ export async function fetchCandidates(
   filters: ActiveFilters,
   extraCols: number[],
   offset = 0,
-  limit = 50
+  limit = 50,
+  sort: SortState | null = null
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
   filters.countries.forEach((c) => params.append('country', c))
@@ -244,6 +269,11 @@ export async function fetchCandidates(
   })
   if (filters.min_score) params.set('min_score', filters.min_score)
   if (filters.max_score) params.set('max_score', filters.max_score)
+  if (sort) {
+    params.set('sort', sort.key)
+    params.set('dir', sort.dir)
+    if (sort.numeric) params.set('sort_numeric', '1')
+  }
   const res = await fetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
@@ -364,6 +394,36 @@ export function formatSalary(raw: string | null): string {
     if (isNaN(n) || n < 100) return m
     return new Intl.NumberFormat('en-US').format(n)
   })
+}
+
+// Detect a salary value very likely entered in thousands (e.g. "220" meaning
+// 220,000 TRY) and propose the ×1000 correction. Returns null when the value is
+// non-numeric, a range, or already large enough (>= 10,000) to need no fixing.
+export function normalizeSalary(
+  raw: string | null
+): { value: number; suggested: string } | null {
+  if (!raw) return null
+  // Drop a trailing currency marker so "220 TL" is still recognised as numeric.
+  const stripped = raw.trim().replace(/\s*(tl|try|₺)\s*$/i, '').trim()
+  if (!stripped || !/^[\d.,\s]+$/.test(stripped)) return null
+  const n = parseInt(stripped.replace(/[.,\s]/g, ''), 10)
+  if (isNaN(n) || n <= 0 || n >= 10000) return null
+  return { value: n, suggested: String(n * 1000) }
+}
+
+// Overwrite a single application answer's raw value in the DB.
+export async function updateAnswerValue(
+  applicationId: number,
+  questionId: number,
+  value: string | null
+): Promise<void> {
+  const res = await fetch(`/api/applications/${applicationId}/answers/${questionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
 }
 
 export async function updateApplicationStatus(

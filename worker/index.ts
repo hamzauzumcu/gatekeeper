@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue } from './candidates'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
@@ -107,7 +107,10 @@ app.get('/api/candidates', async (c) => {
     .filter((f) => Number.isInteger(f.questionId) && f.op)
   const min_score = c.req.query('min_score') ?? ''
   const max_score = c.req.query('max_score') ?? ''
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score })
+  const sort = c.req.query('sort') ?? ''
+  const dir = c.req.query('dir') ?? ''
+  const sortNumeric = c.req.query('sort_numeric') === '1'
+  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, sort, dir, sortNumeric })
   return c.json({ ok: true, ...data })
 })
 
@@ -133,6 +136,27 @@ app.patch('/api/applications/:id/status', async (c) => {
   try {
     const updated = await updateApplicationStatus(c.env.DB, id, body.status)
     if (!updated) return c.json({ ok: false, error: 'application not found' }, 404)
+    return c.json({ ok: true })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
+  }
+})
+
+// Edit a single application answer's value (e.g. correct a salary entered in thousands)
+app.patch('/api/applications/:id/answers/:questionId', async (c) => {
+  const id = Number(c.req.param('id'))
+  const questionId = Number(c.req.param('questionId'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid application id' }, 400)
+  if (!Number.isInteger(questionId) || questionId <= 0) return c.json({ ok: false, error: 'invalid question id' }, 400)
+  let body: { value: string | null }
+  try {
+    body = await c.req.json<{ value: string | null }>()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  try {
+    const updated = await updateAnswerValue(c.env.DB, id, questionId, body.value)
+    if (!updated) return c.json({ ok: false, error: 'answer not found' }, 404)
     return c.json({ ok: true })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)

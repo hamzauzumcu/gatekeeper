@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus, Sparkles,
-  GitBranch, AtSign,
+  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -13,12 +13,17 @@ import {
   saveFilters,
   loadSavedColumns,
   saveColumns,
+  loadSavedSort,
+  saveSort,
+  type SortState,
   BASE_COLUMNS,
   loadHiddenBaseColumns,
   saveHiddenBaseColumns,
   formatDate,
   formatRelativeTime,
   formatSalary,
+  normalizeSalary,
+  updateAnswerValue,
   fetchFxRates,
   estimateUsdSalary,
   type FxRates,
@@ -544,6 +549,44 @@ function AnswerFilterEditor({
   )
 }
 
+// Clickable table header that drives column sorting. Cycles desc → asc → off.
+function SortHeader({
+  label,
+  sortKey,
+  numeric,
+  sort,
+  onSort,
+  className,
+  children,
+}: {
+  label: string
+  sortKey: string
+  numeric: boolean
+  sort: SortState | null
+  onSort: (key: string, numeric: boolean) => void
+  className?: string
+  children?: ReactNode
+}) {
+  const active = sort?.key === sortKey
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey, numeric)}
+        className="group inline-flex items-center gap-1 transition-colors hover:text-foreground"
+        title={`Sort by ${label}`}
+      >
+        {children ?? label}
+        {active ? (
+          sort!.dir === 'desc' ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />
+        ) : (
+          <ArrowUpDown className="size-3 opacity-0 transition-opacity group-hover:opacity-40" />
+        )}
+      </button>
+    </TableHead>
+  )
+}
+
 export default function CandidatesPage() {
   const [q, setQ] = useState('')
   const [filters, setFilters] = useState<ActiveFilters>(loadSavedFilters)
@@ -552,6 +595,7 @@ export default function CandidatesPage() {
   const [visibleQuestionIds, setVisibleQuestionIds] = useState<number[]>(loadSavedColumns)
   const [hiddenBaseColumns, setHiddenBaseColumns] = useState<BaseColumnKey[]>(loadHiddenBaseColumns)
   const isBaseVisible = (key: BaseColumnKey) => !hiddenBaseColumns.includes(key)
+  const [sort, setSort] = useState<SortState | null>(loadSavedSort)
 
   // Which fixed-filter chips are shown (a chip can be visible before it has a value).
   // Initialized from saved filters so persisted values reappear as chips on reload.
@@ -633,7 +677,7 @@ export default function CandidatesPage() {
       setOffset(0)
       setHasMore(false)
       setSelectedIds(new Set())
-      fetchCandidates(q, filters, extraColIds, 0, PAGE_SIZE)
+      fetchCandidates(q, filters, extraColIds, 0, PAGE_SIZE, sort)
         .then(({ candidates: page, total }) => {
           setCandidates(page)
           setTotal(total)
@@ -644,7 +688,7 @@ export default function CandidatesPage() {
         .finally(() => setLoading(false))
     }, 250)
     return () => clearTimeout(t)
-  }, [q, filters, visibleQuestionIds]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, filters, visibleQuestionIds, sort]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Intersection observer for infinite scroll
   useEffect(() => {
@@ -653,7 +697,7 @@ export default function CandidatesPage() {
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loadingMore && !loading) {
           setLoadingMore(true)
-          fetchCandidates(q, filters, extraColIds, offset, PAGE_SIZE)
+          fetchCandidates(q, filters, extraColIds, offset, PAGE_SIZE, sort)
             .then(({ candidates: page, total }) => {
               setCandidates((prev) => {
                 const merged = [...prev, ...page]
@@ -670,7 +714,7 @@ export default function CandidatesPage() {
     )
     obs.observe(sentinelRef.current)
     return () => obs.disconnect()
-  }, [hasMore, loadingMore, loading, offset, q, filters, visibleQuestionIds]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasMore, loadingMore, loading, offset, q, filters, visibleQuestionIds, sort]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
     const next = { ...filters, [key]: value }
@@ -689,6 +733,20 @@ export default function CandidatesPage() {
   function updateVisibleColumns(ids: number[]) {
     setVisibleQuestionIds(ids)
     saveColumns(ids)
+  }
+
+  // Cycle a column's sort: none → desc → asc → none (back to default order).
+  function toggleSort(key: string, numeric: boolean) {
+    setSort((prev) => {
+      const next: SortState | null =
+        !prev || prev.key !== key
+          ? { key, dir: 'desc', numeric }
+          : prev.dir === 'desc'
+            ? { key, dir: 'asc', numeric }
+            : null
+      saveSort(next)
+      return next
+    })
   }
 
   function toggleBaseColumn(key: BaseColumnKey) {
@@ -1127,24 +1185,36 @@ export default function CandidatesPage() {
                   {(allSelected || someSelected) && <Check className="size-2.5" />}
                 </button>
               </TableHead>
-              <TableHead>Name</TableHead>
-              {isBaseVisible('country') && <TableHead>Country</TableHead>}
+              <SortHeader label="Name" sortKey="name" numeric={false} sort={sort} onSort={toggleSort} />
+              {isBaseVisible('country') && (
+                <SortHeader label="Country" sortKey="country" numeric={false} sort={sort} onSort={toggleSort} />
+              )}
               {isBaseVisible('position') && <TableHead>Position</TableHead>}
               {isBaseVisible('salary') && <TableHead>Salary Expectation</TableHead>}
               {isBaseVisible('status') && <TableHead>Status</TableHead>}
               {isBaseVisible('score') && (
-                <TableHead className="w-20 text-center">
+                <SortHeader label="Score" sortKey="score" numeric sort={sort} onSort={toggleSort} className="w-20 text-center">
                   <span className="inline-flex items-center gap-1">
                     <Sparkles className="size-3 text-muted-foreground" />
                     Score
                   </span>
-                </TableHead>
+                </SortHeader>
               )}
-              {isBaseVisible('apply_date') && <TableHead>Apply date</TableHead>}
+              {isBaseVisible('apply_date') && (
+                <SortHeader label="Apply date" sortKey="apply_date" numeric={false} sort={sort} onSort={toggleSort} />
+              )}
               {visibleQuestions.map((q) => (
-                <TableHead key={q.id} className="max-w-40">
+                <SortHeader
+                  key={q.id}
+                  label={q.label}
+                  sortKey={`q:${q.id}`}
+                  numeric={q.type === 'number'}
+                  sort={sort}
+                  onSort={toggleSort}
+                  className="max-w-40"
+                >
                   <span className="block truncate" title={q.label}>{q.label}</span>
-                </TableHead>
+                </SortHeader>
               ))}
               {isBaseVisible('notes') && <TableHead className="w-10 text-center">Notes</TableHead>}
             </TableRow>
@@ -1508,6 +1578,32 @@ function CandidateDetailView({
   )
   const [fitStatus, setFitStatus] = useState<string | null>(applicant.fit_status ?? null)
   const [fx, setFx] = useState<FxRates | null>(null)
+  // Locally-applied salary corrections, keyed by `${applicationId}:${questionId}`.
+  const [answerOverrides, setAnswerOverrides] = useState<Map<string, string>>(new Map())
+  const [savingAnswers, setSavingAnswers] = useState<Set<string>>(new Set())
+
+  // Reset any pending overrides when switching to a different candidate.
+  useEffect(() => {
+    setAnswerOverrides(new Map())
+    setSavingAnswers(new Set())
+  }, [applicant.id])
+
+  async function applySalaryFix(appId: number, questionId: number, value: string) {
+    const key = `${appId}:${questionId}`
+    setSavingAnswers((prev) => new Set(prev).add(key))
+    try {
+      await updateAnswerValue(appId, questionId, value)
+      setAnswerOverrides((prev) => new Map(prev).set(key, value))
+    } catch {
+      // Leave the original value in place; the suggestion stays actionable.
+    } finally {
+      setSavingAnswers((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }
 
   useEffect(() => {
     setFitStatus(applicant.fit_status ?? null)
@@ -1789,18 +1885,38 @@ function CandidateDetailView({
                       <dl className="space-y-3">
                         {app.answers.map((a, i) => {
                           const isSalary = /salary|maaş|maas|ücret|ucret|wage|compensation/i.test(a.label)
-                          const usd = isSalary ? estimateUsdSalary(a.value, fx) : null
+                          const key = `${app.id}:${a.question_id}`
+                          const override = answerOverrides.get(key)
+                          const value = override ?? a.value
+                          const usd = isSalary ? estimateUsdSalary(value, fx) : null
+                          // Only suggest a fix while the value is still uncorrected.
+                          const suggestion = isSalary && override === undefined ? normalizeSalary(value) : null
+                          const saving = savingAnswers.has(key)
                           return (
                             <div key={i} className="text-sm">
                               <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
                               <dd className="font-medium">
-                                {isSalary ? formatSalary(a.value) : (a.value ?? '—')}
+                                {isSalary ? formatSalary(value) : (value ?? '—')}
                                 {usd && (
                                   <span className="ml-1.5 font-normal text-muted-foreground">
                                     {usd} <span className="text-xs">(est. USD)</span>
                                   </span>
                                 )}
                               </dd>
+                              {suggestion && (
+                                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                                  <span>Looks like thousands — did they mean {formatSalary(suggestion.suggested)}?</span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-6 px-2 text-xs"
+                                    disabled={saving}
+                                    onClick={() => applySalaryFix(app.id, a.question_id, suggestion.suggested)}
+                                  >
+                                    {saving ? 'Fixing…' : `Fix to ${formatSalary(suggestion.suggested)}`}
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                           )
                         })}

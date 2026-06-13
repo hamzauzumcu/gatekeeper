@@ -21,7 +21,7 @@ export type CandidateListItem = {
   extra_answers?: Record<string, string | null>
 }
 
-export type CandidateAnswer = { label: string; type: string; value: string | null }
+export type CandidateAnswer = { question_id: number; label: string; type: string; value: string | null }
 
 export type CandidateApplication = {
   id: number
@@ -72,29 +72,65 @@ const NO_VALUE_OPS = new Set(['is_empty', 'is_not_empty', 'is_true', 'is_false']
 
 type AnswerFilterResult = { sql: string; binding?: string | number }
 
+// Scalar subquery yielding the latest answer value for a question column.
+// Negative IDs refer to CV-parsed virtual columns; positive IDs to real questions.
+function answerSubquery(qId: number): string | null {
+  if (qId < 0) {
+    const col = CV_COLUMNS.find((c) => c.id === qId)
+    if (!col) return null
+    return `(SELECT json_extract(a_cv.resume_parsed, '${col.jsonPath}')
+      FROM applications a_cv WHERE a_cv.applicant_id = ap.id
+      ORDER BY a_cv.submitted_at DESC LIMIT 1)`
+  }
+  return `(SELECT aa_f.value
+    FROM applications a_f
+    JOIN application_answers aa_f ON aa_f.application_id = a_f.id
+    WHERE a_f.applicant_id = ap.id AND aa_f.question_id = ${qId}
+    ORDER BY a_f.submitted_at DESC LIMIT 1)`
+}
+
 function buildAnswerFilterCondition(
   qId: number,
   op: string,
   value: string,
   idx: number
 ): AnswerFilterResult | null {
-  // Negatif ID → CV parsed alan filtresi
-  if (qId < 0) {
-    const col = CV_COLUMNS.find((c) => c.id === qId)
-    if (!col) return null
-    const subq = `(SELECT json_extract(a_cv.resume_parsed, '${col.jsonPath}')
-      FROM applications a_cv WHERE a_cv.applicant_id = ap.id
-      ORDER BY a_cv.submitted_at DESC LIMIT 1)`
-    return buildFilterFromSubq(subq, op, value, idx)
-  }
-
-  const subq = `(SELECT aa_f.value
-    FROM applications a_f
-    JOIN application_answers aa_f ON aa_f.application_id = a_f.id
-    WHERE a_f.applicant_id = ap.id AND aa_f.question_id = ${qId}
-    ORDER BY a_f.submitted_at DESC LIMIT 1)`
-
+  const subq = answerSubquery(qId)
+  if (!subq) return null
   return buildFilterFromSubq(subq, op, value, idx)
+}
+
+// Build an ORDER BY clause from a client-supplied sort key. Unknown/empty keys
+// fall back to the default (most recently submitted first). NULL/empty values
+// always sort last regardless of direction so blanks don't crowd the top.
+function buildOrderBy(sort: string | undefined, dir: string | undefined, sortNumeric: boolean): string {
+  const direction = dir === 'asc' ? 'ASC' : 'DESC'
+  const fallback = 'ORDER BY latest_submitted_at DESC'
+  if (!sort) return fallback
+
+  let expr: string | null = null
+  let numeric = false
+  switch (sort) {
+    case 'name': expr = 'ap.full_name'; break
+    case 'country': expr = 'ap.country'; break
+    case 'apply_date': expr = 'latest_submitted_at'; break
+    case 'score': expr = 'ai_score'; numeric = true; break
+    default:
+      if (sort.startsWith('q:')) {
+        const qId = Number(sort.slice(2))
+        if (Number.isInteger(qId) && qId !== 0) {
+          const subq = answerSubquery(qId)
+          if (subq) { expr = subq; numeric = sortNumeric }
+        }
+      }
+  }
+  if (!expr) return fallback
+
+  const blanksLast = `(CASE WHEN COALESCE(${expr}, '') = '' THEN 1 ELSE 0 END)`
+  if (numeric) {
+    return `ORDER BY ${blanksLast}, CAST(${expr} AS REAL) ${direction}, ap.id DESC`
+  }
+  return `ORDER BY ${blanksLast}, ${expr} COLLATE NOCASE ${direction}, ap.id DESC`
 }
 
 function buildFilterFromSubq(subq: string, op: string, value: string, idx: number): AnswerFilterResult | null {
@@ -195,6 +231,9 @@ export async function listCandidates(
     answerFilters?: AnswerFilter[]
     min_score?: string
     max_score?: string
+    sort?: string
+    dir?: string
+    sortNumeric?: boolean
   }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const q = (opts.q ?? '').trim()
@@ -316,7 +355,7 @@ export async function listCandidates(
     LEFT JOIN job_positions p ON p.id = a.position_id
     ${where}
     GROUP BY ap.id
-    ORDER BY latest_submitted_at DESC
+    ${buildOrderBy(opts.sort, opts.dir, opts.sortNumeric ?? false)}
     LIMIT ${limit} OFFSET ${offset}`
 
   const countSql = `SELECT count(*) AS total FROM applicants ap ${where}`
@@ -419,23 +458,42 @@ export async function getCandidate(
     const placeholders = ids.map(() => '?').join(',')
     const ans = await db
       .prepare(
-        `SELECT aa.application_id, q.label, q.type, q.sort_order, aa.value
+        `SELECT aa.application_id, aa.question_id, q.label, q.type, q.sort_order, aa.value
          FROM application_answers aa
          JOIN position_questions q ON q.id = aa.question_id
          WHERE aa.application_id IN (${placeholders})
          ORDER BY q.sort_order`
       )
       .bind(...ids)
-      .all<{ application_id: number; label: string; type: string; value: string | null }>()
+      .all<{ application_id: number; question_id: number; label: string; type: string; value: string | null }>()
 
     const byApp = new Map<number, CandidateAnswer[]>()
     for (const r of ans.results ?? []) {
       const list = byApp.get(r.application_id) ?? []
-      list.push({ label: r.label, type: r.type, value: r.value })
+      list.push({ question_id: r.question_id, label: r.label, type: r.type, value: r.value })
       byApp.set(r.application_id, list)
     }
     for (const a of applications) a.answers = byApp.get(a.id) ?? []
   }
 
   return { applicant, applications }
+}
+
+// Overwrite a single application answer's raw value.
+// Used by manual edits (e.g. correcting a salary entered in thousands).
+// Returns true if a row was updated, false if no matching answer exists.
+export async function updateAnswerValue(
+  db: D1Database,
+  applicationId: number,
+  questionId: number,
+  value: string | null
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `UPDATE application_answers SET value = ?
+       WHERE application_id = ? AND question_id = ?`
+    )
+    .bind(value, applicationId, questionId)
+    .run()
+  return (res.meta.changes ?? 0) > 0
 }
