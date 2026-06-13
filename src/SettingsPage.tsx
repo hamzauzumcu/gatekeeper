@@ -8,6 +8,7 @@ import {
   startSyncJob,
   fetchSyncStatus,
   stopSyncJob,
+  resetSyncJob,
   clearData,
   type PositionWithPrompt,
   type SyncJobKind,
@@ -196,6 +197,7 @@ interface SyncPanelProps {
   onBatchSizeChange: (n: number) => void
   onStart: () => void
   onStop: () => void
+  onReset: () => void
   disabled?: boolean
   disabledHint?: string
   itemLabel: string
@@ -217,6 +219,7 @@ function SyncPanel({
   onBatchSizeChange,
   onStart,
   onStop,
+  onReset,
   disabled,
   disabledHint,
   itemLabel,
@@ -265,9 +268,16 @@ function SyncPanel({
           />
         </div>
         {running ? (
-          <Button size="sm" variant="destructive" onClick={onStop}>
-            Stop
-          </Button>
+          <>
+            <Button size="sm" variant="destructive" onClick={onStop}>
+              Stop
+            </Button>
+            {/* Escape hatch: if the job is wedged and Stop won't take, force it back to
+                idle. Skips the graceful batch boundary and clears all job state. */}
+            <Button size="sm" variant="outline" onClick={onReset}>
+              Force reset
+            </Button>
+          </>
         ) : (
           <Button size="sm" onClick={onStart} disabled={disabled}>
             Start Sync
@@ -445,7 +455,18 @@ function useSyncJob(kind: SyncJobKind) {
     }
   }
 
-  return { state, starting, error, start, stop }
+  // Force-reset a wedged job back to idle. Stops polling — the job is gone, not running.
+  async function reset() {
+    try {
+      const s = await resetSyncJob(kind)
+      setState(s)
+      stopPolling()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to reset')
+    }
+  }
+
+  return { state, starting, error, start, stop, reset }
 }
 
 // ── Main settings page ─────────────────────────────────────────────────────
@@ -564,6 +585,7 @@ export default function SettingsPage() {
             onBatchSizeChange={setScoresBatchSize}
             onStart={() => scores.start(scoresBatchSize, scoresPositionId)}
             onStop={scores.stop}
+            onReset={scores.reset}
             disabled={promptedCount === 0}
             disabledHint="Save at least one prompt first."
             itemLabel="scored"
@@ -610,6 +632,7 @@ export default function SettingsPage() {
             onBatchSizeChange={setCvBatchSize}
             onStart={() => cv.start(cvBatchSize)}
             onStop={cv.stop}
+            onReset={cv.reset}
             itemLabel="parsed"
           />
         </CardContent>

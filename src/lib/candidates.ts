@@ -644,6 +644,13 @@ export async function stopSyncJob(kind: SyncJobKind): Promise<SyncJobState> {
   return data.state
 }
 
+export async function resetSyncJob(kind: SyncJobKind): Promise<SyncJobState> {
+  const res = await fetch(`/api/admin/sync/${kind}/reset`, { method: 'POST' })
+  const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to reset sync')
+  return data.state
+}
+
 export async function clearData(scope: 'cv_data' | 'scores' | 'all_candidates'): Promise<{ deleted?: number; updated?: number }> {
   const res = await fetch('/api/admin/data', {
     method: 'DELETE',

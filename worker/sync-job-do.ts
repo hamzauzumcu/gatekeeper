@@ -237,6 +237,22 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     await this.ctx.storage.setAlarm(Date.now())
   }
 
+  // Force a job back to idle, regardless of its current state. Escape hatch for a job
+  // that's wedged — e.g. an alarm invocation killed mid-batch (CPU/eviction) with no open
+  // tab to trigger the status() self-heal, leaving it stuck in 'running'/'stopping' with
+  // no pending alarm. Unlike stop(), this does not wait for a graceful batch boundary: it
+  // aborts any in-flight requests, clears the alarm and all scratch state, and resets to
+  // idle so a fresh job can be started.
+  async reset(): Promise<SyncJobState> {
+    this.inFlight?.abort()
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.delete('stopRequested')
+    await this.ctx.storage.delete('page')
+    const state = idleState()
+    await this.ctx.storage.put('state', state)
+    return state
+  }
+
   private async finalizeStopped(state: SyncJobState): Promise<void> {
     state.status = 'stopped'
     state.finishedAt = new Date().toISOString()

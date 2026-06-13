@@ -436,6 +436,14 @@ app.post('/api/admin/sync/:kind/stop', async (c) => {
   return c.json({ ok: true, state })
 })
 
+// Force-reset a wedged sync job back to idle (escape hatch when stop won't take)
+app.post('/api/admin/sync/:kind/reset', async (c) => {
+  const kind = resolveSyncKind(c.req.param('kind'))
+  if (!kind) return c.json({ ok: false, error: 'invalid kind' }, 400)
+  const state = await syncStub(c, kind).reset()
+  return c.json({ ok: true, state })
+})
+
 // Danger Zone — destructive data operations
 app.delete('/api/admin/data', async (c) => {
   let body: { scope: string }
