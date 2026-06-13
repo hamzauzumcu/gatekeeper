@@ -199,6 +199,10 @@ interface SyncPanelProps {
   disabled?: boolean
   disabledHint?: string
   itemLabel: string
+  // Optional position scope selector (scores only).
+  positionOptions?: { id: number; title: string }[]
+  selectedPositionId?: number | null
+  onPositionChange?: (id: number | null) => void
 }
 
 function SyncPanel({
@@ -216,6 +220,9 @@ function SyncPanel({
   disabled,
   disabledHint,
   itemLabel,
+  positionOptions,
+  selectedPositionId,
+  onPositionChange,
 }: SyncPanelProps) {
   const [errorsOpen, setErrorsOpen] = useState(false)
   const running = phase === 'fetching' || phase === 'running'
@@ -227,6 +234,24 @@ function SyncPanel({
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
+        {positionOptions && onPositionChange && (
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-muted-foreground whitespace-nowrap">Position:</label>
+            <select
+              value={selectedPositionId ?? ''}
+              onChange={(e) => onPositionChange(e.target.value === '' ? null : Number(e.target.value))}
+              disabled={running}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+            >
+              <option value="">All positions</option>
+              {positionOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <label className="text-sm text-muted-foreground whitespace-nowrap">Batch size:</label>
           <input
@@ -396,11 +421,11 @@ function useSyncJob(kind: SyncJobKind) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind])
 
-  async function start(batchSize: number) {
+  async function start(batchSize: number, positionId: number | null = null) {
     setError(null)
     setStarting(true)
     try {
-      const s = await startSyncJob(kind, batchSize)
+      const s = await startSyncJob(kind, batchSize, positionId)
       setState(s)
       if (!isTerminal(s.status)) startPolling()
     } catch (e) {
@@ -448,8 +473,11 @@ export default function SettingsPage() {
 
   const [scoresBatchSize, setScoresBatchSize] = useState(5)
   const [cvBatchSize, setCvBatchSize] = useState(5)
+  // null = sync all positions; otherwise scope scoring to one position.
+  const [scoresPositionId, setScoresPositionId] = useState<number | null>(null)
 
-  const promptedCount = positions.filter((p) => p.prompt).length
+  const promptedPositions = positions.filter((p) => p.prompt)
+  const promptedCount = promptedPositions.length
 
   // ── Danger Zone state ──────────────────────────────────────────────────
   const [deleteConfirming, setDeleteConfirming] = useState(false)
@@ -517,8 +545,10 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle>Sync AI Scores</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Run AI scoring for all applications that have a configured prompt but haven't been scored yet.
-            Saving a new prompt resets all scores for that position so they are re-evaluated.
+            Run AI scoring for applications that have a configured prompt but haven't been scored yet.
+            Saving a new prompt resets all scores for that position so they are re-evaluated. Pick a
+            position to re-score only that one — e.g. after editing a single prompt — or leave it on
+            "All positions".
           </p>
         </CardHeader>
         <CardContent>
@@ -532,11 +562,14 @@ export default function SettingsPage() {
             fatalError={scores.state?.fatalError ?? scores.error}
             batchSize={scoresBatchSize}
             onBatchSizeChange={setScoresBatchSize}
-            onStart={() => scores.start(scoresBatchSize)}
+            onStart={() => scores.start(scoresBatchSize, scoresPositionId)}
             onStop={scores.stop}
             disabled={promptedCount === 0}
             disabledHint="Save at least one prompt first."
             itemLabel="scored"
+            positionOptions={promptedPositions.map((p) => ({ id: p.id, title: p.title }))}
+            selectedPositionId={scoresPositionId}
+            onPositionChange={setScoresPositionId}
           />
         </CardContent>
       </Card>

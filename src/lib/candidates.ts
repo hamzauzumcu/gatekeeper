@@ -591,6 +591,7 @@ export type SyncJobStatus = 'idle' | 'running' | 'stopping' | 'done' | 'stopped'
 export type SyncJobState = {
   kind: SyncJobKind | null
   status: SyncJobStatus
+  positionId: number | null
   total: number
   processed: number
   failed: number
@@ -603,11 +604,15 @@ export type SyncJobState = {
   finishedAt: string | null
 }
 
-export async function startSyncJob(kind: SyncJobKind, batchSize: number): Promise<SyncJobState> {
+export async function startSyncJob(
+  kind: SyncJobKind,
+  batchSize: number,
+  positionId: number | null = null,
+): Promise<SyncJobState> {
   const res = await fetch(`/api/admin/sync/${kind}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ batchSize }),
+    body: JSON.stringify({ batchSize, positionId }),
   })
   const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to start sync')

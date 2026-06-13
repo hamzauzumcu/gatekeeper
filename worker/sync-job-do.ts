@@ -25,6 +25,8 @@ export type SyncStatus = 'idle' | 'running' | 'stopping' | 'done' | 'stopped' | 
 export interface SyncJobState {
   kind: SyncKind | null
   status: SyncStatus
+  // Scope the job to a single position (scores only). null = all positions.
+  positionId: number | null
   total: number
   processed: number
   failed: number
@@ -54,6 +56,7 @@ function idleState(): SyncJobState {
   return {
     kind: null,
     status: 'idle',
+    positionId: null,
     total: 0,
     processed: 0,
     failed: 0,
@@ -69,17 +72,20 @@ function idleState(): SyncJobState {
 
 export class SyncJobDO extends DurableObject<WorkerBindings> {
   // Start (or restart) a job. No-op if one is already in flight.
-  async start(kind: SyncKind, batchSize: number): Promise<SyncJobState> {
+  // positionId scopes a scores job to one position (null = all positions). Ignored for cv.
+  async start(kind: SyncKind, batchSize: number, positionId: number | null = null): Promise<SyncJobState> {
     const current = await this.getState()
     if (current.status === 'running' || current.status === 'stopping') {
       return current
     }
 
+    const scope = kind === 'scores' ? positionId : null
+
     let total: number
     let firstPage: number[]
     try {
-      total = await this.countPending(kind)
-      firstPage = total === 0 ? [] : await this.fetchPendingPage(kind, 0, PAGE_SIZE)
+      total = await this.countPending(kind, scope)
+      firstPage = total === 0 ? [] : await this.fetchPendingPage(kind, scope, 0, PAGE_SIZE)
     } catch (e) {
       const state: SyncJobState = {
         ...idleState(),
@@ -96,6 +102,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     const state: SyncJobState = {
       kind,
       status: total === 0 ? 'done' : 'running',
+      positionId: scope,
       total,
       processed: 0,
       failed: 0,
@@ -162,7 +169,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     if (state.cursor >= page.length) {
       let next: number[]
       try {
-        next = await this.fetchPendingPage(state.kind!, state.cursorId, PAGE_SIZE)
+        next = await this.fetchPendingPage(state.kind!, state.positionId, state.cursorId, PAGE_SIZE)
       } catch (e) {
         state.status = 'error'
         state.fatalError = e instanceof Error ? e.message : 'failed to load next page'
@@ -242,11 +249,14 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
   }
 
   // Total count of pending applications for this kind (no cap).
-  private async countPending(kind: SyncKind): Promise<number> {
+  // positionId (scores only) scopes the count to a single position; null = all.
+  private async countPending(kind: SyncKind, positionId: number | null): Promise<number> {
     if (kind === 'scores') {
-      const row = await this.env.DB
-        .prepare(`SELECT COUNT(*) AS n ${PENDING_SCORES_FROM_WHERE}`)
-        .first<{ n: number }>()
+      const sql = `SELECT COUNT(*) AS n ${PENDING_SCORES_FROM_WHERE}${positionId != null ? ' AND a.position_id = ?' : ''}`
+      const stmt = positionId != null
+        ? this.env.DB.prepare(sql).bind(positionId)
+        : this.env.DB.prepare(sql)
+      const row = await stmt.first<{ n: number }>()
       return row?.n ?? 0
     }
     const row = await this.env.DB
@@ -261,11 +271,14 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
 
   // One page of pending IDs with id > afterId, ordered by id. The fixed three-parameter
   // shape never grows with the failure count, so it can't hit D1's bound-parameter limit.
-  private async fetchPendingPage(kind: SyncKind, afterId: number, pageSize: number): Promise<number[]> {
+  private async fetchPendingPage(kind: SyncKind, positionId: number | null, afterId: number, pageSize: number): Promise<number[]> {
     if (kind === 'scores') {
+      const posClause = positionId != null ? ' AND a.position_id = ?' : ''
+      const sql = `SELECT a.id ${PENDING_SCORES_FROM_WHERE} AND a.id > ?${posClause} ORDER BY a.id LIMIT ?`
+      const binds = positionId != null ? [afterId, positionId, pageSize] : [afterId, pageSize]
       const { results } = await this.env.DB
-        .prepare(`SELECT a.id ${PENDING_SCORES_FROM_WHERE} AND a.id > ? ORDER BY a.id LIMIT ?`)
-        .bind(afterId, pageSize)
+        .prepare(sql)
+        .bind(...binds)
         .all<{ id: number }>()
       return results.map((r) => r.id)
     }

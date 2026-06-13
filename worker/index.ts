@@ -387,9 +387,14 @@ app.post('/api/admin/sync/:kind/start', async (c) => {
   if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
   const kind = resolveSyncKind(c.req.param('kind'))
   if (!kind) return c.json({ ok: false, error: 'invalid kind' }, 400)
-  let body: { batchSize?: number } = {}
+  let body: { batchSize?: number; positionId?: number | null } = {}
   try { body = await c.req.json() } catch { /* body optional */ }
-  const state = await syncStub(c, kind).start(kind, Number(body.batchSize) || 5)
+  const positionId = body.positionId != null ? Number(body.positionId) : null
+  const state = await syncStub(c, kind).start(
+    kind,
+    Number(body.batchSize) || 5,
+    Number.isFinite(positionId as number) ? (positionId as number) : null,
+  )
   return c.json({ ok: true, state })
 })
 
