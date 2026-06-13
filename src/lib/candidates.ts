@@ -484,6 +484,17 @@ export async function addNote(
   return data.note
 }
 
+export async function updateNote(noteId: number, content: string): Promise<CandidateNote> {
+  const res = await fetch(`/api/notes/${noteId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to update note')
+  return data.note
+}
+
 export async function deleteNote(noteId: number): Promise<void> {
   const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }

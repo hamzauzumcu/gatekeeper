@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
-  Mail, Phone, Globe, Download, MessageSquare, Trash2, Columns3, Plus, Sparkles,
+  Mail, Phone, Globe, Download, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react'
 import {
@@ -31,6 +31,7 @@ import {
   updateApplicantsFitStatus,
   fetchNotes,
   addNote,
+  updateNote,
   deleteNote,
   FIT_STATUS_OPTIONS,
   getOpOptions,
@@ -2055,10 +2056,14 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editText, setEditText] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setEditingId(null)
     fetchNotes(applicantId)
       .then((n) => { if (!cancelled) setNotes(n) })
       .catch(() => { if (!cancelled) setNotes([]) })
@@ -2079,6 +2084,30 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
       setError(err instanceof Error ? err.message : 'failed to add note')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  function startEdit(note: CandidateNote) {
+    setEditingId(note.id)
+    setEditText(note.content)
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+    setEditText('')
+  }
+
+  async function saveEdit(noteId: number) {
+    if (!editText.trim()) return
+    setSavingEdit(true)
+    try {
+      const updated = await updateNote(noteId, editText.trim())
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)))
+      cancelEdit()
+    } catch {
+      // keep the editor open so the edit isn't lost
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -2131,18 +2160,61 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
                   <span className="text-muted-foreground">·</span>
                   <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
                 </div>
-                {note.created_by === currentUser.username && (
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(note.id)}
-                    title="Delete note"
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
+                {note.created_by === currentUser.username && editingId !== note.id && (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(note)}
+                      title="Edit note"
+                      className="text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(note.id)}
+                      title="Delete note"
+                      className="text-muted-foreground transition-colors hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
-              <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>
+              {editingId === note.id ? (
+                <div className="mt-2 space-y-2">
+                  <textarea
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    rows={3}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit(note.id)
+                      if (e.key === 'Escape') cancelEdit()
+                    }}
+                    className={[
+                      'w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm',
+                      'ring-offset-background placeholder:text-muted-foreground',
+                      'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                    ].join(' ')}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!editText.trim() || savingEdit}
+                      onClick={() => saveEdit(note.id)}
+                    >
+                      {savingEdit ? 'Saving…' : 'Save'}
+                    </Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={cancelEdit}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>
+              )}
             </div>
           ))}
         </div>

@@ -216,6 +216,28 @@ app.post('/api/candidates/:id/notes', async (c) => {
   return c.json({ ok: true, note })
 })
 
+// Edit note — PATCH (update content)
+app.patch('/api/notes/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { content: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!body.content?.trim()) return c.json({ ok: false, error: 'note cannot be empty' }, 400)
+  const result = await c.env.DB.prepare(
+    `UPDATE candidate_notes SET content = ? WHERE id = ?`
+  ).bind(body.content.trim(), id).run()
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
+  const note = await c.env.DB.prepare(
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+     FROM candidate_notes WHERE id = ?`
+  ).bind(id).first()
+  return c.json({ ok: true, note })
+})
+
 // Delete note — DELETE
 app.delete('/api/notes/:id', async (c) => {
   const id = Number(c.req.param('id'))
