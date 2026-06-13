@@ -56,6 +56,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetHeader,
   SheetTitle,
@@ -2049,18 +2050,28 @@ function CandidateDetailView({
 
       {firstResumeUrl && (
         <Sheet open={cvOpen} onOpenChange={setCvOpen}>
-          <SheetContent side="bottom" className="flex h-[92vh] flex-col gap-0 p-0">
-            <SheetHeader className="flex-row items-center justify-between border-b px-4 py-3">
+          <SheetContent
+            side="bottom"
+            showCloseButton={false}
+            className="top-12 flex h-auto flex-col gap-0 rounded-t-xl p-0 sm:top-16"
+          >
+            <SheetHeader className="flex-row items-center justify-between gap-2 border-b px-4 py-3">
               <SheetTitle className="text-base">CV</SheetTitle>
-              <a
-                href={firstResumeUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mr-8 inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
-              >
-                <ExternalLink className="size-3" />
-                Open in new tab
-              </a>
+              <div className="flex items-center gap-2">
+                <a
+                  href={firstResumeUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
+                >
+                  <ExternalLink className="size-3" />
+                  <span className="hidden sm:inline">Open in new tab</span>
+                </a>
+                <SheetClose className="inline-flex size-8 items-center justify-center rounded-md border border-input hover:bg-accent">
+                  <X className="size-4" />
+                  <span className="sr-only">Close</span>
+                </SheetClose>
+              </div>
             </SheetHeader>
             <iframe
               src={firstResumeUrl}
