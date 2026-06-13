@@ -76,7 +76,8 @@ export async function upsertScoringPrompt(
 export async function scoreApplication(
   db: D1Database,
   applicationId: number,
-  env: ScoreEnv
+  env: ScoreEnv,
+  signal?: AbortSignal
 ): Promise<void> {
   const row = await db
     .prepare(
@@ -118,7 +119,8 @@ export async function scoreApplication(
         env.DEEPSEEK_API_KEY,
         env.RESUMES,
         env.R2_PUBLIC_URL,
-        env.OPENAI_API_KEY
+        env.OPENAI_API_KEY,
+        signal
       )
       const refreshed = await db
         .prepare(`SELECT resume_text, resume_parsed FROM applications WHERE id = ?`)
@@ -178,7 +180,7 @@ export async function scoreApplication(
       { role: 'system', content: row.scoring_prompt },
       { role: 'user', content: parts.join('\n\n') },
     ],
-    { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true }
+    { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true, signal }
   )
 
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()

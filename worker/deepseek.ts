@@ -27,6 +27,9 @@ export type DeepseekOptions = {
   thinking?: 'enabled' | 'disabled'
   /** reasoning intensity when thinking is enabled — defaults to 'high' */
   reasoningEffort?: 'high' | 'max'
+  /** external abort signal — combined with the request timeout so a stopped sync job
+   *  can cancel an in-flight request immediately instead of waiting for the batch to finish */
+  signal?: AbortSignal
 }
 
 export async function deepseekChat(
@@ -38,7 +41,9 @@ export async function deepseekChat(
   try {
     res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
       method: 'POST',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,

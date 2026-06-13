@@ -88,6 +88,7 @@ async function fetchPdfBuffer(
   resumeUrl: string,
   r2Bucket?: R2Bucket,
   r2PublicUrl?: string,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   // Prefer reading from R2 directly (works in local dev + avoids public URL dependency)
   if (r2Bucket && r2PublicUrl) {
@@ -100,7 +101,7 @@ async function fetchPdfBuffer(
     }
   }
   // Fallback: HTTP fetch (Tally URLs or any external URL)
-  const res = await fetch(resumeUrl)
+  const res = await fetch(resumeUrl, signal ? { signal } : {})
   if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`)
   return res.arrayBuffer()
 }
@@ -113,9 +114,10 @@ export async function parseAndStoreResume(
   r2Bucket?: R2Bucket,
   r2PublicUrl?: string,
   openaiApiKey?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
 
-  const buffer = await fetchPdfBuffer(resumeUrl, r2Bucket, r2PublicUrl)
+  const buffer = await fetchPdfBuffer(resumeUrl, r2Bucket, r2PublicUrl, signal)
   const resume_text = extractTextFromPdf(buffer)
 
   const systemPrompt = `You are a CV analysis expert. Extract structured data from the given CV and return ONLY valid JSON — no extra text, no code blocks.
@@ -142,7 +144,7 @@ Rules:
         { role: 'system', content: systemPrompt },
         { role: 'user', content: resume_text },
       ],
-      { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true, maxTokens: 8192 },
+      { model: 'deepseek-v4-flash', thinking: 'disabled', jsonMode: true, maxTokens: 8192, signal },
     )
   } else {
     // Scanned PDF — send raw PDF to GPT-4o which handles OCR natively
@@ -151,6 +153,7 @@ Rules:
       openaiApiKey,
       buffer,
       `${systemPrompt}\n\nExtract structured CV data from this scanned document and return ONLY valid JSON.`,
+      signal,
     )
   }
 

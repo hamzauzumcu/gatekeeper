@@ -71,6 +71,12 @@ function idleState(): SyncJobState {
 }
 
 export class SyncJobDO extends DurableObject<WorkerBindings> {
+  // Aborts the LLM requests of the batch currently in flight. Lives in memory (not
+  // storage) because it only needs to reach the alarm invocation running on this same
+  // instance. stop() aborts it so an in-flight batch is cancelled immediately instead of
+  // having to run to completion before the stop flag is honored. null between batches.
+  private inFlight: AbortController | null = null
+
   // Start (or restart) a job. No-op if one is already in flight.
   // positionId scopes a scores job to one position (null = all positions). Ignored for cv.
   async start(kind: SyncKind, batchSize: number, positionId: number | null = null): Promise<SyncJobState> {
@@ -149,6 +155,11 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
       state.status = 'stopping'
       await this.ctx.storage.put('state', state)
     }
+    // Cancel the in-flight batch's LLM requests so the alarm unblocks now rather than
+    // after a (potentially minutes-long) OCR + scoring batch finishes. Safe to call even
+    // when no batch is running. Always attempt it, even if status was already 'stopping',
+    // so a repeated Stop click can interrupt a batch that started after the first request.
+    this.inFlight?.abort()
     return state
   }
 
@@ -189,7 +200,24 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     }
 
     const chunk = page.slice(state.cursor, state.cursor + state.batchSize)
-    const results = await Promise.allSettled(chunk.map((id) => this.processOne(state.kind!, id)))
+    const controller = new AbortController()
+    this.inFlight = controller
+    let results: PromiseSettledResult<void>[]
+    try {
+      results = await Promise.allSettled(chunk.map((id) => this.processOne(state.kind!, id, controller.signal)))
+    } finally {
+      if (this.inFlight === controller) this.inFlight = null
+    }
+
+    // A stop may have arrived during the (long) batch await above — either before it
+    // started (flag set) or mid-flight (stop() aborted the controller, rejecting the
+    // in-flight requests). Don't record aborted requests as failures or advance the
+    // watermark; just credit whatever genuinely completed and finalize immediately.
+    if (controller.signal.aborted || (await this.ctx.storage.get<boolean>('stopRequested'))) {
+      for (const r of results) if (r.status === 'fulfilled') state.processed++
+      return this.finalizeStopped(state)
+    }
+
     for (let i = 0; i < results.length; i++) {
       const r = results[i]
       if (r.status === 'fulfilled') {
@@ -204,13 +232,6 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     // Advance the watermark past everything in this chunk (page is ordered by id, so the
     // last element is the max). Failed rows stay below it and are never refetched.
     if (chunk.length > 0) state.cursorId = chunk[chunk.length - 1]
-
-    // A stop may have arrived during the (long) batch await above. Re-check the flag
-    // before persisting/rescheduling so we don't write our now-stale `running` state
-    // back over the stop request. We keep this batch's progress counters either way.
-    if (await this.ctx.storage.get<boolean>('stopRequested')) {
-      return this.finalizeStopped(state)
-    }
 
     await this.ctx.storage.put('state', state)
     await this.ctx.storage.setAlarm(Date.now())
@@ -227,9 +248,9 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     return (await this.ctx.storage.get<SyncJobState>('state')) ?? idleState()
   }
 
-  private async processOne(kind: SyncKind, id: number): Promise<void> {
+  private async processOne(kind: SyncKind, id: number, signal: AbortSignal): Promise<void> {
     if (kind === 'scores') {
-      await scoreApplication(this.env.DB, id, this.env)
+      await scoreApplication(this.env.DB, id, this.env, signal)
       return
     }
     const row = await this.env.DB
@@ -245,6 +266,7 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
       this.env.RESUMES,
       this.env.R2_PUBLIC_URL,
       this.env.OPENAI_API_KEY,
+      signal,
     )
   }
 

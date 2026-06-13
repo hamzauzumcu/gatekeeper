@@ -7,7 +7,12 @@ const OPENAI_BASE_URL = 'https://api.openai.com'
 // job's alarm loop indefinitely. See the same guard in deepseek.ts.
 const REQUEST_TIMEOUT_MS = 120_000
 
-export async function openaiParsePdf(apiKey: string, pdfBuffer: ArrayBuffer, prompt: string): Promise<string> {
+export async function openaiParsePdf(
+  apiKey: string,
+  pdfBuffer: ArrayBuffer,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const bytes = new Uint8Array(pdfBuffer)
   let binary = ''
   for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -19,7 +24,9 @@ export async function openaiParsePdf(apiKey: string, pdfBuffer: ArrayBuffer, pro
   try {
     res = await fetch(`${OPENAI_BASE_URL}/v1/chat/completions`, {
       method: 'POST',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
