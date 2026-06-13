@@ -386,7 +386,7 @@ function toPhase(state: SyncJobState | null, starting: boolean): SyncPhase {
   }
 }
 
-const POLL_INTERVAL_MS = 1500
+const POLL_INTERVAL_MS = 5000
 
 function useSyncJob(kind: SyncJobKind) {
   const [state, setState] = useState<SyncJobState | null>(null)

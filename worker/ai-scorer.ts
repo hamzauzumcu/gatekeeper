@@ -5,8 +5,10 @@
 import { deepseekChat } from './deepseek'
 import { parseAndStoreResume, parsedRawText, synthesizeCvText, looksLikeText } from './cv-parser'
 
-// v2: scoring now reads the recovered CV text (resume_parsed / re-OCR) instead of the
-// often-empty resume_text column, so every candidate is re-scored with their real CV.
+// v2: scoring reads recovered CV text (resume_text / resume_parsed / re-OCR) instead of the
+// often-empty resume_text column alone, so every candidate is scored against their real CV.
+// The OCR step is memory-heavy, so the batch caller serializes it via ocrGate — see
+// scoreApplication for the recovery order.
 export const SCORE_VERSION = 2
 
 // Minimal env surface scoreApplication needs (lazy CV recovery may re-OCR via GPT-4o).
@@ -77,7 +79,10 @@ export async function scoreApplication(
   db: D1Database,
   applicationId: number,
   env: ScoreEnv,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  // Serializes the memory-heavy PDF-load + OCR recovery. The concurrent batch caller passes
+  // a gate so at most one PDF is resident at a time; sequential callers may omit it.
+  ocrGate?: <T>(fn: () => Promise<T>) => Promise<T>
 ): Promise<void> {
   const row = await db
     .prepare(
@@ -104,24 +109,29 @@ export async function scoreApplication(
 
   if (!row || !row.scoring_prompt) return
 
-  // Recover the CV text lazily. The resume_text column is empty for most rows (the regex
-  // PDF extractor fails on scanned/compressed PDFs), so: cached verbatim text from
-  // resume_parsed first (free), then re-OCR the PDF via GPT-4o, then a structured-field
-  // synthesis as last resort. Cache whatever we recover back into resume_text.
+  // Recover the CV text lazily. resume_text is empty for most rows (the regex PDF extractor
+  // fails on scanned/compressed PDFs), so: cached verbatim text from resume_parsed first
+  // (free), then re-OCR the PDF via GPT-4o, then a structured-field synthesis as last resort.
+  // The OCR step loads + base64-encodes the PDF (several MB resident), so it runs through
+  // ocrGate — the batch caller serializes it to one PDF at a time so concurrent OCRs can't
+  // blow the Durable Object's 128 MB memory ceiling. Cache whatever we recover into resume_text.
   let cvText: string | null = looksLikeText(row.resume_text) ? row.resume_text : null
   if (!cvText) {
     cvText = parsedRawText(row.resume_parsed)
     if (!cvText && row.resume_url && env.OPENAI_API_KEY) {
-      await parseAndStoreResume(
-        db,
-        applicationId,
-        row.resume_url,
-        env.DEEPSEEK_API_KEY,
-        env.RESUMES,
-        env.R2_PUBLIC_URL,
-        env.OPENAI_API_KEY,
-        signal
-      )
+      const resumeUrl = row.resume_url
+      const recover = () =>
+        parseAndStoreResume(
+          db,
+          applicationId,
+          resumeUrl,
+          env.DEEPSEEK_API_KEY,
+          env.RESUMES,
+          env.R2_PUBLIC_URL,
+          env.OPENAI_API_KEY,
+          signal
+        )
+      await (ocrGate ? ocrGate(recover) : recover())
       const refreshed = await db
         .prepare(`SELECT resume_text, resume_parsed FROM applications WHERE id = ?`)
         .bind(applicationId)

@@ -77,6 +77,26 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
   // having to run to completion before the stop flag is honored. null between batches.
   private inFlight: AbortController | null = null
 
+  // Serializes the memory-heavy PDF-load + OCR section across a concurrent batch. The batch
+  // scores BATCH items at once, but several MB-scale PDFs base64-encoded in parallel blew the
+  // DO's 128 MB memory ceiling and killed the job mid-batch. This gate ensures at most one PDF
+  // is resident at a time; the rest of each item (DB reads, the DeepSeek call) still runs
+  // concurrently. Classic promise-chain mutex; lives in memory (per-instance) which is all the
+  // serialization needs — the whole batch runs on this one instance.
+  private ocrLock: Promise<void> = Promise.resolve()
+
+  private async withOcrLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.ocrLock
+    let release!: () => void
+    this.ocrLock = new Promise<void>((res) => { release = res })
+    await prev
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
+  }
+
   // Start (or restart) a job. No-op if one is already in flight.
   // positionId scopes a scores job to one position (null = all positions). Ignored for cv.
   async start(kind: SyncKind, batchSize: number, positionId: number | null = null): Promise<SyncJobState> {
@@ -266,7 +286,8 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
 
   private async processOne(kind: SyncKind, id: number, signal: AbortSignal): Promise<void> {
     if (kind === 'scores') {
-      await scoreApplication(this.env.DB, id, this.env, signal)
+      // Pass the OCR gate so the (rare) inline PDF recovery is serialized across the batch.
+      await scoreApplication(this.env.DB, id, this.env, signal, (fn) => this.withOcrLock(fn))
       return
     }
     const row = await this.env.DB
@@ -274,15 +295,18 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
       .bind(id)
       .first<{ resume_url: string }>()
     if (!row) throw new Error('not found or no resume')
-    await parseAndStoreResume(
-      this.env.DB,
-      id,
-      row.resume_url,
-      this.env.DEEPSEEK_API_KEY,
-      this.env.RESUMES,
-      this.env.R2_PUBLIC_URL,
-      this.env.OPENAI_API_KEY,
-      signal,
+    // The CV-parse job OCRs every item — serialize so concurrent PDFs can't exhaust memory.
+    await this.withOcrLock(() =>
+      parseAndStoreResume(
+        this.env.DB,
+        id,
+        row.resume_url,
+        this.env.DEEPSEEK_API_KEY,
+        this.env.RESUMES,
+        this.env.R2_PUBLIC_URL,
+        this.env.OPENAI_API_KEY,
+        signal,
+      ),
     )
   }
 
