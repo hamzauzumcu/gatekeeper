@@ -1996,19 +1996,22 @@ function CandidateDetailView({
       </Tabs>
 
       {/* Bottom action bar — fit status + prev/next navigation */}
-      <div className="shrink-0 border-t bg-background px-3 py-2.5">
+      <div
+        className="shrink-0 border-t bg-background px-3 py-3 sm:py-2.5"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)' }}
+      >
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => onNavigate(-1)}
             disabled={!hasPrev}
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30 sm:size-9"
             aria-label="Previous candidate"
           >
-            <ChevronLeft className="size-4" />
+            <ChevronLeft className="size-5 sm:size-4" />
           </button>
 
-          <div className="flex flex-1 gap-1.5">
+          <div className="flex flex-1 gap-2 sm:gap-1.5">
             {(['good_fit', 'maybe', 'not_fit'] as const).map((s) => {
               const active = fitStatus === s
               const styles = {
@@ -2028,7 +2031,7 @@ function CandidateDetailView({
                   key={s}
                   type="button"
                   onClick={() => handleFitClick(s)}
-                  className={`flex-1 rounded-lg border py-2 text-xs font-medium transition-colors ${styles[s]}`}
+                  className={`flex-1 rounded-lg border py-3 text-sm font-medium transition-colors sm:py-2 sm:text-xs ${styles[s]}`}
                 >
                   {labels[s]}
                 </button>
@@ -2040,10 +2043,10 @@ function CandidateDetailView({
             type="button"
             onClick={() => onNavigate(1)}
             disabled={!hasNext}
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30"
+            className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30 sm:size-9"
             aria-label="Next candidate"
           >
-            <ChevronRight className="size-4" />
+            <ChevronRight className="size-5 sm:size-4" />
           </button>
         </div>
       </div>
