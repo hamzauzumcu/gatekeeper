@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
@@ -29,6 +29,8 @@ import {
   type FxRates,
   updateApplicationStatus,
   updateApplicantsFitStatus,
+  fetchDailyProgress,
+  type DailyProgress,
   fetchNotes,
   addNote,
   updateNote,
@@ -648,6 +650,13 @@ export default function CandidatesPage() {
   const [ctxNoteSubmitting, setCtxNoteSubmitting] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
 
+  // Daily CV-processing progress (today's distinct candidates acted on vs. target).
+  const [dailyProgress, setDailyProgress] = useState<DailyProgress | null>(null)
+  const refreshDailyProgress = useCallback(() => {
+    fetchDailyProgress(currentUser.username).then(setDailyProgress).catch(() => {})
+  }, [currentUser.username])
+  useEffect(() => { refreshDailyProgress() }, [refreshDailyProgress])
+
   // All extra col IDs to request = visible columns + answer filter question IDs
   const extraColIds = Array.from(
     new Set([...visibleQuestionIds, ...filters.answerFilters.map((f) => f.questionId).filter(Boolean)])
@@ -856,7 +865,8 @@ export default function CandidatesPage() {
       }, 350)
     }
     try {
-      await updateApplicantsFitStatus([candId], fitStatus)
+      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username)
+      refreshDailyProgress()
     } catch {
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
     }
@@ -885,7 +895,8 @@ export default function CandidatesPage() {
     const exitIds = willExit ? [...selectedIds] : []
     setBulkLoading(true)
     try {
-      await updateApplicantsFitStatus([...selectedIds], fitStatus)
+      await updateApplicantsFitStatus([...selectedIds], fitStatus, currentUser.username)
+      refreshDailyProgress()
       setCandidates((prev) =>
         prev.map((c) => (selectedIds.has(c.id) ? { ...c, fit_status: fitStatus } : c))
       )
@@ -907,7 +918,8 @@ export default function CandidatesPage() {
   async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
     const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     try {
-      await updateApplicantsFitStatus([candId], fitStatus)
+      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username)
+      refreshDailyProgress()
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
       if (willExit) {
         setExitingIds((prev) => new Set([...prev, candId]))
@@ -927,6 +939,7 @@ export default function CandidatesPage() {
     setCtxNoteSubmitting(true)
     try {
       await addNote(candId, ctxNote.trim(), currentUser.username, currentUser.fullName)
+      refreshDailyProgress()
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, notes_count: (c.notes_count ?? 0) + 1 } : c)))
       setCtxNote('')
       setContextMenu(null)
@@ -963,6 +976,20 @@ export default function CandidatesPage() {
           <CardTitle className="flex items-center gap-2">
             Candidates
             {total > 0 && <span className="text-muted-foreground font-normal">({total})</span>}
+            {dailyProgress && dailyProgress.target > 0 && (
+              <span
+                title={`Today you've processed ${dailyProgress.today_count} of your ${dailyProgress.target} CV daily target`}
+                className={[
+                  'ml-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums',
+                  dailyProgress.today_count >= dailyProgress.target
+                    ? 'bg-emerald-500/10 text-emerald-600'
+                    : 'bg-muted text-muted-foreground',
+                ].join(' ')}
+              >
+                Today {dailyProgress.today_count}/{dailyProgress.target}
+                {dailyProgress.today_count >= dailyProgress.target && <Check className="size-3" />}
+              </span>
+            )}
           </CardTitle>
           {activeFilterCount > 0 && (
             <Button
@@ -1539,6 +1566,7 @@ export default function CandidatesPage() {
               currentUser={currentUser}
               onFitStatus={handleSheetFitStatus}
               onNavigate={navigateSheet}
+              onNoteAdded={refreshDailyProgress}
               hasPrev={openedIndex > 0}
               hasNext={openedIndex >= 0 && openedIndex < candidates.length - 1}
             />
@@ -1606,6 +1634,7 @@ function CandidateDetailView({
   currentUser,
   onFitStatus,
   onNavigate,
+  onNoteAdded,
   hasPrev,
   hasNext,
 }: {
@@ -1615,6 +1644,7 @@ function CandidateDetailView({
   currentUser: User
   onFitStatus: (status: string | null) => void
   onNavigate: (dir: -1 | 1) => void
+  onNoteAdded: () => void
   hasPrev: boolean
   hasNext: boolean
 }) {
@@ -1946,7 +1976,7 @@ function CandidateDetailView({
                                 {isSalary ? formatSalary(value) : (value ?? '—')}
                                 {usd && (
                                   <span className="ml-1.5 font-normal text-muted-foreground">
-                                    {usd} <span className="text-xs">(est. USD)</span>
+                                    {usd.usd} <span className="text-xs">(est. USD @ {usd.rate})</span>
                                   </span>
                                 )}
                               </dd>
@@ -1991,7 +2021,7 @@ function CandidateDetailView({
         </TabsContent>
 
         <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
-          <NotesSection applicantId={applicant.id} currentUser={currentUser} />
+          <NotesSection applicantId={applicant.id} currentUser={currentUser} onNoteAdded={onNoteAdded} />
         </TabsContent>
       </Tabs>
 
@@ -2088,7 +2118,7 @@ function CandidateDetailView({
   )
 }
 
-function NotesSection({ applicantId, currentUser }: { applicantId: number; currentUser: User }) {
+function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: number; currentUser: User; onNoteAdded: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
@@ -2118,6 +2148,7 @@ function NotesSection({ applicantId, currentUser }: { applicantId: number; curre
       const note = await addNote(applicantId, text.trim(), currentUser.username, currentUser.fullName)
       setNotes((prev) => [note, ...prev])
       setText('')
+      onNoteAdded()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to add note')
     } finally {

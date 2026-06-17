@@ -427,6 +427,67 @@ export async function updateApplicantsFitStatus(
   return res.meta?.changes ?? 0
 }
 
+export type ActivityType = 'fit_status_set' | 'note_added'
+
+// Record one row per counted action so daily progress can be derived from the DB.
+// Multiple actions on the same candidate the same day still count once at read time
+// (COUNT(DISTINCT applicant_id)). No-ops when the user is unknown.
+export async function logActivity(
+  db: D1Database,
+  username: string | null | undefined,
+  applicantIds: number[],
+  actionType: ActivityType
+): Promise<void> {
+  if (!username || applicantIds.length === 0) return
+  const stmt = db.prepare(
+    `INSERT INTO daily_activity (username, activity_date, applicant_id, action_type)
+     VALUES (?, date('now'), ?, ?)`
+  )
+  await db.batch(applicantIds.map((id) => stmt.bind(username, id, actionType)))
+}
+
+// Today's progress (distinct candidates acted on) and the saved target for a user.
+export async function getDailyProgress(
+  db: D1Database,
+  username: string
+): Promise<{ target: number; today_count: number; date: string }> {
+  const settings = await db
+    .prepare(`SELECT daily_cv_target FROM account_settings WHERE username = ?`)
+    .bind(username)
+    .first<{ daily_cv_target: number }>()
+  const row = await db
+    .prepare(
+      `SELECT date('now') AS date,
+              COUNT(DISTINCT applicant_id) AS today_count
+       FROM daily_activity
+       WHERE username = ? AND activity_date = date('now')`
+    )
+    .bind(username)
+    .first<{ date: string; today_count: number }>()
+  return {
+    target: settings?.daily_cv_target ?? 20,
+    today_count: row?.today_count ?? 0,
+    date: row?.date ?? '',
+  }
+}
+
+export async function setDailyTarget(
+  db: D1Database,
+  username: string,
+  target: number
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO account_settings (username, daily_cv_target, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       ON CONFLICT(username) DO UPDATE SET
+         daily_cv_target = excluded.daily_cv_target,
+         updated_at = excluded.updated_at`
+    )
+    .bind(username, target)
+    .run()
+}
+
 export async function getCandidate(
   db: D1Database,
   id: number

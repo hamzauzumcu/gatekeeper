@@ -10,11 +10,15 @@ import {
   stopSyncJob,
   resetSyncJob,
   clearData,
+  fetchDailyProgress,
+  saveDailyTarget,
+  type DailyProgress,
   type PositionWithPrompt,
   type SyncJobKind,
   type SyncJobState,
 } from './lib/candidates'
 import { formatDate } from './lib/candidates'
+import { getUser } from './lib/auth'
 
 function getDefaultPrompt(positionTitle: string): string {
   const lower = positionTitle.toLowerCase()
@@ -471,6 +475,91 @@ function useSyncJob(kind: SyncJobKind) {
 
 // ── Main settings page ─────────────────────────────────────────────────────
 
+// Per-account daily CV-processing target. Each user sets their own; today's
+// progress is derived server-side from fit-status changes and notes.
+function DailyTargetCard() {
+  const username = getUser()?.username ?? ''
+  const [progress, setProgress] = useState<DailyProgress | null>(null)
+  const [value, setValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!username) return
+    fetchDailyProgress(username)
+      .then((p) => { setProgress(p); setValue(String(p.target)) })
+      .catch(() => {})
+  }, [username])
+
+  const isDirty = progress != null && value.trim() !== '' && Number(value) !== progress.target
+
+  async function handleSave() {
+    const target = Number(value)
+    if (!Number.isInteger(target) || target < 0 || target > 10000) {
+      setError('Enter a whole number between 0 and 10000')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const p = await saveDailyTarget(username, target)
+      setProgress(p)
+      setValue(String(p.target))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hitTarget = progress != null && progress.target > 0 && progress.today_count >= progress.target
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Daily CV Target</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Set how many CVs you aim to process each day. Marking a candidate as a fit
+          (good fit / maybe / not fit) or adding a note counts toward today's total —
+          each candidate is counted once per day.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-1.5">
+            <label htmlFor="daily-target" className="text-sm font-medium">Target per day</label>
+            <input
+              id="daily-target"
+              type="number"
+              min={0}
+              max={10000}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              className="h-9 w-28 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            />
+          </div>
+          <Button onClick={handleSave} disabled={!isDirty || saving}>
+            {saving ? 'Saving…' : saved ? 'Saved' : 'Save'}
+          </Button>
+          {progress != null && (
+            <div className="ml-auto text-sm">
+              <span className="text-muted-foreground">Today: </span>
+              <span className={`tabular-nums font-semibold ${hitTarget ? 'text-emerald-600' : ''}`}>
+                {progress.today_count} / {progress.target}
+              </span>
+              {hitTarget && <span className="ml-2 text-emerald-600">✓ target reached</span>}
+            </div>
+          )}
+        </div>
+        {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const [positions, setPositions] = useState<PositionWithPrompt[]>([])
   const [loading, setLoading] = useState(true)
@@ -524,6 +613,9 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-8">
+      {/* Daily CV Target */}
+      <DailyTargetCard />
+
       {/* AI Scoring Prompts */}
       <Card>
         <CardHeader>

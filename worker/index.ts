@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, setDailyTarget } from './candidates'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
@@ -165,7 +165,7 @@ app.patch('/api/applications/:id/answers/:questionId', async (c) => {
 
 // Bulk update candidate fit status (multi-select)
 app.patch('/api/applicants/fit-status', async (c) => {
-  let body: { ids: number[]; fit_status: string | null }
+  let body: { ids: number[]; fit_status: string | null; created_by?: string }
   try {
     body = await c.req.json()
   } catch {
@@ -176,10 +176,37 @@ app.patch('/api/applicants/fit-status', async (c) => {
   }
   try {
     const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null)
+    // Every fit-status change counts as processing a CV — including clearing it.
+    await logActivity(c.env.DB, body.created_by, body.ids, 'fit_status_set')
     return c.json({ ok: true, updated })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
   }
+})
+
+// Per-account daily CV-processing target + today's progress.
+app.get('/api/settings/daily', async (c) => {
+  const username = c.req.query('username')
+  if (!username) return c.json({ ok: false, error: 'username required' }, 400)
+  const progress = await getDailyProgress(c.env.DB, username)
+  return c.json({ ok: true, ...progress })
+})
+
+app.put('/api/settings/daily', async (c) => {
+  let body: { username: string; daily_cv_target: number }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!body.username) return c.json({ ok: false, error: 'username required' }, 400)
+  const target = Number(body.daily_cv_target)
+  if (!Number.isInteger(target) || target < 0 || target > 10000) {
+    return c.json({ ok: false, error: 'target must be between 0 and 10000' }, 400)
+  }
+  await setDailyTarget(c.env.DB, body.username, target)
+  const progress = await getDailyProgress(c.env.DB, body.username)
+  return c.json({ ok: true, ...progress })
 })
 
 // Candidate notes — GET
@@ -209,6 +236,7 @@ app.post('/api/candidates/:id/notes', async (c) => {
     `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name)
      VALUES (?, ?, ?, ?)`
   ).bind(id, body.content.trim(), body.created_by, body.created_by_name).run()
+  await logActivity(c.env.DB, body.created_by, [id], 'note_added')
   const note = await c.env.DB.prepare(
     `SELECT id, applicant_id, content, created_by, created_by_name, created_at
      FROM candidate_notes WHERE id = ?`

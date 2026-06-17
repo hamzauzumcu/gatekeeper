@@ -369,9 +369,13 @@ function parseAmounts(s: string): number[] {
   return out
 }
 
-// Estimate a USD value (or range) for a salary answer. Returns a display string
-// like "≈ $1,500" / "≈ $1,500–$1,900", or null if it can't be estimated.
-export function estimateUsdSalary(raw: string | null, fx: FxRates | null): string | null {
+// Estimate a USD value (or range) for a salary answer. Returns the display
+// string ("≈ $1,500" / "≈ $1,500–$1,900") plus the FX rate used (e.g.
+// "46.34 TRY/USD"), or null if it can't be estimated.
+export function estimateUsdSalary(
+  raw: string | null,
+  fx: FxRates | null,
+): { usd: string; rate: string } | null {
   if (!raw || !fx) return null
   const currency = detectCurrency(raw)
   const rate = currency === 'USD' ? 1 : fx.rates[currency]
@@ -382,7 +386,8 @@ export function estimateUsdSalary(raw: string | null, fx: FxRates | null): strin
     '$' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.round(n / rate))
   const lo = Math.min(...amounts)
   const hi = Math.max(...amounts)
-  return lo === hi ? `≈ ${fmt(lo)}` : `≈ ${fmt(lo)}–${fmt(hi)}`
+  const rateStr = `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(rate)} ${currency}/USD`
+  return { usd: lo === hi ? `≈ ${fmt(lo)}` : `≈ ${fmt(lo)}–${fmt(hi)}`, rate: rateStr }
 }
 
 export function formatSalary(raw: string | null): string {
@@ -441,15 +446,40 @@ export async function updateApplicationStatus(
 
 export async function updateApplicantsFitStatus(
   ids: number[],
-  fit_status: string | null
+  fit_status: string | null,
+  createdBy?: string
 ): Promise<void> {
   const res = await fetch('/api/applicants/fit-status', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids, fit_status }),
+    body: JSON.stringify({ ids, fit_status, created_by: createdBy }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
+}
+
+export type DailyProgress = {
+  target: number
+  today_count: number
+  date: string
+}
+
+export async function fetchDailyProgress(username: string): Promise<DailyProgress> {
+  const res = await fetch(`/api/settings/daily?username=${encodeURIComponent(username)}`)
+  const data = (await res.json()) as ({ ok: true } & DailyProgress) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to load progress')
+  return { target: data.target, today_count: data.today_count, date: data.date }
+}
+
+export async function saveDailyTarget(username: string, target: number): Promise<DailyProgress> {
+  const res = await fetch('/api/settings/daily', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, daily_cv_target: target }),
+  })
+  const data = (await res.json()) as ({ ok: true } & DailyProgress) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save target')
+  return { target: data.target, today_count: data.today_count, date: data.date }
 }
 
 export type CandidateNote = {
