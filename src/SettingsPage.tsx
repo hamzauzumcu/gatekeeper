@@ -5,6 +5,8 @@ import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react'
 import {
   fetchScoringPrompts,
   saveScoringPrompt,
+  fetchInterviewPrompt,
+  saveInterviewPrompt,
   startSyncJob,
   fetchSyncStatus,
   stopSyncJob,
@@ -560,6 +562,105 @@ function DailyTargetCard() {
   )
 }
 
+// Global interview-notes prompt template. One template is shared across all
+// positions; position details + CV + answers are injected at generation time.
+function InterviewPromptCard() {
+  const [text, setText] = useState('')
+  const [isCustom, setIsCustom] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState('')
+
+  useEffect(() => {
+    fetchInterviewPrompt()
+      .then((r) => { setText(r.prompt); setLoaded(r.prompt); setIsCustom(r.is_custom) })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const isDirty = text !== loaded
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const r = await saveInterviewPrompt(text.trim())
+      setText(r.prompt)
+      setLoaded(r.prompt)
+      setIsCustom(r.is_custom)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Empty save reverts to the built-in default server-side.
+  async function handleReset() {
+    setSaving(true)
+    setError(null)
+    try {
+      const r = await saveInterviewPrompt('')
+      setText(r.prompt)
+      setLoaded(r.prompt)
+      setIsCustom(r.is_custom)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Reset failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-4" />
+          Interview Notes Prompt
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Instructions used when generating interview notes from a candidate's profile.
+          The candidate's CV, the position they applied to, the scoring criteria, their
+          application answers, and existing notes are added automatically. Output is in Turkish.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="h-48 rounded-xl border bg-muted/30 animate-pulse" />
+        ) : (
+          <>
+            <div className="text-xs text-muted-foreground">
+              {isCustom ? 'Using a custom prompt.' : 'Using the built-in default prompt.'}
+            </div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={12}
+              placeholder="Enter interview-notes prompt…"
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            />
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="flex items-center gap-3">
+              <Button onClick={handleSave} disabled={!isDirty || saving || !text.trim()}>
+                {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Prompt'}
+              </Button>
+              {isCustom && (
+                <Button type="button" variant="outline" onClick={handleReset} disabled={saving}>
+                  Reset to Default
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const [positions, setPositions] = useState<PositionWithPrompt[]>([])
   const [loading, setLoading] = useState(true)
@@ -652,6 +753,9 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Interview Notes Prompt */}
+      <InterviewPromptCard />
 
       {/* Sync AI Scores */}
       <Card>

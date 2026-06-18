@@ -35,6 +35,7 @@ import {
   addNote,
   updateNote,
   deleteNote,
+  generateInterviewNotes,
   FIT_STATUS_OPTIONS,
   getOpOptions,
   defaultOpForType,
@@ -2300,11 +2301,14 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setEditingId(null)
+    setGenError(null)
     fetchNotes(applicantId)
       .then((n) => { if (!cancelled) setNotes(n) })
       .catch(() => { if (!cancelled) setNotes([]) })
@@ -2362,8 +2366,46 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
     }
   }
 
+  // Generate interview notes from the candidate's CV, the position they applied
+  // to, the scoring criteria, and existing notes — saved as a new note (Turkish).
+  async function handleGenerate() {
+    setGenerating(true)
+    setGenError(null)
+    try {
+      const note = await generateInterviewNotes(applicantId, currentUser.username, currentUser.fullName)
+      setNotes((prev) => [note, ...prev])
+      onNoteAdded()
+    } catch (err) {
+      setGenError(err instanceof Error ? err.message : 'failed to generate interview notes')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
     <div className="space-y-4 pt-1">
+      <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Interview Notes</p>
+            <p className="text-xs text-muted-foreground">
+              Generate questions from the CV, position, and existing notes.
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleGenerate}
+            disabled={generating}
+            className="shrink-0 gap-1.5"
+          >
+            <Sparkles className="size-3.5" />
+            {generating ? 'Generating…' : 'Generate'}
+          </Button>
+        </div>
+        {genError && <p className="mt-2 text-xs text-destructive">{genError}</p>}
+      </div>
+
       <form onSubmit={handleSubmit} className="space-y-2">
         <textarea
           value={text}

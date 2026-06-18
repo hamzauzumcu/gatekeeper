@@ -543,6 +543,47 @@ export async function deleteNote(noteId: number): Promise<void> {
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
 }
 
+// Generate AI interview notes for a candidate and save them as a new note.
+// The generated note (Turkish bullet points) is returned so it can be prepended
+// to the notes list.
+export async function generateInterviewNotes(
+  applicantId: number,
+  createdBy: string,
+  createdByName: string
+): Promise<CandidateNote> {
+  const res = await fetch(`/api/candidates/${applicantId}/interview-notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ created_by: createdBy, created_by_name: createdByName }),
+  })
+  const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to generate interview notes')
+  return data.note
+}
+
+// ── Interview-notes prompt (global template) ────────────────────────────────
+
+export type InterviewPrompt = { prompt: string; is_custom: boolean }
+
+export async function fetchInterviewPrompt(): Promise<InterviewPrompt> {
+  const res = await fetch('/api/settings/interview-prompt')
+  const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch interview prompt')
+  return { prompt: data.prompt, is_custom: data.is_custom }
+}
+
+// Save a custom prompt, or pass an empty string to revert to the built-in default.
+export async function saveInterviewPrompt(prompt: string): Promise<InterviewPrompt> {
+  const res = await fetch('/api/settings/interview-prompt', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save interview prompt')
+  return { prompt: data.prompt, is_custom: data.is_custom }
+}
+
 // ── Saved filters (shared, named presets) ──────────────────────────────────
 
 export type SavedFilter = {

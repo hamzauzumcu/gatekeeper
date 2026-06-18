@@ -6,6 +6,7 @@ import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
 import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
+import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { SyncJobDO } from './sync-job-do'
 
 export { SyncJobDO }
@@ -237,6 +238,56 @@ app.put('/api/settings/daily', async (c) => {
   await setDailyTarget(c.env.DB, body.username, target)
   const progress = await getDailyProgress(c.env.DB, body.username)
   return c.json({ ok: true, ...progress })
+})
+
+// Interview-notes prompt template (global) — GET effective prompt + is_custom flag
+app.get('/api/settings/interview-prompt', async (c) => {
+  const { prompt, is_custom } = await getInterviewNotesPrompt(c.env.DB)
+  return c.json({ ok: true, prompt, is_custom })
+})
+
+// Interview-notes prompt template — PUT (empty body reverts to the built-in default)
+app.put('/api/settings/interview-prompt', async (c) => {
+  let body: { prompt?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  await setInterviewNotesPrompt(c.env.DB, body.prompt ?? '')
+  const { prompt, is_custom } = await getInterviewNotesPrompt(c.env.DB)
+  return c.json({ ok: true, prompt, is_custom })
+})
+
+// Generate AI interview notes for a candidate and save them as a new note.
+app.post('/api/candidates/:id/interview-notes', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { created_by: string; created_by_name: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!body.created_by) return c.json({ ok: false, error: 'user required' }, 400)
+  let content: string
+  try {
+    content = await generateInterviewNotes(c.env.DB, id, c.env)
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'generation failed' }, 400)
+  }
+  if (!content.trim()) return c.json({ ok: false, error: 'empty generation' }, 502)
+  const result = await c.env.DB.prepare(
+    `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name)
+     VALUES (?, ?, ?, ?)`
+  ).bind(id, content.trim(), body.created_by, body.created_by_name).run()
+  await logActivity(c.env.DB, body.created_by, [id], 'note_added')
+  const note = await c.env.DB.prepare(
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+     FROM candidate_notes WHERE id = ?`
+  ).bind(result.meta.last_row_id).first()
+  return c.json({ ok: true, note })
 })
 
 // Candidate notes — GET
