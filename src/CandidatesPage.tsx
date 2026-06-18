@@ -1083,6 +1083,7 @@ export default function CandidatesPage() {
       filters.fit_statuses.length > 0 &&
       (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+    setBoardCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
     if (willExit && openedIndex >= 0) {
       const nextCand = openedIndex + 1 < candidates.length ? candidates[openedIndex + 1] : null
       const prevCand = openedIndex > 0 ? candidates[openedIndex - 1] : null
@@ -1104,7 +1105,16 @@ export default function CandidatesPage() {
       refreshDailyProgress()
     } catch {
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
+      setBoardCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
     }
+  }
+
+  // Keep the table + board lists in sync when the drawer changes an application's stage.
+  function handleSheetStageChange(appId: number, newStatus: string) {
+    const patch = (c: CandidateListItem) =>
+      c.latest_application_id === appId ? { ...c, latest_status: newStatus } : c
+    setCandidates((prev) => prev.map(patch))
+    setBoardCandidates((prev) => prev.map(patch))
   }
 
   function toggleSelectId(id: number) {
@@ -1894,6 +1904,7 @@ export default function CandidatesPage() {
               onTabChange={setSheetTab}
               currentUser={currentUser}
               onFitStatus={handleSheetFitStatus}
+              onStageChange={handleSheetStageChange}
               onNavigate={navigateSheet}
               onNoteAdded={refreshDailyProgress}
               hasPrev={openedIndex > 0}
@@ -2189,6 +2200,7 @@ function CandidateDetailView({
   onTabChange,
   currentUser,
   onFitStatus,
+  onStageChange,
   onNavigate,
   onNoteAdded,
   hasPrev,
@@ -2199,6 +2211,7 @@ function CandidateDetailView({
   onTabChange: (tab: string) => void
   currentUser: User
   onFitStatus: (status: string | null) => void
+  onStageChange: (appId: number, newStatus: string) => void
   onNavigate: (dir: -1 | 1) => void
   onNoteAdded: () => void
   hasPrev: boolean
@@ -2263,10 +2276,12 @@ function CandidateDetailView({
     const prev = appStatuses.get(appId) ?? 'new'
     if (newStatus === prev) return
     setAppStatuses((m) => new Map(m).set(appId, newStatus))
+    onStageChange(appId, newStatus)
     try {
       await updateApplicationStatus(appId, newStatus)
     } catch {
       setAppStatuses((m) => new Map(m).set(appId, prev))
+      onStageChange(appId, prev)
     }
   }
 
@@ -2891,7 +2906,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     setOutreach(null)
     setOutreachOpen(true)
     try {
-      const email = await generateOutreachEmail(applicantId)
+      const email = await generateOutreachEmail(applicantId, currentUser.fullName)
       setOutreach(email)
     } catch (err) {
       setOutreachError(err instanceof Error ? err.message : 'failed to generate outreach email')

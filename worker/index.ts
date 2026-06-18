@@ -336,8 +336,11 @@ app.post('/api/candidates/:id/outreach-email', async (c) => {
   if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body = await c.req.json<{ sender_name?: string }>().catch(() => ({}))
+  const senderName = typeof body.sender_name === 'string' ? body.sender_name.trim() : ''
+  if (!senderName) return c.json({ ok: false, error: 'sender_name is required' }, 400)
   try {
-    const email = await generateOutreachEmail(c.env.DB, id, c.env)
+    const email = await generateOutreachEmail(c.env.DB, id, c.env, senderName)
     return c.json({ ok: true, email })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'generation failed' }, 400)

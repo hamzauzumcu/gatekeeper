@@ -20,7 +20,7 @@ const OUTREACH_PROMPT_KEY = 'outreach_email_prompt'
 // the prompt forbids inventing anything beyond it.
 export const COMPANY_BLURB =
   'beta.limited is a company operating in the B2B SaaS and mobile application space, ' +
-  'building innovative mobile marketing solutions. Website: https://beta.limited'
+  'building innovative mobile marketing solutions (https://beta.limited).'
 
 // Lighter env than interview notes — outreach only needs the position, the
 // application date, and the candidate's name/country/CV languages, so it never
@@ -50,6 +50,7 @@ You are given the following inputs, each in its own block:
 <applied_on>...</applied_on>
 <language>...</language>
 <cv_languages>...</cv_languages>
+<sender_name>...</sender_name>
 
 Goal: a brief, friendly check-in email that (1) references the specific position they applied to and roughly when they applied, (2) includes one or two short sentences introducing the company based on the company description above, (3) asks whether they are still open / their job search is still active, and (4) proposes a short, low-pressure call to talk. Keep it genuinely short — 4-6 sentences of body, no filler, no long pitch.
 
@@ -62,8 +63,11 @@ Rules:
 - Address the candidate by their first name if a name is given; otherwise use a neutral greeting.
 - Do not invent details that are not in the inputs (no fake salary, location, or specific times). Propose a call without committing to an exact slot.
 - The only allowed company facts are those in the company description above — keep the introduction to one or two sentences and do not invent any other company details.
+- Always include the company link in the email, written in parentheses exactly as (https://beta.limited). Never omit, alter, or translate this URL.
 - The subject line must be short and specific to the position.
-- Use a warm but professional tone. Sign off generically (e.g. "Best regards," with no fabricated sender name).
+- Use a warm, friendly, conversational tone — write like a real person reaching out personally, not a formal corporate template. Keep it relaxed and sincere while staying respectful.
+- Open with a friendly greeting and a natural line that you saw their application for the position and wanted to get in touch (e.g. in Turkish: "Merhaba Gülşah, bu pozisyona başvurunuzu gördüm, bu sebeple sizinle iletişime geçmek istedim.").
+- End the email with a sign-off line — "İyi çalışmalar" for a Turkish email, "Best regards" for an English one — followed on the next line by the sender's name from <sender_name>. Do not invent any other sender name.
 
 Output ONLY a JSON object with exactly these keys:
 {"subject": "<email subject>", "body": "<email body with line breaks as \\n>", "language": "<the language you actually wrote in: Turkish or English>"}
@@ -132,6 +136,7 @@ export async function generateOutreachEmail(
   db: D1Database,
   applicantId: number,
   env: OutreachEmailEnv,
+  senderName: string,
   signal?: AbortSignal
 ): Promise<OutreachEmail> {
   const row = await db
@@ -168,6 +173,7 @@ export async function generateOutreachEmail(
     `<applied_on>\n${appliedOn}\n</applied_on>`,
     `<language>\n${language}\n</language>`,
     `<cv_languages>\n${cvLangs.join(', ')}\n</cv_languages>`,
+    `<sender_name>\n${senderName.trim()}\n</sender_name>`,
   ].join('\n\n')
 
   const { prompt } = await getOutreachEmailPrompt(db)

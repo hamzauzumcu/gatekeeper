@@ -630,11 +630,11 @@ export type OutreachEmail = {
 
 // Generate a short outreach email for a candidate. The result is returned for
 // the UI to display, copy, or open in a mail client — it is not saved.
-export async function generateOutreachEmail(applicantId: number): Promise<OutreachEmail> {
+export async function generateOutreachEmail(applicantId: number, senderName: string): Promise<OutreachEmail> {
   const res = await fetch(`/api/candidates/${applicantId}/outreach-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ sender_name: senderName }),
   })
   const data = (await res.json()) as { ok: true; email: OutreachEmail } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to generate outreach email')
