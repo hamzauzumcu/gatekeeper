@@ -14,6 +14,14 @@ import { deepseekChat } from './deepseek'
 
 const OUTREACH_PROMPT_KEY = 'outreach_email_prompt'
 
+// Single source of truth for how the AI introduces the company in outreach
+// emails. English only (repo policy); the model translates it into the
+// candidate's language when writing the email. Keep this to verifiable facts —
+// the prompt forbids inventing anything beyond it.
+export const COMPANY_BLURB =
+  'beta.limited is a company operating in the B2B SaaS and mobile application space, ' +
+  'building innovative mobile marketing solutions. Website: https://beta.limited'
+
 // Lighter env than interview notes — outreach only needs the position, the
 // application date, and the candidate's name/country/CV languages, so it never
 // re-OCRs the PDF.
@@ -33,6 +41,9 @@ export type OutreachEmail = {
 // user-content builder in generateOutreachEmail — keep the two in sync.
 export const DEFAULT_OUTREACH_EMAIL_PROMPT = `You are a recruiter writing a short, warm outreach email to a candidate who applied to one of our roles some time ago.
 
+Company description (translate it into the email's language; do not add facts beyond it):
+${COMPANY_BLURB}
+
 You are given the following inputs, each in its own block:
 <candidate_name>...</candidate_name>
 <position>...</position>
@@ -40,7 +51,7 @@ You are given the following inputs, each in its own block:
 <language>...</language>
 <cv_languages>...</cv_languages>
 
-Goal: a brief, friendly check-in email that (1) references the specific position they applied to and roughly when they applied, (2) includes ONE short sentence introducing the company "beta.limited" with its website https://beta.limited, (3) asks whether they are still open / their job search is still active, and (4) proposes a short, low-pressure call to talk. Keep it genuinely short — 4-6 sentences of body, no filler, no long pitch.
+Goal: a brief, friendly check-in email that (1) references the specific position they applied to and roughly when they applied, (2) includes one or two short sentences introducing the company based on the company description above, (3) asks whether they are still open / their job search is still active, and (4) proposes a short, low-pressure call to talk. Keep it genuinely short — 4-6 sentences of body, no filler, no long pitch.
 
 Language:
 - <language> is either "Turkish", "English", or "auto".
@@ -50,7 +61,7 @@ Language:
 Rules:
 - Address the candidate by their first name if a name is given; otherwise use a neutral greeting.
 - Do not invent details that are not in the inputs (no fake salary, location, or specific times). Propose a call without committing to an exact slot.
-- The only allowed company facts are the name "beta.limited" and the website https://beta.limited — keep the introduction to a single sentence and do not invent any other company details.
+- The only allowed company facts are those in the company description above — keep the introduction to one or two sentences and do not invent any other company details.
 - The subject line must be short and specific to the position.
 - Use a warm but professional tone. Sign off generically (e.g. "Best regards," with no fabricated sender name).
 
