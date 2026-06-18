@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
-  Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
-  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical,
+  Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
+  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -36,6 +36,15 @@ import {
   updateNote,
   deleteNote,
   generateInterviewNotes,
+  generateOutreachEmail,
+  type OutreachEmail,
+  PIPELINE_STAGES,
+  DEFAULT_STAGE,
+  OFF_BOARD,
+  normalizeStage,
+  isOnBoard,
+  updateApplicationsStageBulk,
+  type PipelineStage,
   FIT_STATUS_OPTIONS,
   getOpOptions,
   defaultOpForType,
@@ -71,6 +80,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { DropdownMenu, Dialog } from 'radix-ui'
 import {
   Table,
   TableBody,
@@ -696,6 +706,11 @@ function SortHeader({
   )
 }
 
+const VIEW_STORAGE_KEY = 'gk_candidate_view'
+// The board fetches in one shot (no infinite scroll), so cap how many cards it
+// will render across all stage columns.
+const BOARD_LIMIT = 500
+
 export default function CandidatesPage() {
   const [q, setQ] = useState('')
   const [searchOpen, setSearchOpen] = useState(false) // mobile: search field hidden until toggled
@@ -736,6 +751,27 @@ export default function CandidatesPage() {
   const [error, setError] = useState<string | null>(null)
   const [exitingIds, setExitingIds] = useState<Set<number>>(new Set())
   const sentinelRef = useRef<HTMLTableRowElement>(null)
+
+  // Table vs kanban board. The board loads its own (larger, unpaginated) slice
+  // of the same filtered set so every stage column is complete.
+  const [view, setView] = useState<'table' | 'board'>(() => {
+    try {
+      return localStorage.getItem(VIEW_STORAGE_KEY) === 'board' ? 'board' : 'table'
+    } catch {
+      return 'table'
+    }
+  })
+  const [boardCandidates, setBoardCandidates] = useState<CandidateListItem[]>([])
+  const [boardLoading, setBoardLoading] = useState(false)
+
+  function changeView(next: 'table' | 'board') {
+    setView(next)
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, next)
+    } catch {
+      // non-fatal
+    }
+  }
 
   const currentUser = getUser()!
 
@@ -838,6 +874,46 @@ export default function CandidatesPage() {
     obs.observe(sentinelRef.current)
     return () => obs.disconnect()
   }, [hasMore, loadingMore, loading, offset, q, filters, visibleQuestionIds, sort]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Board data: one unpaginated fetch of the current filtered set, grouped into
+  // stage columns client-side. Reuses the same query as the table.
+  useEffect(() => {
+    if (view !== 'board') return
+    let active = true
+    setBoardLoading(true)
+    const t = setTimeout(() => {
+      fetchCandidates(q, filters, extraColIds, 0, BOARD_LIMIT, sort)
+        .then(({ candidates: page }) => {
+          if (active) setBoardCandidates(page)
+        })
+        .catch(() => {
+          if (active) setBoardCandidates([])
+        })
+        .finally(() => {
+          if (active) setBoardLoading(false)
+        })
+    }, 250)
+    return () => {
+      active = false
+      clearTimeout(t)
+    }
+  }, [view, q, filters, visibleQuestionIds, sort]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Optimistically move a candidate's latest application to a new stage, syncing
+  // both the board and the (possibly mounted) table list.
+  function moveStage(cand: CandidateListItem, stage: string) {
+    const appId = cand.latest_application_id
+    if (appId == null) return
+    const prevStage = normalizeStage(cand.latest_status)
+    if (prevStage === stage) return
+    const apply = (s: string) => {
+      const patch = (c: CandidateListItem) => (c.id === cand.id ? { ...c, latest_status: s } : c)
+      setBoardCandidates((list) => list.map(patch))
+      setCandidates((list) => list.map(patch))
+    }
+    apply(stage)
+    updateApplicationStatus(appId, stage).catch(() => apply(prevStage))
+  }
 
   function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
     const next = { ...filters, [key]: value }
@@ -1074,6 +1150,28 @@ export default function CandidatesPage() {
     }
   }
 
+  // Bulk add the selected candidates to a pipeline stage (DEFAULT_STAGE to add,
+  // OFF_BOARD to remove). Operates on each candidate's latest application.
+  async function assignStageBulk(stage: string) {
+    if (selectedIds.size === 0) return
+    const appIds = candidates
+      .filter((c) => selectedIds.has(c.id) && c.latest_application_id != null)
+      .map((c) => c.latest_application_id as number)
+    if (appIds.length === 0) return
+    setBulkLoading(true)
+    try {
+      await updateApplicationsStageBulk(appIds, stage)
+      const patch = (c: CandidateListItem) => (selectedIds.has(c.id) ? { ...c, latest_status: stage } : c)
+      setCandidates((prev) => prev.map(patch))
+      setBoardCandidates((prev) => prev.map(patch))
+      setSelectedIds(new Set())
+    } catch {
+      // silent
+    } finally {
+      setBulkLoading(false)
+    }
+  }
+
   async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
     const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     try {
@@ -1214,14 +1312,45 @@ export default function CandidatesPage() {
               </button>
             )}
           </div>
-          <ColumnPicker
-            questionColumns={questionColumns}
-            visibleIds={visibleQuestionIds}
-            onChange={updateVisibleColumns}
-            hiddenBaseColumns={hiddenBaseColumns}
-            onToggleBase={toggleBaseColumn}
-            onResetBase={resetBaseColumns}
-          />
+          {view === 'table' && (
+            <ColumnPicker
+              questionColumns={questionColumns}
+              visibleIds={visibleQuestionIds}
+              onChange={updateVisibleColumns}
+              hiddenBaseColumns={hiddenBaseColumns}
+              onToggleBase={toggleBaseColumn}
+              onResetBase={resetBaseColumns}
+            />
+          )}
+          {/* Table / Board view switch */}
+          <div className="inline-flex shrink-0 rounded-md border p-0.5">
+            <button
+              type="button"
+              onClick={() => changeView('table')}
+              aria-label="Table view"
+              aria-pressed={view === 'table'}
+              className={[
+                'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors',
+                view === 'table' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+              ].join(' ')}
+            >
+              <Table2 className="size-3.5" />
+              <span className="hidden sm:inline">Table</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => changeView('board')}
+              aria-label="Board view"
+              aria-pressed={view === 'board'}
+              className={[
+                'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors',
+                view === 'board' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+              ].join(' ')}
+            >
+              <Kanban className="size-3.5" />
+              <span className="hidden sm:inline">Board</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter chips — collapsed by default, added on demand via "Add filter" */}
@@ -1407,6 +1536,14 @@ export default function CandidatesPage() {
       <CardContent className="relative pb-0 overflow-x-auto">
         {error && <p className="mb-2 text-sm text-destructive">Error: {error}</p>}
 
+        {view === 'board' ? (
+          <PipelineBoard
+            candidates={boardCandidates}
+            loading={boardLoading}
+            onOpen={(id) => openCandidate(id)}
+            onMove={moveStage}
+          />
+        ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -1606,6 +1743,7 @@ export default function CandidatesPage() {
             </TableRow>
           </TableBody>
         </Table>
+        )}
 
         {/* Floating bulk pill — multi-select */}
         {selectedIds.size > 0 && (
@@ -1638,6 +1776,29 @@ export default function CandidatesPage() {
                 className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
               >
                 Clear
+              </button>
+              <Separator orientation="vertical" className="hidden h-4 sm:block" />
+              <span className="hidden text-xs text-muted-foreground whitespace-nowrap sm:inline">Pipeline:</span>
+              <button
+                type="button"
+                disabled={bulkLoading}
+                onClick={() => assignStageBulk(DEFAULT_STAGE)}
+                className={[
+                  'inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-opacity',
+                  STAGE_STYLES[DEFAULT_STAGE]?.badge ?? '',
+                  bulkLoading ? 'opacity-50' : 'hover:opacity-80',
+                ].join(' ')}
+              >
+                <Plus className="size-3" />
+                Add to Shortlist
+              </button>
+              <button
+                type="button"
+                disabled={bulkLoading}
+                onClick={() => assignStageBulk(OFF_BOARD)}
+                className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-opacity hover:opacity-80 disabled:opacity-50"
+              >
+                Remove
               </button>
               <Separator orientation="vertical" className="h-4" />
               <button
@@ -1761,20 +1922,241 @@ function getInitials(name: string | null | undefined) {
     .join('')
 }
 
-const STATUS_OPTIONS = [
-  { value: 'new', label: 'New' },
-  { value: 'reviewed', label: 'Reviewed' },
-  { value: 'shortlisted', label: 'Shortlisted' },
-  { value: 'rejected', label: 'Rejected' },
-] as const
+// Per-stage presentation. `dot` colours the board column marker / select swatch,
+// `badge` styles the pill. Keyed by the stage values in PIPELINE_STAGES.
+const STAGE_STYLES: Record<string, { dot: string; badge: string }> = {
+  shortlisted:  { dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 border-blue-200' },
+  outreach:     { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+  interviewing: { dot: 'bg-violet-400',  badge: 'bg-violet-50 text-violet-700 border-violet-200' },
+  interviewed:  { dot: 'bg-indigo-400',  badge: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  hired:        { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  rejected:     { dot: 'bg-red-400',     badge: 'bg-red-50 text-red-700 border-red-200' },
+}
 
-const STATUS_STYLES: Record<string, string> = {
-  new: 'bg-slate-50 text-slate-700 border-slate-200',
-  submitted: 'bg-blue-50 text-blue-700 border-blue-200',
-  reviewed: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-  shortlisted: 'bg-green-50 text-green-700 border-green-200',
-  rejected: 'bg-red-50 text-red-700 border-red-200',
-  hired: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+function stageStyle(value: string | null | undefined) {
+  return STAGE_STYLES[normalizeStage(value)] ?? STAGE_STYLES.shortlisted
+}
+
+// A small per-application stage dropdown used in the candidate detail panel.
+function StageSelect({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (next: string) => void
+}) {
+  // Off-board applications show "Not in pipeline"; selecting a stage adds them.
+  const current = isOnBoard(value) ? value : OFF_BOARD
+  const dot = current === OFF_BOARD ? 'bg-muted-foreground/40' : stageStyle(current).dot
+  return (
+    <div className="relative inline-flex items-center">
+      <span className={`pointer-events-none absolute left-2 size-2 rounded-full ${dot}`} />
+      <select
+        value={current}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-7 cursor-pointer appearance-none rounded-md border bg-background pl-6 pr-7 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value={OFF_BOARD}>Not in pipeline</option>
+        {PIPELINE_STAGES.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 size-3 text-muted-foreground" />
+    </div>
+  )
+}
+
+const BOARD_COLLAPSE_KEY = 'gk_board_collapsed'
+
+// One kanban column per pipeline stage. Cards are candidates grouped by their
+// latest application's status; dragging a card onto a column moves that stage.
+// Only in-pipeline candidates (isOnBoard) appear — off-board ones are added
+// from the table/detail. Empty columns can be collapsed to thin strips.
+function PipelineBoard({
+  candidates,
+  loading,
+  onOpen,
+  onMove,
+}: {
+  candidates: CandidateListItem[]
+  loading: boolean
+  onOpen: (id: number) => void
+  onMove: (cand: CandidateListItem, stage: string) => void
+}) {
+  const [dragId, setDragId] = useState<number | null>(null)
+  const [overStage, setOverStage] = useState<string | null>(null)
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(BOARD_COLLAPSE_KEY)
+      if (raw) return new Set(JSON.parse(raw) as string[])
+    } catch {}
+    return new Set()
+  })
+
+  function persistCollapsed(next: Set<string>) {
+    setCollapsed(next)
+    try {
+      localStorage.setItem(BOARD_COLLAPSE_KEY, JSON.stringify([...next]))
+    } catch {}
+  }
+
+  function toggleCollapse(value: string) {
+    const next = new Set(collapsed)
+    if (next.has(value)) next.delete(value)
+    else next.add(value)
+    persistCollapsed(next)
+  }
+
+  const byStage = new Map<string, CandidateListItem[]>()
+  for (const s of PIPELINE_STAGES) byStage.set(s.value, [])
+  for (const c of candidates) {
+    if (isOnBoard(c.latest_status)) byStage.get(c.latest_status as string)!.push(c)
+  }
+
+  const emptyStages = PIPELINE_STAGES.filter((s) => byStage.get(s.value)!.length === 0)
+  const collapsibleEmpties = emptyStages.filter((s) => !collapsed.has(s.value))
+
+  return (
+    <div>
+      {/* Collapse controls */}
+      <div className="mb-2 flex items-center justify-end gap-3 text-xs">
+        {collapsibleEmpties.length > 0 && (
+          <button
+            type="button"
+            onClick={() => persistCollapsed(new Set([...collapsed, ...emptyStages.map((s) => s.value)]))}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Hide empty ({collapsibleEmpties.length})
+          </button>
+        )}
+        {collapsed.size > 0 && (
+          <button
+            type="button"
+            onClick={() => persistCollapsed(new Set())}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Show all
+          </button>
+        )}
+      </div>
+
+      <div className="flex gap-3 overflow-x-auto pb-4">
+        {PIPELINE_STAGES.map((stage: PipelineStage) => {
+          const items = byStage.get(stage.value)!
+          const isOver = overStage === stage.value
+
+          // Collapsed → thin vertical strip, click to expand.
+          if (collapsed.has(stage.value)) {
+            return (
+              <button
+                key={stage.value}
+                type="button"
+                onClick={() => toggleCollapse(stage.value)}
+                title={`Expand ${stage.label}`}
+                className="flex w-9 shrink-0 cursor-pointer flex-col items-center gap-2 rounded-xl border bg-muted/30 py-3 text-muted-foreground transition-colors hover:bg-muted/60"
+              >
+                <span className={`size-2 rounded-full ${stageStyle(stage.value).dot}`} />
+                <span className="[writing-mode:vertical-rl] text-xs font-medium">{stage.label}</span>
+                <span className="text-xs tabular-nums">{items.length}</span>
+              </button>
+            )
+          }
+
+          return (
+            <div
+              key={stage.value}
+              onDragOver={(e) => {
+                e.preventDefault()
+                if (overStage !== stage.value) setOverStage(stage.value)
+              }}
+              onDragLeave={() => setOverStage((s) => (s === stage.value ? null : s))}
+              onDrop={() => {
+                setOverStage(null)
+                const cand = candidates.find((c) => c.id === dragId)
+                setDragId(null)
+                if (
+                  cand &&
+                  cand.latest_application_id != null &&
+                  cand.latest_status !== stage.value
+                ) {
+                  onMove(cand, stage.value)
+                }
+              }}
+              className={[
+                'flex w-72 shrink-0 flex-col rounded-xl border bg-muted/30 transition-colors',
+                isOver ? 'border-primary ring-2 ring-primary/40' : '',
+                stage.terminal ? 'bg-muted/50' : '',
+              ].join(' ')}
+            >
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+                  <span className={`size-2 rounded-full ${stageStyle(stage.value).dot}`} />
+                  {stage.label}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="rounded-full bg-background px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
+                    {items.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapse(stage.value)}
+                    title={`Collapse ${stage.label}`}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                </span>
+              </div>
+              <div className="flex min-h-24 flex-1 flex-col gap-2 p-2">
+                {loading ? (
+                  Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)
+                ) : items.length === 0 ? (
+                  <div className="px-2 py-6 text-center text-xs text-muted-foreground">—</div>
+                ) : (
+                  items.map((c) => {
+                    const draggable = c.latest_application_id != null
+                    return (
+                      <div
+                        key={c.id}
+                        draggable={draggable}
+                        onDragStart={() => setDragId(c.id)}
+                        onDragEnd={() => {
+                          setDragId(null)
+                          setOverStage(null)
+                        }}
+                        onClick={() => onOpen(c.id)}
+                        className={[
+                          'cursor-pointer rounded-lg border bg-background p-2.5 text-left shadow-sm transition hover:border-primary/50 hover:shadow',
+                          draggable ? 'cursor-grab active:cursor-grabbing' : '',
+                          dragId === c.id ? 'opacity-40' : '',
+                        ].join(' ')}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{c.full_name ?? '—'}</span>
+                          <ScoreBadge score={c.ai_score} />
+                        </div>
+                        {c.positions && (
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground" title={c.positions}>
+                            {c.positions}
+                          </div>
+                        )}
+                        <div className="mt-1.5 flex items-center gap-2">
+                          {c.fit_status && <FitBadge status={c.fit_status} />}
+                          {c.country && <span className="truncate text-xs text-muted-foreground">{c.country}</span>}
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 const LINK_LABELS: Record<string, string> = {
@@ -2033,6 +2415,10 @@ function CandidateDetailView({
                       </p>
                     )}
                   </div>
+                  <StageSelect
+                    value={appStatuses.get(app.id) ?? DEFAULT_STAGE}
+                    onChange={(next) => handleDetailStatusChange(app.id, next)}
+                  />
                 </div>
 
                 <div className="divide-y">
@@ -2195,7 +2581,7 @@ function CandidateDetailView({
         </TabsContent>
 
         <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
-          <NotesSection applicantId={applicant.id} currentUser={currentUser} onNoteAdded={onNoteAdded} />
+          <NotesSection applicantId={applicant.id} candidateName={applicant.full_name} candidateEmail={applicant.email} currentUser={currentUser} onNoteAdded={onNoteAdded} />
         </TabsContent>
       </Tabs>
 
@@ -2292,7 +2678,111 @@ function CandidateDetailView({
   )
 }
 
-function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: number; currentUser: User; onNoteAdded: () => void }) {
+// Small copy-to-clipboard button that flips to a check for ~1.5s after a copy.
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // clipboard may be unavailable (e.g. insecure context); ignore
+    }
+  }
+  return (
+    <Button type="button" size="sm" variant="outline" onClick={copy} className="gap-1.5">
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? 'Copied' : label}
+    </Button>
+  )
+}
+
+// Modal showing a generated outreach email: subject + body, with copy buttons
+// and a mailto link prefilled for the candidate.
+function OutreachEmailDialog({
+  open,
+  onOpenChange,
+  loading,
+  email,
+  error,
+  candidateName,
+  candidateEmail,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  loading: boolean
+  email: OutreachEmail | null
+  error: string | null
+  candidateName: string | null
+  candidateEmail: string | null
+}) {
+  const mailtoHref = email && candidateEmail
+    ? `mailto:${encodeURIComponent(candidateEmail)}?subject=${encodeURIComponent(email.subject)}&body=${encodeURIComponent(email.body)}`
+    : null
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-lg border bg-background p-5 shadow-lg data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Dialog.Title className="text-base font-semibold">Outreach Email</Dialog.Title>
+              <Dialog.Description className="text-xs text-muted-foreground">
+                {candidateName ? `For ${candidateName}` : 'For this candidate'}
+                {email ? ` · ${email.language}` : ''}
+              </Dialog.Description>
+            </div>
+            <Dialog.Close className="rounded-xs opacity-70 transition-opacity hover:opacity-100">
+              <X className="size-4" />
+              <span className="sr-only">Close</span>
+            </Dialog.Close>
+          </div>
+
+          {loading && (
+            <div className="space-y-3 py-2">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          )}
+
+          {!loading && error && <p className="text-sm text-destructive">{error}</p>}
+
+          {!loading && email && (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Subject</p>
+                <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium">{email.subject}</p>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Body</p>
+                <p className="whitespace-pre-wrap rounded-md border bg-muted/40 px-3 py-2 text-sm leading-relaxed">{email.body}</p>
+              </div>
+            </div>
+          )}
+
+          {!loading && email && (
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+              <CopyButton value={email.subject} label="Copy subject" />
+              <CopyButton value={email.body} label="Copy body" />
+              {mailtoHref && (
+                <Button asChild size="sm" className="gap-1.5">
+                  <a href={mailtoHref}>
+                    <Mail className="size-3.5" />
+                    Open in mail
+                  </a>
+                </Button>
+              )}
+            </div>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
+function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
@@ -2303,6 +2793,13 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
   const [savingEdit, setSavingEdit] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  // Outreach email: generated on demand, shown in a modal to copy / open in a
+  // mail client. 'kind' tracks which generation is in flight so the dropdown can
+  // show a per-item spinner.
+  const [genKind, setGenKind] = useState<'notes' | 'outreach' | null>(null)
+  const [outreach, setOutreach] = useState<OutreachEmail | null>(null)
+  const [outreachOpen, setOutreachOpen] = useState(false)
+  const [outreachError, setOutreachError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -2370,6 +2867,7 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
   // to, the scoring criteria, and existing notes — saved as a new note (Turkish).
   async function handleGenerate() {
     setGenerating(true)
+    setGenKind('notes')
     setGenError(null)
     try {
       const note = await generateInterviewNotes(applicantId, currentUser.username, currentUser.fullName)
@@ -2379,6 +2877,27 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
       setGenError(err instanceof Error ? err.message : 'failed to generate interview notes')
     } finally {
       setGenerating(false)
+      setGenKind(null)
+    }
+  }
+
+  // Generate a short outreach email (language picked from the candidate's
+  // country, CV fallback) and open it in a modal. Not stored.
+  async function handleGenerateOutreach() {
+    setGenerating(true)
+    setGenKind('outreach')
+    setGenError(null)
+    setOutreachError(null)
+    setOutreach(null)
+    setOutreachOpen(true)
+    try {
+      const email = await generateOutreachEmail(applicantId)
+      setOutreach(email)
+    } catch (err) {
+      setOutreachError(err instanceof Error ? err.message : 'failed to generate outreach email')
+    } finally {
+      setGenerating(false)
+      setGenKind(null)
     }
   }
 
@@ -2387,24 +2906,55 @@ function NotesSection({ applicantId, currentUser, onNoteAdded }: { applicantId: 
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-medium">Interview Notes</p>
+            <p className="text-sm font-medium">AI Assist</p>
             <p className="text-xs text-muted-foreground">
-              Generate questions from the CV, position, and existing notes.
+              Generate interview notes or an outreach email for this candidate.
             </p>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleGenerate}
-            disabled={generating}
-            className="shrink-0 gap-1.5"
-          >
-            <Sparkles className="size-3.5" />
-            {generating ? 'Generating…' : 'Generate'}
-          </Button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button type="button" size="sm" disabled={generating} className="shrink-0 gap-1.5">
+                <Sparkles className="size-3.5" />
+                {generating ? 'Generating…' : 'Generate'}
+                <ChevronDown className="size-3.5 opacity-70" />
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                sideOffset={6}
+                className="z-50 min-w-[220px] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=open]:fade-in-0"
+              >
+                <DropdownMenu.Item
+                  onSelect={handleGenerate}
+                  className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
+                >
+                  <MessageSquare className="size-3.5 text-muted-foreground" />
+                  <span>Interview Notes</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  onSelect={handleGenerateOutreach}
+                  className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
+                >
+                  <Mail className="size-3.5 text-muted-foreground" />
+                  <span>Outreach Email</span>
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         </div>
         {genError && <p className="mt-2 text-xs text-destructive">{genError}</p>}
       </div>
+
+      <OutreachEmailDialog
+        open={outreachOpen}
+        onOpenChange={setOutreachOpen}
+        loading={genKind === 'outreach'}
+        email={outreach}
+        error={outreachError}
+        candidateName={candidateName}
+        candidateEmail={candidateEmail}
+      />
 
       <form onSubmit={handleSubmit} className="space-y-2">
         <textarea

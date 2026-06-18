@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicationsStageBulk, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
 import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
+import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
 import { SyncJobDO } from './sync-job-do'
 
 export { SyncJobDO }
@@ -162,6 +163,25 @@ app.patch('/api/applications/:id/status', async (c) => {
   }
 })
 
+// Bulk move applications to a pipeline stage (board add/remove via multi-select)
+app.patch('/api/applications/status/bulk', async (c) => {
+  let body: { application_ids: number[]; status: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!Array.isArray(body.application_ids) || body.application_ids.length === 0) {
+    return c.json({ ok: false, error: 'application_ids cannot be empty' }, 400)
+  }
+  try {
+    const updated = await updateApplicationsStageBulk(c.env.DB, body.application_ids, body.status)
+    return c.json({ ok: true, updated })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
+  }
+})
+
 // Edit a single application answer's value (e.g. correct a salary entered in thousands)
 app.patch('/api/applications/:id/answers/:questionId', async (c) => {
   const id = Number(c.req.param('id'))
@@ -259,6 +279,25 @@ app.put('/api/settings/interview-prompt', async (c) => {
   return c.json({ ok: true, prompt, is_custom })
 })
 
+// Outreach-email prompt template (global) — GET effective prompt + is_custom flag
+app.get('/api/settings/outreach-prompt', async (c) => {
+  const { prompt, is_custom } = await getOutreachEmailPrompt(c.env.DB)
+  return c.json({ ok: true, prompt, is_custom })
+})
+
+// Outreach-email prompt template — PUT (empty body reverts to the built-in default)
+app.put('/api/settings/outreach-prompt', async (c) => {
+  let body: { prompt?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  await setOutreachEmailPrompt(c.env.DB, body.prompt ?? '')
+  const { prompt, is_custom } = await getOutreachEmailPrompt(c.env.DB)
+  return c.json({ ok: true, prompt, is_custom })
+})
+
 // Generate AI interview notes for a candidate and save them as a new note.
 app.post('/api/candidates/:id/interview-notes', async (c) => {
   if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
@@ -288,6 +327,21 @@ app.post('/api/candidates/:id/interview-notes', async (c) => {
      FROM candidate_notes WHERE id = ?`
   ).bind(result.meta.last_row_id).first()
   return c.json({ ok: true, note })
+})
+
+// Generate a short outreach email for a candidate. Unlike interview notes this
+// is not stored — the email is returned for the UI to copy or open in a mail
+// client.
+app.post('/api/candidates/:id/outreach-email', async (c) => {
+  if (!c.env.DEEPSEEK_API_KEY) return c.json({ ok: false, error: 'DEEPSEEK_API_KEY not set' }, 500)
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  try {
+    const email = await generateOutreachEmail(c.env.DB, id, c.env)
+    return c.json({ ok: true, email })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'generation failed' }, 400)
+  }
 })
 
 // Candidate notes — GET

@@ -7,6 +7,8 @@ import {
   saveScoringPrompt,
   fetchInterviewPrompt,
   saveInterviewPrompt,
+  fetchOutreachPrompt,
+  saveOutreachPrompt,
   startSyncJob,
   fetchSyncStatus,
   stopSyncJob,
@@ -661,6 +663,107 @@ function InterviewPromptCard() {
   )
 }
 
+// Global outreach-email prompt template. One template is shared across all
+// candidates; name, position, application date, and language hint are injected
+// at generation time. The email language follows the candidate's country.
+function OutreachPromptCard() {
+  const [text, setText] = useState('')
+  const [isCustom, setIsCustom] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState('')
+
+  useEffect(() => {
+    fetchOutreachPrompt()
+      .then((r) => { setText(r.prompt); setLoaded(r.prompt); setIsCustom(r.is_custom) })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const isDirty = text !== loaded
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const r = await saveOutreachPrompt(text.trim())
+      setText(r.prompt)
+      setLoaded(r.prompt)
+      setIsCustom(r.is_custom)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Empty save reverts to the built-in default server-side.
+  async function handleReset() {
+    setSaving(true)
+    setError(null)
+    try {
+      const r = await saveOutreachPrompt('')
+      setText(r.prompt)
+      setLoaded(r.prompt)
+      setIsCustom(r.is_custom)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Reset failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sparkles className="size-4" />
+          Outreach Email Prompt
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Instructions used when generating a short outreach email for a candidate.
+          The candidate's name, the position they applied to, and roughly when they
+          applied are added automatically. The email language follows the candidate's
+          country (Turkey → Turkish, otherwise English).
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {loading ? (
+          <div className="h-48 rounded-xl border bg-muted/30 animate-pulse" />
+        ) : (
+          <>
+            <div className="text-xs text-muted-foreground">
+              {isCustom ? 'Using a custom prompt.' : 'Using the built-in default prompt.'}
+            </div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={12}
+              placeholder="Enter outreach-email prompt…"
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            />
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <div className="flex items-center gap-3">
+              <Button onClick={handleSave} disabled={!isDirty || saving || !text.trim()}>
+                {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Prompt'}
+              </Button>
+              {isCustom && (
+                <Button type="button" variant="outline" onClick={handleReset} disabled={saving}>
+                  Reset to Default
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const [positions, setPositions] = useState<PositionWithPrompt[]>([])
   const [loading, setLoading] = useState(true)
@@ -756,6 +859,9 @@ export default function SettingsPage() {
 
       {/* Interview Notes Prompt */}
       <InterviewPromptCard />
+
+      {/* Outreach Email Prompt */}
+      <OutreachPromptCard />
 
       {/* Sync AI Scores */}
       <Card>

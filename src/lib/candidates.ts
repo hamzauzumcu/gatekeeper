@@ -28,6 +28,50 @@ export const FIT_STATUS_OPTIONS = [
 
 export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'
 
+// ── Pipeline stages (application.status) ────────────────────────────────────
+// The hiring funnel, ordered left→right as the kanban board renders them. This
+// array is the single source of truth for stage order; the DB CHECK in
+// migration 0010 and worker VALID_STATUSES only gate which values are valid.
+// `terminal` marks end states (won/lost) shown as the rightmost lanes.
+export type PipelineStage = {
+  value: string
+  label: string
+  terminal?: boolean
+}
+
+export const PIPELINE_STAGES: PipelineStage[] = [
+  { value: 'shortlisted', label: 'Shortlisted' },
+  { value: 'outreach', label: 'Outreach' },
+  { value: 'interviewing', label: 'Interviewing' },
+  { value: 'interviewed', label: 'Interviewed' },
+  { value: 'hired', label: 'Hired', terminal: true },
+  { value: 'rejected', label: 'Rejected', terminal: true },
+]
+
+// Applications start OFF the board with this status (DB default, migration
+// 0011). The board never renders an 'none' column — these candidates only
+// appear once a recruiter explicitly adds them to a stage.
+export const OFF_BOARD = 'none'
+
+// The stage an application enters when first added to the pipeline.
+export const DEFAULT_STAGE = 'shortlisted'
+
+// True when a status is a real pipeline stage (i.e. shown on the board).
+export function isOnBoard(value: string | null | undefined): boolean {
+  return PIPELINE_STAGES.some((s) => s.value === value)
+}
+
+// Normalize an arbitrary/legacy status into a known stage value (off-board /
+// unknown values fall back to the entry stage). Use isOnBoard when you need to
+// distinguish "not in pipeline" from a real stage.
+export function normalizeStage(value: string | null | undefined): string {
+  return isOnBoard(value) ? (value as string) : DEFAULT_STAGE
+}
+
+export function stageLabel(value: string | null | undefined): string {
+  return PIPELINE_STAGES.find((s) => s.value === value)?.label ?? 'Shortlisted'
+}
+
 export type CandidateAnswer = { question_id: number; label: string; type: string; value: string | null }
 
 export type CandidateApplication = {
@@ -444,6 +488,21 @@ export async function updateApplicationStatus(
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
 }
 
+// Move several applications to one pipeline stage at once (or OFF_BOARD to
+// remove from the pipeline). Takes application IDs, not applicant IDs.
+export async function updateApplicationsStageBulk(
+  applicationIds: number[],
+  status: string
+): Promise<void> {
+  const res = await fetch('/api/applications/status/bulk', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ application_ids: applicationIds, status }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
+}
+
 export async function updateApplicantsFitStatus(
   ids: number[],
   fit_status: string | null,
@@ -561,6 +620,27 @@ export async function generateInterviewNotes(
   return data.note
 }
 
+// ── Outreach email (AI-generated, not stored) ───────────────────────────────
+
+export type OutreachEmail = {
+  subject: string
+  body: string
+  language: string
+}
+
+// Generate a short outreach email for a candidate. The result is returned for
+// the UI to display, copy, or open in a mail client — it is not saved.
+export async function generateOutreachEmail(applicantId: number): Promise<OutreachEmail> {
+  const res = await fetch(`/api/candidates/${applicantId}/outreach-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  const data = (await res.json()) as { ok: true; email: OutreachEmail } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to generate outreach email')
+  return data.email
+}
+
 // ── Interview-notes prompt (global template) ────────────────────────────────
 
 export type InterviewPrompt = { prompt: string; is_custom: boolean }
@@ -581,6 +661,27 @@ export async function saveInterviewPrompt(prompt: string): Promise<InterviewProm
   })
   const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save interview prompt')
+  return { prompt: data.prompt, is_custom: data.is_custom }
+}
+
+// ── Outreach-email prompt (global template) ─────────────────────────────────
+
+export async function fetchOutreachPrompt(): Promise<InterviewPrompt> {
+  const res = await fetch('/api/settings/outreach-prompt')
+  const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch outreach prompt')
+  return { prompt: data.prompt, is_custom: data.is_custom }
+}
+
+// Save a custom prompt, or pass an empty string to revert to the built-in default.
+export async function saveOutreachPrompt(prompt: string): Promise<InterviewPrompt> {
+  const res = await fetch('/api/settings/outreach-prompt', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save outreach prompt')
   return { prompt: data.prompt, is_custom: data.is_custom }
 }
 

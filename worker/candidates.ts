@@ -393,7 +393,11 @@ export async function listCandidates(
   return { candidates, total }
 }
 
-const VALID_STATUSES = ['new', 'reviewed', 'shortlisted', 'rejected'] as const
+// Hiring-pipeline stages (kanban). Order is defined client-side in
+// lib/candidates.ts PIPELINE_STAGES; here we only gate which values are writable.
+// 'none' = off the board (not in the pipeline). The rest are kanban stages,
+// ordered client-side in lib/candidates.ts PIPELINE_STAGES.
+const VALID_STATUSES = ['none', 'shortlisted', 'outreach', 'interviewing', 'interviewed', 'hired', 'rejected'] as const
 export const VALID_FIT_STATUSES = ['not_fit', 'good_fit', 'maybe'] as const
 export type FitStatus = typeof VALID_FIT_STATUSES[number]
 
@@ -408,6 +412,22 @@ export async function updateApplicationStatus(
     .bind(status, applicationId)
     .run()
   return (res.meta?.changes ?? 0) > 0
+}
+
+// Set one pipeline stage on many applications at once (bulk board add/remove).
+export async function updateApplicationsStageBulk(
+  db: D1Database,
+  applicationIds: number[],
+  status: string
+): Promise<number> {
+  if (applicationIds.length === 0) return 0
+  if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('invalid status')
+  const placeholders = applicationIds.map(() => '?').join(',')
+  const res = await db
+    .prepare(`UPDATE applications SET status = ? WHERE id IN (${placeholders})`)
+    .bind(status, ...applicationIds)
+    .run()
+  return res.meta?.changes ?? 0
 }
 
 export async function updateApplicantsFitStatus(
