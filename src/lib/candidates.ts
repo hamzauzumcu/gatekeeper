@@ -471,6 +471,18 @@ export async function fetchDailyProgress(username: string): Promise<DailyProgres
   return { target: data.target, today_count: data.today_count, date: data.date }
 }
 
+export type DailyHistoryPoint = { date: string; count: number }
+export type DailyHistory = { target: number; days: DailyHistoryPoint[] }
+
+export async function fetchDailyHistory(username: string, days = 30): Promise<DailyHistory> {
+  const res = await fetch(
+    `/api/settings/daily/history?username=${encodeURIComponent(username)}&days=${days}`
+  )
+  const data = (await res.json()) as ({ ok: true } & DailyHistory) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to load history')
+  return { target: data.target, days: data.days }
+}
+
 export async function saveDailyTarget(username: string, target: number): Promise<DailyProgress> {
   const res = await fetch('/api/settings/daily', {
     method: 'PUT',
@@ -529,6 +541,102 @@ export async function deleteNote(noteId: number): Promise<void> {
   const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
+}
+
+// ── Saved filters (shared, named presets) ──────────────────────────────────
+
+export type SavedFilter = {
+  id: number
+  name: string
+  filters: ActiveFilters
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+// Server row shape — filters arrive as a JSON string we parse into ActiveFilters.
+type SavedFilterRow = {
+  id: number
+  name: string
+  filters_json: string
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+// Coerce an arbitrary parsed object into a complete ActiveFilters (reuses the
+// same defaulting as loadSavedFilters so partial/legacy blobs stay safe).
+function normalizeFilters(parsed: Record<string, unknown>): ActiveFilters {
+  return {
+    countries: Array.isArray(parsed.countries) ? (parsed.countries as string[]) : [],
+    position: typeof parsed.position === 'string' ? parsed.position : '',
+    fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
+    answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
+    min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
+    max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
+  }
+}
+
+function rowToSavedFilter(row: SavedFilterRow): SavedFilter {
+  let filters: ActiveFilters
+  try {
+    filters = normalizeFilters(JSON.parse(row.filters_json) as Record<string, unknown>)
+  } catch {
+    filters = { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
+  }
+  return { id: row.id, name: row.name, filters, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at }
+}
+
+export async function fetchSavedFilters(): Promise<SavedFilter[]> {
+  const res = await fetch('/api/saved-filters')
+  const data = (await res.json()) as { ok: true; filters: SavedFilterRow[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch saved filters')
+  return data.filters.map(rowToSavedFilter)
+}
+
+export async function createSavedFilter(name: string, filters: ActiveFilters, createdBy: string): Promise<SavedFilter> {
+  const res = await fetch('/api/saved-filters', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, filters_json: JSON.stringify(filters), created_by: createdBy }),
+  })
+  const data = (await res.json()) as { ok: true; filter: SavedFilterRow } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save filter')
+  return rowToSavedFilter(data.filter)
+}
+
+export async function updateSavedFilter(
+  id: number,
+  patch: { name?: string; filters?: ActiveFilters }
+): Promise<SavedFilter> {
+  const body: { name?: string; filters_json?: string } = {}
+  if (patch.name !== undefined) body.name = patch.name
+  if (patch.filters !== undefined) body.filters_json = JSON.stringify(patch.filters)
+  const res = await fetch(`/api/saved-filters/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = (await res.json()) as { ok: true; filter: SavedFilterRow } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to update filter')
+  return rowToSavedFilter(data.filter)
+}
+
+export async function deleteSavedFilter(id: number): Promise<void> {
+  const res = await fetch(`/api/saved-filters/${id}`, { method: 'DELETE' })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete filter')
+}
+
+// Which fixed-filter chips should be visible for a given filter set. Mirrors the
+// initializer in CandidatesPage so applying a saved filter reveals its chips.
+export function shownKindsForFilters(f: ActiveFilters): string[] {
+  const kinds: string[] = []
+  if (f.countries.length) kinds.push('country')
+  if (f.position) kinds.push('position')
+  if (f.fit_statuses.length) kinds.push('status')
+  if (f.min_score || f.max_score) kinds.push('score')
+  return kinds
 }
 
 export function formatDate(iso: string | null): string {

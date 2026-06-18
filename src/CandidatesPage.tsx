@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles,
-  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown,
+  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -39,6 +39,12 @@ import {
   getOpOptions,
   defaultOpForType,
   NO_VALUE_OPS,
+  fetchSavedFilters,
+  createSavedFilter,
+  updateSavedFilter,
+  deleteSavedFilter,
+  shownKindsForFilters,
+  type SavedFilter,
   type CandidateListItem,
   type CandidateDetail,
   type CandidateNote,
@@ -72,6 +78,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DailyStatsSheet } from './DailyStatsSheet'
 
 const FIT_STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   good_fit: { badge: 'bg-green-50 text-green-700 border-green-200', label: 'Good Fit' },
@@ -231,15 +238,79 @@ function FilterChip({
   )
 }
 
+// A single saved-filter row: click the name to apply, kebab for manage actions.
+function SavedFilterRow({
+  filter,
+  onApply,
+  onUpdate,
+  onRename,
+  onDelete,
+}: {
+  filter: SavedFilter
+  onApply: () => void
+  onUpdate: () => void
+  onRename: () => void
+  onDelete: () => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  return (
+    <div className="group/saved relative flex items-center rounded hover:bg-accent">
+      <button
+        type="button"
+        onClick={onApply}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
+      >
+        <Bookmark className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="flex-1 truncate">{filter.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o) }}
+        className="mr-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover/saved:opacity-100"
+        aria-label="Saved filter actions"
+      >
+        <MoreVertical className="size-3.5" />
+      </button>
+      {menuOpen && (
+        <div className="absolute right-1 top-8 z-50 w-44 overflow-hidden rounded-md border bg-popover shadow-md">
+          <button type="button" onClick={() => { setMenuOpen(false); onUpdate() }} className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-accent">
+            Update to current filters
+          </button>
+          <button type="button" onClick={() => { setMenuOpen(false); onRename() }} className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-accent">
+            Rename
+          </button>
+          <button type="button" onClick={() => { setMenuOpen(false); onDelete() }} className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-destructive hover:bg-accent">
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // "+ Add filter" menu listing every filter kind that isn't active yet
 function AddFilterMenu({
   availableKinds,
   questionColumns,
+  savedFilters,
+  canSaveCurrent,
+  onApplySaved,
+  onSaveCurrent,
+  onUpdateSaved,
+  onRenameSaved,
+  onDeleteSaved,
   onAddKind,
   onAddAnswer,
 }: {
   availableKinds: { key: string; label: string }[]
   questionColumns: QuestionColumn[]
+  savedFilters: SavedFilter[]
+  canSaveCurrent: boolean
+  onApplySaved: (f: SavedFilter) => void
+  onSaveCurrent: () => void
+  onUpdateSaved: (f: SavedFilter) => void
+  onRenameSaved: (f: SavedFilter) => void
+  onDeleteSaved: (f: SavedFilter) => void
   onAddKind: (key: string) => void
   onAddAnswer: (questionId: number) => void
 }) {
@@ -276,6 +347,34 @@ function AddFilterMenu({
       {open && (
         <div className="absolute left-0 z-50 mt-1 w-64 overflow-hidden rounded-md border bg-popover shadow-md">
           <div className="max-h-80 overflow-y-auto p-1">
+            {/* Saved filters — shared presets, pinned to the top */}
+            {savedFilters.length > 0 && (
+              <>
+                <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Saved filters
+                </div>
+                {savedFilters.map((sf) => (
+                  <SavedFilterRow
+                    key={sf.id}
+                    filter={sf}
+                    onApply={() => { onApplySaved(sf); setOpen(false) }}
+                    onUpdate={() => onUpdateSaved(sf)}
+                    onRename={() => onRenameSaved(sf)}
+                    onDelete={() => onDeleteSaved(sf)}
+                  />
+                ))}
+              </>
+            )}
+            <button
+              type="button"
+              disabled={!canSaveCurrent}
+              onClick={() => { onSaveCurrent(); setOpen(false) }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-primary hover:bg-accent disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-60"
+            >
+              <Bookmark className="size-3.5 shrink-0" />
+              Save current filters…
+            </button>
+            <div className="my-1 border-t" />
             {availableKinds.map((k) => (
               <button
                 key={k.key}
@@ -622,6 +721,9 @@ export default function CandidatesPage() {
   // Id of the chip whose editor popover is currently open (only one at a time).
   const [openChip, setOpenChip] = useState<string | null>(null)
 
+  // Shared, named filter presets (team-wide). Loaded once on mount.
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([])
+
   const PAGE_SIZE = 50
 
   const [candidates, setCandidates] = useState<CandidateListItem[]>([])
@@ -656,6 +758,7 @@ export default function CandidatesPage() {
     fetchDailyProgress(currentUser.username).then(setDailyProgress).catch(() => {})
   }, [currentUser.username])
   useEffect(() => { refreshDailyProgress() }, [refreshDailyProgress])
+  const [statsOpen, setStatsOpen] = useState(false)
 
   // All extra col IDs to request = visible columns + answer filter question IDs
   const extraColIds = Array.from(
@@ -665,6 +768,7 @@ export default function CandidatesPage() {
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
     fetchQuestionColumns().then(setQuestionColumns).catch(() => {})
+    fetchSavedFilters().then(setSavedFilters).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -751,6 +855,60 @@ export default function CandidatesPage() {
   function updateVisibleColumns(ids: number[]) {
     setVisibleQuestionIds(ids)
     saveColumns(ids)
+  }
+
+  // ── Saved filters (shared presets) ────────────────────────────────────────
+
+  // Move a just-updated preset to the front to mirror the server's
+  // updated_at-DESC ordering, without a refetch.
+  function upsertSavedFilter(updated: SavedFilter) {
+    setSavedFilters((prev) => [updated, ...prev.filter((x) => x.id !== updated.id)])
+  }
+
+  function applySavedFilter(sf: SavedFilter) {
+    setFilters(sf.filters)
+    saveFilters(sf.filters)
+    setShownKinds(new Set(shownKindsForFilters(sf.filters)))
+    setOpenChip(null)
+  }
+
+  async function saveCurrentFilters() {
+    const name = window.prompt('Save current filters as:')?.trim()
+    if (!name) return
+    try {
+      const created = await createSavedFilter(name, filters, currentUser.username)
+      setSavedFilters((prev) => [created, ...prev])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to save filter')
+    }
+  }
+
+  async function overwriteSavedFilter(sf: SavedFilter) {
+    try {
+      upsertSavedFilter(await updateSavedFilter(sf.id, { filters }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to update filter')
+    }
+  }
+
+  async function renameSavedFilter(sf: SavedFilter) {
+    const name = window.prompt('Rename saved filter:', sf.name)?.trim()
+    if (!name || name === sf.name) return
+    try {
+      upsertSavedFilter(await updateSavedFilter(sf.id, { name }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to rename filter')
+    }
+  }
+
+  async function removeSavedFilter(sf: SavedFilter) {
+    if (!window.confirm(`Delete saved filter "${sf.name}"?`)) return
+    try {
+      await deleteSavedFilter(sf.id)
+      setSavedFilters((prev) => prev.filter((x) => x.id !== sf.id))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'failed to delete filter')
+    }
   }
 
   // Cycle a column's sort: none → desc → asc → none (back to default order).
@@ -972,15 +1130,17 @@ export default function CandidatesPage() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             Candidates
             {total > 0 && <span className="text-muted-foreground font-normal">({total})</span>}
             {dailyProgress && dailyProgress.target > 0 && (
-              <span
-                title={`Today you've processed ${dailyProgress.today_count} of your ${dailyProgress.target} CV daily target`}
+              <button
+                type="button"
+                onClick={() => setStatsOpen(true)}
+                title={`Today you've processed ${dailyProgress.today_count} of your ${dailyProgress.target} CV daily target — click for stats`}
                 className={[
-                  'ml-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums',
+                  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums transition-colors hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   dailyProgress.today_count >= dailyProgress.target
                     ? 'bg-emerald-500/10 text-emerald-600'
                     : 'bg-muted text-muted-foreground',
@@ -988,7 +1148,7 @@ export default function CandidatesPage() {
               >
                 Today {dailyProgress.today_count}/{dailyProgress.target}
                 {dailyProgress.today_count >= dailyProgress.target && <Check className="size-3" />}
-              </span>
+              </button>
             )}
           </CardTitle>
           {activeFilterCount > 0 && (
@@ -1230,6 +1390,13 @@ export default function CandidatesPage() {
           <AddFilterMenu
             availableKinds={FIXED_FILTER_KINDS.filter((k) => !shownKinds.has(k.key))}
             questionColumns={questionColumns}
+            savedFilters={savedFilters}
+            canSaveCurrent={activeFilterCount > 0}
+            onApplySaved={applySavedFilter}
+            onSaveCurrent={saveCurrentFilters}
+            onUpdateSaved={overwriteSavedFilter}
+            onRenameSaved={renameSavedFilter}
+            onDeleteSaved={removeSavedFilter}
             onAddKind={addFilterKind}
             onAddAnswer={addAnswerFilterFor}
           />
@@ -1573,6 +1740,12 @@ export default function CandidatesPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      <DailyStatsSheet
+        open={statsOpen}
+        onOpenChange={setStatsOpen}
+        username={currentUser.username}
+      />
     </Card>
   )
 }

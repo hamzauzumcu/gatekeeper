@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, setDailyTarget } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
@@ -23,6 +23,25 @@ type Env = {
 }
 
 const app = new Hono<Env>()
+
+// Validate a serialized ActiveFilters blob before persisting it. We store the
+// JSON verbatim, so we only check it parses and looks like the expected shape —
+// the client owns the precise schema (src/lib/candidates.ts).
+function isValidFiltersJson(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length > 10_000) return false
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>
+    return (
+      p != null &&
+      typeof p === 'object' &&
+      Array.isArray(p.countries) &&
+      Array.isArray(p.fit_statuses) &&
+      Array.isArray(p.answerFilters)
+    )
+  } catch {
+    return false
+  }
+}
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'gatekeeper' }))
 
@@ -192,6 +211,17 @@ app.get('/api/settings/daily', async (c) => {
   return c.json({ ok: true, ...progress })
 })
 
+// Per-day history for the daily-target stats panel (last N days, max 90).
+app.get('/api/settings/daily/history', async (c) => {
+  const username = c.req.query('username')
+  if (!username) return c.json({ ok: false, error: 'username required' }, 400)
+  let days = Number(c.req.query('days') ?? 30)
+  if (!Number.isInteger(days) || days < 1) days = 30
+  if (days > 90) days = 90
+  const history = await getDailyHistory(c.env.DB, username, days)
+  return c.json({ ok: true, ...history })
+})
+
 app.put('/api/settings/daily', async (c) => {
   let body: { username: string; daily_cv_target: number }
   try {
@@ -272,6 +302,74 @@ app.delete('/api/notes/:id', async (c) => {
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
+  return c.json({ ok: true })
+})
+
+// ── Saved filters (shared, team-wide presets) ──────────────────────────────
+
+// List all saved filters, most recently updated first.
+app.get('/api/saved-filters', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, name, filters_json, created_by, created_at, updated_at
+     FROM saved_filters ORDER BY updated_at DESC`
+  ).all()
+  return c.json({ ok: true, filters: results ?? [] })
+})
+
+// Create a new saved filter from the current filter state.
+app.post('/api/saved-filters', async (c) => {
+  let body: { name: string; filters_json: string; created_by: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!body.name?.trim()) return c.json({ ok: false, error: 'name cannot be empty' }, 400)
+  if (!body.created_by) return c.json({ ok: false, error: 'user required' }, 400)
+  if (!isValidFiltersJson(body.filters_json)) return c.json({ ok: false, error: 'invalid filters' }, 400)
+  const result = await c.env.DB.prepare(
+    `INSERT INTO saved_filters (name, filters_json, created_by) VALUES (?, ?, ?)`
+  ).bind(body.name.trim(), body.filters_json, body.created_by).run()
+  const filter = await c.env.DB.prepare(
+    `SELECT id, name, filters_json, created_by, created_at, updated_at FROM saved_filters WHERE id = ?`
+  ).bind(result.meta.last_row_id).first()
+  return c.json({ ok: true, filter })
+})
+
+// Update a saved filter — rename and/or overwrite its filter state.
+app.put('/api/saved-filters/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { name?: string; filters_json?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (body.name !== undefined && !body.name.trim()) return c.json({ ok: false, error: 'name cannot be empty' }, 400)
+  if (body.filters_json !== undefined && !isValidFiltersJson(body.filters_json)) {
+    return c.json({ ok: false, error: 'invalid filters' }, 400)
+  }
+  const result = await c.env.DB.prepare(
+    `UPDATE saved_filters
+     SET name = COALESCE(?, name),
+         filters_json = COALESCE(?, filters_json),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+     WHERE id = ?`
+  ).bind(body.name?.trim() ?? null, body.filters_json ?? null, id).run()
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'saved filter not found' }, 404)
+  const filter = await c.env.DB.prepare(
+    `SELECT id, name, filters_json, created_by, created_at, updated_at FROM saved_filters WHERE id = ?`
+  ).bind(id).first()
+  return c.json({ ok: true, filter })
+})
+
+// Delete a saved filter.
+app.delete('/api/saved-filters/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const result = await c.env.DB.prepare(`DELETE FROM saved_filters WHERE id = ?`).bind(id).run()
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'saved filter not found' }, 404)
   return c.json({ ok: true })
 })
 

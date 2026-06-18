@@ -471,6 +471,44 @@ export async function getDailyProgress(
   }
 }
 
+// Per-day distinct-candidate counts for the last `days` days (most recent last),
+// with empty days filled as 0 so the client can chart a continuous series.
+export async function getDailyHistory(
+  db: D1Database,
+  username: string,
+  days: number
+): Promise<{ target: number; days: { date: string; count: number }[] }> {
+  const settings = await db
+    .prepare(`SELECT daily_cv_target FROM account_settings WHERE username = ?`)
+    .bind(username)
+    .first<{ daily_cv_target: number }>()
+  // start is inclusive: e.g. days=30 -> from date('now','-29 days') through today.
+  const startOffset = `-${days - 1} days`
+  const { results } = await db
+    .prepare(
+      `WITH RECURSIVE series(d) AS (
+         SELECT date('now', ?)
+         UNION ALL
+         SELECT date(d, '+1 day') FROM series WHERE d < date('now')
+       )
+       SELECT series.d AS date, COALESCE(a.count, 0) AS count
+       FROM series
+       LEFT JOIN (
+         SELECT activity_date, COUNT(DISTINCT applicant_id) AS count
+         FROM daily_activity
+         WHERE username = ? AND activity_date >= date('now', ?)
+         GROUP BY activity_date
+       ) a ON a.activity_date = series.d
+       ORDER BY series.d`
+    )
+    .bind(startOffset, username, startOffset)
+    .all<{ date: string; count: number }>()
+  return {
+    target: settings?.daily_cv_target ?? 20,
+    days: results ?? [],
+  }
+}
+
 export async function setDailyTarget(
   db: D1Database,
   username: string,
