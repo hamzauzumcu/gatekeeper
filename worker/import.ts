@@ -1,6 +1,8 @@
 // CSV import — idempotent writes to D1.
 // Browser sends a normalized ImportPayload; we upsert it.
-// Dedup: applicants.respondent_id (person), applications.tally_submission_id (application).
+// Dedup: applicants by normalized email (Tally may assign a returning applicant
+//   a NEW respondent_id), falling back to respondent_id when no email is present;
+//   applications by tally_submission_id (application).
 
 type QuestionType = 'text' | 'number' | 'boolean' | 'file'
 
@@ -101,13 +103,71 @@ export async function importApplications(
     }
   }
 
-  // 3) Applicant upsert (respondent_id unique). Deduplicate within chunk (last wins).
-  const uniqueApplicants = new Map<string, ImportRow>()
-  for (const row of payload.rows) uniqueApplicants.set(row.respondent_id, row)
+  // 3) Resolve applicant identity. Prefer normalized email so a returning
+  //    applicant Tally assigned a NEW respondent_id still maps to one person;
+  //    fall back to respondent_id when no email is present.
+  const normEmail = (e: string | null): string | null => {
+    const t = (e ?? '').trim().toLowerCase()
+    return t.length ? t : null
+  }
+  const personKey = (r: ImportRow): string => normEmail(r.email) ?? `rid:${r.respondent_id}`
 
-  const applicantId = new Map<string, number>()
-  if (uniqueApplicants.size) {
-    const stmts = [...uniqueApplicants.values()].map((r) =>
+  // Deduplicate within chunk by logical person (last row wins).
+  const uniquePeople = new Map<string, ImportRow>()
+  for (const row of payload.rows) uniquePeople.set(personKey(row), row)
+
+  // Find applicants that already exist for the emails in this chunk.
+  const chunkEmails = [
+    ...new Set(
+      [...uniquePeople.values()]
+        .map((r) => normEmail(r.email))
+        .filter((e): e is string => e !== null)
+    ),
+  ]
+  const emailToId = new Map<string, number>()
+  if (chunkEmails.length) {
+    const placeholders = chunkEmails.map(() => '?').join(',')
+    const existing = await db
+      .prepare(
+        `SELECT id, LOWER(TRIM(email)) AS ne FROM applicants
+         WHERE LOWER(TRIM(email)) IN (${placeholders})`
+      )
+      .bind(...chunkEmails)
+      .all<{ id: number; ne: string }>()
+    for (const row of existing.results ?? []) emailToId.set(row.ne, row.id)
+  }
+
+  // Returning applicants → merge into the existing record (keep its id).
+  // New applicants → insert keyed on respondent_id.
+  const applicantIdByPerson = new Map<string, number>()
+  const insertRows: ImportRow[] = []
+  const updateStmts: D1PreparedStatement[] = []
+  for (const [key, r] of uniquePeople) {
+    const email = normEmail(r.email)
+    const existingId = email ? emailToId.get(email) : undefined
+    if (existingId !== undefined) {
+      applicantIdByPerson.set(key, existingId)
+      updateStmts.push(
+        db
+          .prepare(
+            `UPDATE applicants SET
+               full_name    = COALESCE(?, full_name),
+               email        = COALESCE(?, email),
+               phone        = COALESCE(?, phone),
+               country      = COALESCE(?, country),
+               linkedin_url = COALESCE(?, linkedin_url)
+             WHERE id = ?`
+          )
+          .bind(r.full_name, r.email, r.phone, r.country, r.linkedin_url, existingId)
+      )
+    } else {
+      insertRows.push(r)
+    }
+  }
+  if (updateStmts.length) await db.batch(updateStmts)
+
+  if (insertRows.length) {
+    const stmts = insertRows.map((r) =>
       db
         .prepare(
           `INSERT INTO applicants (respondent_id, full_name, email, phone, country, linkedin_url)
@@ -123,10 +183,10 @@ export async function importApplications(
         .bind(r.respondent_id, r.full_name, r.email, r.phone, r.country, r.linkedin_url)
     )
     const res = await db.batch<{ id: number; respondent_id: string }>(stmts)
-    for (const r of res) {
+    res.forEach((r, i) => {
       const row = r.results?.[0]
-      if (row) applicantId.set(row.respondent_id, row.id)
-    }
+      if (row) applicantIdByPerson.set(personKey(insertRows[i]), row.id)
+    })
   }
 
   // 4) Application upsert (tally_submission_id unique) → submission_id -> application_id
@@ -146,7 +206,7 @@ export async function importApplications(
            RETURNING id, tally_submission_id`
         )
         .bind(
-          applicantId.get(r.respondent_id) ?? null,
+          applicantIdByPerson.get(personKey(r)) ?? null,
           positionId,
           r.submission_id,
           r.resume_url,
@@ -226,7 +286,7 @@ export async function importApplications(
   return {
     positionId,
     questions: questionId.size,
-    applicants: applicantId.size,
+    applicants: applicantIdByPerson.size,
     applications: applicationId.size,
     answers,
     resumes_copied,
