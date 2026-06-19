@@ -4,12 +4,14 @@
 
 import { deepseekChat } from './deepseek'
 import { parseAndStoreResume, parsedRawText, synthesizeCvText, looksLikeText } from './cv-parser'
+import { universityBonus } from './cv-schema'
 
 // v2: scoring reads recovered CV text (resume_text / resume_parsed / re-OCR) instead of the
 // often-empty resume_text column alone, so every candidate is scored against their real CV.
 // The OCR step is memory-heavy, so the batch caller serializes it via ocrGate — see
 // scoreApplication for the recovery order.
-export const SCORE_VERSION = 2
+// v3: top-tier university bonus is added on top of the model score (UNIVERSITY_TIER_BONUS).
+export const SCORE_VERSION = 3
 
 // Minimal env surface scoreApplication needs (lazy CV recovery may re-OCR via GPT-4o).
 export type ScoreEnv = {
@@ -115,6 +117,9 @@ export async function scoreApplication(
   // The OCR step loads + base64-encodes the PDF (several MB resident), so it runs through
   // ocrGate — the batch caller serializes it to one PDF at a time so concurrent OCRs can't
   // blow the Durable Object's 128 MB memory ceiling. Cache whatever we recover into resume_text.
+  // Freshest parsed-CV JSON; updated below if OCR recovery re-parses the PDF.
+  // Used after scoring to apply the university tier bonus.
+  let parsedJson: string | null = row.resume_parsed
   let cvText: string | null = looksLikeText(row.resume_text) ? row.resume_text : null
   if (!cvText) {
     cvText = parsedRawText(row.resume_parsed)
@@ -137,6 +142,7 @@ export async function scoreApplication(
         .bind(applicationId)
         .first<{ resume_text: string | null; resume_parsed: string | null }>()
       cvText = (refreshed?.resume_text?.trim() ? refreshed.resume_text : null) ?? parsedRawText(refreshed?.resume_parsed ?? null)
+      if (refreshed?.resume_parsed) parsedJson = refreshed.resume_parsed
     }
     if (!cvText && row.resume_parsed) {
       try {
@@ -195,8 +201,26 @@ export async function scoreApplication(
 
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()
   const result = JSON.parse(jsonText) as { score: unknown; reasoning?: unknown }
-  const score = Math.min(100, Math.max(0, Math.round(Number(result.score) || 0)))
-  const reasoning = typeof result.reasoning === 'string' ? result.reasoning : null
+  const baseScore = Math.min(100, Math.max(0, Math.round(Number(result.score) || 0)))
+  let reasoning = typeof result.reasoning === 'string' ? result.reasoning : null
+
+  // Top-tier university bonus, applied deterministically on top of the model score
+  // (capped at 100). The model can't reliably rank Turkish universities, so we award
+  // the boost from the parsed — and canonicalized — school name instead. See
+  // UNIVERSITY_TIER_BONUS in cv-schema.ts.
+  let score = baseScore
+  let parsed: unknown = null
+  try {
+    parsed = parsedJson ? JSON.parse(parsedJson) : null
+  } catch {
+    /* leave parsed null */
+  }
+  const uniBonus = universityBonus(parsed as { education?: ({ school?: string | null } | null)[] | null } | null)
+  if (uniBonus) {
+    score = Math.min(100, baseScore + uniBonus.bonus)
+    const note = `+${uniBonus.bonus} ${uniBonus.school} (top-tier university)`
+    reasoning = reasoning ? `${reasoning} [${note}]` : note
+  }
 
   await db
     .prepare(

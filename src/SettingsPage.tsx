@@ -38,7 +38,7 @@ Evaluate the candidate's CV, cover letter, and application form answers. Score t
 
 3. Analytics & Performance (0–20 pts): Data-driven approach to campaign management. Experience with ROAS, CPI, CTR, CVR metrics, A/B testing, and reporting tools.
 
-4. Overall Profile (0–15 pts): Relevant education (marketing, business, or technical), career trajectory, communication quality in cover letter, and overall professionalism.
+4. Overall Profile (0–15 pts): University details matter — note which university the candidate attended, its reputation/ranking, the specific degree and field (marketing, business, or technical), and graduation year. Beyond education, weigh career trajectory, communication quality in cover letter, and overall professionalism.
 
 Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
   }
@@ -61,7 +61,29 @@ Evaluate the candidate's CV, cover letter, and application form answers. Score t
 
 3. Software Engineering Practices (0–20 pts): Evidence of clean architecture, test-driven development, code review experience, system design skills, and scalability considerations.
 
-4. Overall Profile (0–15 pts): Computer Science degree or equivalent, relevant open source contributions, career progression, and seniority level alignment.
+4. Overall Profile (0–15 pts): University details matter — note which university the candidate attended, its reputation/ranking, the specific degree and field (Computer Science or equivalent), and graduation year. Beyond education, weigh relevant open source contributions, career progression, and seniority level alignment.
+
+Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
+  }
+
+  if (
+    lower.includes('product manager') ||
+    lower.includes('product owner') ||
+    lower.includes('product lead') ||
+    lower.includes(' pm') ||
+    lower === 'pm'
+  ) {
+    return `You are an expert recruiter evaluating candidates for the Product Manager role.
+
+Evaluate the candidate's CV, cover letter, and application form answers. Score them from 0 to 100 based on the following criteria:
+
+1. Product Management Experience (0–40 pts): Direct experience owning a product or feature area, defining roadmaps, writing PRDs/specs, and shipping products end to end. Experience working closely with engineering, design, and business stakeholders is highly valued.
+
+2. Discovery & Analytics (0–25 pts): User research, customer discovery, and data-driven decision making. Proficiency with product analytics tools (Amplitude, Mixpanel, GA), A/B testing, defining and tracking KPIs/north-star metrics, and prioritization frameworks (RICE, MoSCoW).
+
+3. Execution & Collaboration (0–20 pts): Agile/Scrum delivery, backlog grooming, stakeholder management, and clear communication. Evidence of leading cross-functional teams and balancing scope, time, and quality.
+
+4. Overall Profile (0–15 pts): University details matter — note which university the candidate attended, its reputation/ranking, the specific degree and field (business, technical, or design), and graduation year. Beyond education, weigh domain knowledge, career trajectory, communication quality in cover letter, and overall professionalism.
 
 Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
   }
@@ -76,7 +98,7 @@ Evaluate the candidate's CV, cover letter, and application form answers. Score t
 
 3. Quality Indicators (0–20 pts): Evidence of strong work quality, problem-solving ability, and professional growth.
 
-4. Overall Profile (0–15 pts): Education, career trajectory, communication quality, and overall fit.
+4. Overall Profile (0–15 pts): University details matter — note which university the candidate attended, its reputation/ranking, the specific degree and field, and graduation year. Beyond education, weigh career trajectory, communication quality, and overall fit.
 
 Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
 }

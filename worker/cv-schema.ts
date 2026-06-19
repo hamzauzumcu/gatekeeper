@@ -42,6 +42,59 @@ export const UNIVERSITY_MAP: [pattern: string, canonical: string][] = [
   ['gazi universitesi', 'Gazi Üniversitesi'],
 ]
 
+// Map any university spelling to its canonical name via UNIVERSITY_MAP.
+// Returns the input unchanged when nothing matches. Shared by the CV parser
+// (parse-time normalization) and the scorer (tier-bonus lookup).
+export function canonicalUniversity(name: string): string {
+  const lower = ` ${name.toLowerCase()} `
+  for (const [pattern, canonical] of UNIVERSITY_MAP) {
+    if (lower.includes(pattern)) return canonical
+  }
+  return name
+}
+
+// Top-tier universities add a fixed bonus on top of the AI score (final score
+// capped at 100). Keyed by the CANONICAL name produced by UNIVERSITY_MAP — keep
+// the names in sync. Tier 1 = +10, Tier 2 = +5. A university absent here gets 0.
+export const UNIVERSITY_TIER_BONUS: Record<string, number> = {
+  // Tier 1
+  'Boğaziçi Üniversitesi': 10,
+  'Orta Doğu Teknik Üniversitesi': 10,
+  'İstanbul Teknik Üniversitesi': 10,
+  'Koç Üniversitesi': 10,
+  'Sabancı Üniversitesi': 10,
+  'Bilkent Üniversitesi': 10,
+  'Galatasaray Üniversitesi': 10,
+  // Tier 2
+  'Hacettepe Üniversitesi': 5,
+  'Yıldız Teknik Üniversitesi': 5,
+  'Marmara Üniversitesi': 5,
+  'Ege Üniversitesi': 5,
+  'Ankara Üniversitesi': 5,
+  'İstanbul Bilgi Üniversitesi': 5,
+  'Gazi Üniversitesi': 5,
+}
+
+// Best university bonus across all parsed education entries (a candidate may list
+// several schools — take the highest tier). Returns null when no listed school
+// earns a bonus. School names are normalized at parse time, but we re-canonicalize
+// here so rows parsed before normalization existed still match.
+export function universityBonus(
+  parsed: { education?: ({ school?: string | null } | null)[] | null } | null | undefined
+): { bonus: number; school: string } | null {
+  const edu = parsed?.education
+  if (!Array.isArray(edu)) return null
+  let best: { bonus: number; school: string } | null = null
+  for (const entry of edu) {
+    const raw = entry?.school
+    if (!raw) continue
+    const school = canonicalUniversity(raw)
+    const bonus = UNIVERSITY_TIER_BONUS[school] ?? 0
+    if (bonus > 0 && (!best || bonus > best.bonus)) best = { bonus, school }
+  }
+  return best
+}
+
 // Parsed CV fields exposed as table columns + filters.
 // Negative ID → virtual column (not a real position_questions row).
 // Order matters: index 0 → id -1, index 1 → id -2, …

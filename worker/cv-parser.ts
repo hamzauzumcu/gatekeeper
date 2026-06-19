@@ -2,7 +2,7 @@
 // Text-based PDFs: BT...ET regex extraction → DeepSeek text model.
 // Scanned PDFs: raw PDF buffer → GPT-4o (handles OCR natively).
 
-import { PARSE_VERSION, PARSE_SCHEMA, UNIVERSITY_MAP } from './cv-schema'
+import { PARSE_VERSION, PARSE_SCHEMA, canonicalUniversity } from './cv-schema'
 import { deepseekChat } from './deepseek'
 import { openaiParsePdf } from './openai'
 
@@ -74,14 +74,6 @@ export function parsedRawText(resumeParsed: string | null | undefined): string |
   } catch {
     return null
   }
-}
-
-function normalizeUniversity(name: string): string {
-  const lower = ` ${name.toLowerCase()} `
-  for (const [pattern, canonical] of UNIVERSITY_MAP) {
-    if (lower.includes(pattern)) return canonical
-  }
-  return name
 }
 
 async function fetchPdfBuffer(
@@ -179,7 +171,7 @@ Rules:
   if (Array.isArray(fields.education)) {
     for (const entry of fields.education) {
       if (typeof entry.school === 'string') {
-        entry.school = normalizeUniversity(entry.school)
+        entry.school = canonicalUniversity(entry.school)
       }
     }
   }
