@@ -3,6 +3,7 @@ import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
+  Image as ImageIcon,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -35,6 +36,7 @@ import {
   addNote,
   updateNote,
   deleteNote,
+  uploadNoteImage,
   generateInterviewNotes,
   generateOutreachEmail,
   type OutreachEmail,
@@ -2228,12 +2230,46 @@ function CandidateDetailView({
   // Locally-applied salary corrections, keyed by `${applicationId}:${questionId}`.
   const [answerOverrides, setAnswerOverrides] = useState<Map<string, string>>(new Map())
   const [savingAnswers, setSavingAnswers] = useState<Set<string>>(new Set())
+  // Key of the answer currently being edited inline, plus its draft text.
+  const [editingAnswer, setEditingAnswer] = useState<string | null>(null)
+  const [editAnswerText, setEditAnswerText] = useState('')
 
   // Reset any pending overrides when switching to a different candidate.
   useEffect(() => {
     setAnswerOverrides(new Map())
     setSavingAnswers(new Set())
+    setEditingAnswer(null)
+    setEditAnswerText('')
   }, [applicant.id])
+
+  function startEditAnswer(key: string, currentValue: string | null) {
+    setEditingAnswer(key)
+    setEditAnswerText(currentValue ?? '')
+  }
+
+  function cancelEditAnswer() {
+    setEditingAnswer(null)
+    setEditAnswerText('')
+  }
+
+  async function saveAnswerEdit(appId: number, questionId: number) {
+    const key = `${appId}:${questionId}`
+    const value = editAnswerText.trim()
+    setSavingAnswers((prev) => new Set(prev).add(key))
+    try {
+      await updateAnswerValue(appId, questionId, value)
+      setAnswerOverrides((prev) => new Map(prev).set(key, value))
+      cancelEditAnswer()
+    } catch {
+      // Keep the editor open so the edit isn't lost.
+    } finally {
+      setSavingAnswers((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+  }
 
   async function applySalaryFix(appId: number, questionId: number, value: string) {
     const key = `${appId}:${questionId}`
@@ -2544,18 +2580,63 @@ function CandidateDetailView({
                           // Only suggest a fix while the value is still uncorrected.
                           const suggestion = isSalary && override === undefined ? normalizeSalary(value) : null
                           const saving = savingAnswers.has(key)
+                          const isEditing = editingAnswer === key
                           return (
                             <div key={i} className="text-sm">
                               <dt className="mb-0.5 text-xs text-muted-foreground">{a.label}</dt>
-                              <dd className="font-medium">
-                                {isSalary ? formatSalary(value) : (value ?? '—')}
-                                {usd && (
-                                  <span className="ml-1.5 font-normal text-muted-foreground">
-                                    {usd.usd} <span className="text-xs">(est. USD @ {usd.rate})</span>
+                              {isSalary && isEditing ? (
+                                <div className="mt-1 flex items-center gap-2">
+                                  <Input
+                                    autoFocus
+                                    value={editAnswerText}
+                                    onChange={(e) => setEditAnswerText(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') saveAnswerEdit(app.id, a.question_id)
+                                      if (e.key === 'Escape') cancelEditAnswer()
+                                    }}
+                                    className="h-8 max-w-[12rem] text-sm"
+                                    placeholder="Salary expectation"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    className="h-8 px-3 text-xs"
+                                    disabled={saving}
+                                    onClick={() => saveAnswerEdit(app.id, a.question_id)}
+                                  >
+                                    {saving ? 'Saving…' : 'Save'}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 px-2 text-xs"
+                                    onClick={cancelEditAnswer}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              ) : (
+                                <dd className="flex items-center gap-1.5 font-medium">
+                                  <span>
+                                    {isSalary ? formatSalary(value) : (value ?? '—')}
+                                    {usd && (
+                                      <span className="ml-1.5 font-normal text-muted-foreground">
+                                        {usd.usd} <span className="text-xs">(est. USD @ {usd.rate})</span>
+                                      </span>
+                                    )}
                                   </span>
-                                )}
-                              </dd>
-                              {suggestion && (
+                                  {isSalary && (
+                                    <button
+                                      type="button"
+                                      onClick={() => startEditAnswer(key, value)}
+                                      title="Edit salary expectation"
+                                      className="text-muted-foreground transition-colors hover:text-foreground"
+                                    >
+                                      <Pencil className="size-3.5" />
+                                    </button>
+                                  )}
+                                </dd>
+                              )}
+                              {suggestion && !isEditing && (
                                 <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                                   <span>Looks like thousands — did they mean {formatSalary(suggestion.suggested)}?</span>
                                   <Button
@@ -2801,6 +2882,11 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Full-screen preview of a note image; null when closed.
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -2828,15 +2914,45 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     return () => { cancelled = true }
   }, [applicantId])
 
+  function addFiles(selected: FileList | null) {
+    if (!selected) return
+    const imgs = Array.from(selected).filter((f) => f.type.startsWith('image/'))
+    if (imgs.length) setFiles((prev) => [...prev, ...imgs])
+  }
+
+  function removeFile(idx: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragging(false)
+    if (!submitting) addFiles(e.dataTransfer.files)
+  }
+
+  // Allow pasting an image straight from the clipboard into the note.
+  function handlePaste(e: React.ClipboardEvent) {
+    const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+    if (imgs.length) {
+      e.preventDefault()
+      addFiles(e.clipboardData.files)
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!text.trim()) return
+    if (!text.trim() && files.length === 0) return
     setSubmitting(true)
     setError(null)
     try {
-      const note = await addNote(applicantId, text.trim(), currentUser.username, currentUser.fullName)
+      const images = files.length
+        ? await Promise.all(files.map((f) => uploadNoteImage(applicantId, f)))
+        : []
+      const note = await addNote(applicantId, text.trim(), currentUser.username, currentUser.fullName, images)
       setNotes((prev) => [note, ...prev])
       setText('')
+      setFiles([])
+      if (fileInputRef.current) fileInputRef.current.value = ''
       onNoteAdded()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed to add note')
@@ -2971,11 +3087,26 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
         candidateEmail={candidateEmail}
       />
 
-      <form onSubmit={handleSubmit} className="space-y-2">
+      <form
+        onSubmit={handleSubmit}
+        onDragOver={(e) => { e.preventDefault(); if (!dragging) setDragging(true) }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false) }}
+        onDrop={handleDrop}
+        className={[
+          'relative space-y-2 rounded-md',
+          dragging ? 'outline-dashed outline-2 outline-offset-2 outline-primary' : '',
+        ].join(' ')}
+      >
+        {dragging && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/10 text-sm font-medium text-primary">
+            Drop images to attach
+          </div>
+        )}
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Add a note…"
+          onPaste={handlePaste}
+          placeholder="Add a note… (drag, paste, or attach images)"
           rows={3}
           className={[
             'w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm',
@@ -2983,10 +3114,56 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
           ].join(' ')}
         />
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {files.map((file, i) => {
+              const url = URL.createObjectURL(file)
+              return (
+                <div key={i} className="relative size-16 overflow-hidden rounded-md border">
+                  <img
+                    src={url}
+                    alt={file.name}
+                    className="size-full object-cover"
+                    onLoad={() => URL.revokeObjectURL(url)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    title="Remove image"
+                    className="absolute right-0.5 top-0.5 inline-flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground shadow-sm hover:bg-background"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
         {error && <p className="text-xs text-destructive">{error}</p>}
-        <Button type="submit" size="sm" disabled={!text.trim() || submitting}>
-          {submitting ? 'Adding…' : 'Add Note'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="submit" size="sm" disabled={(!text.trim() && files.length === 0) || submitting}>
+            {submitting ? 'Adding…' : 'Add Note'}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            className="hidden"
+            onChange={(e) => addFiles(e.target.files)}
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={submitting}
+            onClick={() => fileInputRef.current?.click()}
+            className="gap-1.5"
+          >
+            <ImageIcon className="size-3.5" />
+            Add Image
+          </Button>
+        </div>
       </form>
 
       <Separator />
@@ -3062,10 +3239,48 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   </div>
                 </div>
               ) : (
-                <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>
+                <>
+                  {note.content && <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>}
+                  {note.images.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {note.images.map((src) => (
+                        <button
+                          key={src}
+                          type="button"
+                          onClick={() => setLightbox(src)}
+                          className="size-20 overflow-hidden rounded-md border transition-opacity hover:opacity-80"
+                        >
+                          <img src={src} alt="Note attachment" className="size-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setLightbox(null)}
+            title="Close"
+            className="absolute right-4 top-4 inline-flex size-9 items-center justify-center rounded-md bg-background/90 text-foreground hover:bg-background"
+          >
+            <X className="size-5" />
+          </button>
+          <img
+            src={lightbox}
+            alt="Note attachment"
+            className="max-h-full max-w-full rounded-lg object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </div>

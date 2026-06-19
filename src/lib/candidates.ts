@@ -560,6 +560,17 @@ export type CandidateNote = {
   created_by: string
   created_by_name: string
   created_at: string
+  images: string[]
+}
+
+// Upload an image attachment for a candidate's notes and return its public URL.
+export async function uploadNoteImage(applicantId: number, file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`/api/candidates/${applicantId}/note-images`, { method: 'POST', body: form })
+  const data = (await res.json()) as { ok: true; url: string } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to upload image')
+  return data.url
 }
 
 export async function fetchNotes(applicantId: number): Promise<CandidateNote[]> {
@@ -573,12 +584,13 @@ export async function addNote(
   applicantId: number,
   content: string,
   createdBy: string,
-  createdByName: string
+  createdByName: string,
+  images: string[] = []
 ): Promise<CandidateNote> {
   const res = await fetch(`/api/candidates/${applicantId}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName }),
+    body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName, images }),
   })
   const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to add note')

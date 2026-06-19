@@ -45,6 +45,33 @@ function isValidFiltersJson(raw: unknown): raw is string {
   }
 }
 
+// Note image attachments are stored in R2 under `note-images/{applicantId}/...`
+// and referenced from candidate_notes.images as a JSON array of public URLs.
+const NOTE_IMAGE_TYPES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+const MAX_NOTE_IMAGE_BYTES = 10 * 1024 * 1024 // 10 MB
+
+// Parse the stored images JSON into a clean string[] (NULL/garbage → []).
+function parseNoteImages(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw) return []
+  try {
+    const v = JSON.parse(raw)
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+// Shape a candidate_notes row for the API: parse images into an array.
+function shapeNote(row: Record<string, unknown> | null) {
+  if (!row) return row
+  return { ...row, images: parseNoteImages(row.images) }
+}
+
 app.get('/api/health', (c) => c.json({ ok: true, service: 'gatekeeper' }))
 
 // Temporary test endpoint to verify the key works
@@ -323,10 +350,10 @@ app.post('/api/candidates/:id/interview-notes', async (c) => {
   ).bind(id, content.trim(), body.created_by, body.created_by_name).run()
   await logActivity(c.env.DB, body.created_by, [id], 'note_added')
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
   ).bind(result.meta.last_row_id).first()
-  return c.json({ ok: true, note })
+  return c.json({ ok: true, note: shapeNote(note) })
 })
 
 // Generate a short outreach email for a candidate. Unlike interview notes this
@@ -347,39 +374,64 @@ app.post('/api/candidates/:id/outreach-email', async (c) => {
   }
 })
 
+// Upload an image attachment for a candidate's notes. Stored in R2 under
+// note-images/{applicantId}/{uuid}.{ext}; returns the public URL to embed in a
+// note via POST /api/candidates/:id/notes.
+app.post('/api/candidates/:id/note-images', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  if (!c.env.R2_PUBLIC_URL) return c.json({ ok: false, error: 'R2 not configured' }, 500)
+  let form: FormData
+  try {
+    form = await c.req.formData()
+  } catch {
+    return c.json({ ok: false, error: 'invalid form data' }, 400)
+  }
+  const file = form.get('file')
+  if (!(file instanceof File)) return c.json({ ok: false, error: 'file is required' }, 400)
+  const ext = NOTE_IMAGE_TYPES[file.type]
+  if (!ext) return c.json({ ok: false, error: 'unsupported image type' }, 400)
+  if (file.size > MAX_NOTE_IMAGE_BYTES) return c.json({ ok: false, error: 'image too large (max 10MB)' }, 400)
+  const key = `note-images/${id}/${crypto.randomUUID()}.${ext}`
+  await c.env.RESUMES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } })
+  return c.json({ ok: true, url: `${c.env.R2_PUBLIC_URL}/${key}` })
+})
+
 // Candidate notes — GET
 app.get('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const { results } = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE applicant_id = ? ORDER BY created_at DESC`
   ).bind(id).all()
-  return c.json({ ok: true, notes: results ?? [] })
+  return c.json({ ok: true, notes: (results ?? []).map(shapeNote) })
 })
 
 // Candidate notes — POST (add new note)
 app.post('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
-  let body: { content: string; created_by: string; created_by_name: string }
+  let body: { content: string; created_by: string; created_by_name: string; images?: unknown }
   try {
     body = await c.req.json()
   } catch {
     return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
-  if (!body.content?.trim()) return c.json({ ok: false, error: 'note cannot be empty' }, 400)
+  const content = body.content?.trim() ?? ''
+  const images = Array.isArray(body.images) ? body.images.filter((x): x is string => typeof x === 'string') : []
+  if (!content && images.length === 0) return c.json({ ok: false, error: 'note cannot be empty' }, 400)
   if (!body.created_by) return c.json({ ok: false, error: 'user required' }, 400)
   const result = await c.env.DB.prepare(
-    `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name)
-     VALUES (?, ?, ?, ?)`
-  ).bind(id, body.content.trim(), body.created_by, body.created_by_name).run()
+    `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name, images)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(id, content, body.created_by, body.created_by_name, images.length ? JSON.stringify(images) : null).run()
   await logActivity(c.env.DB, body.created_by, [id], 'note_added')
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
   ).bind(result.meta.last_row_id).first()
-  return c.json({ ok: true, note })
+  return c.json({ ok: true, note: shapeNote(note) })
 })
 
 // Edit note — PATCH (update content)
@@ -398,10 +450,10 @@ app.patch('/api/notes/:id', async (c) => {
   ).bind(body.content.trim(), id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at
+    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
   ).bind(id).first()
-  return c.json({ ok: true, note })
+  return c.json({ ok: true, note: shapeNote(note) })
 })
 
 // Delete note — DELETE
