@@ -92,6 +92,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DailyStatsSheet } from './DailyStatsSheet'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const FIT_STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   good_fit: { badge: 'bg-green-50 text-green-700 border-green-200', label: 'Good Fit' },
@@ -3240,7 +3242,11 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 </div>
               ) : (
                 <>
-                  {note.content && <p className="mt-2 whitespace-pre-wrap text-sm">{note.content}</p>}
+                  {note.content && (
+                    <div className="prose prose-sm dark:prose-invert mt-2 max-w-none break-words">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.content}</ReactMarkdown>
+                    </div>
+                  )}
                   {note.images.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {note.images.map((src) => (
