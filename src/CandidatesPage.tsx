@@ -2893,7 +2893,15 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
-  const [savingEdit, setSavingEdit] = useState(false)
+  // Auto-save status for the note currently being edited.
+  const [editStatus, setEditStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>('idle')
+  // Last content persisted for the note being edited, so the debounce can tell
+  // whether there are unsaved changes without re-triggering on its own save.
+  const editBaseline = useRef('')
+  const editTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Whether the in-progress new note has been stashed to localStorage as a draft.
+  const [draftSaved, setDraftSaved] = useState(false)
+  const draftKey = (id: number) => `gatekeeper:note-draft:${id}`
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   // Outreach email: generated on demand, shown in a modal to copy / open in a
@@ -2909,12 +2917,62 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     setLoading(true)
     setEditingId(null)
     setGenError(null)
+    // Restore any unsent draft for this candidate (synchronously, before the
+    // fetch resolves, so the draft-save effect never writes one candidate's
+    // text under another's key).
+    try {
+      setText(localStorage.getItem(draftKey(applicantId)) ?? '')
+    } catch {
+      setText('')
+    }
     fetchNotes(applicantId)
       .then((n) => { if (!cancelled) setNotes(n) })
       .catch(() => { if (!cancelled) setNotes([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [applicantId])
+
+  // Auto-save the in-progress new note to localStorage as a draft so it
+  // survives reloads and navigation between candidates.
+  useEffect(() => {
+    const key = draftKey(applicantId)
+    const t = setTimeout(() => {
+      try {
+        if (text.trim()) {
+          localStorage.setItem(key, text)
+          setDraftSaved(true)
+        } else {
+          localStorage.removeItem(key)
+          setDraftSaved(false)
+        }
+      } catch {
+        // localStorage unavailable — drafts just won't persist.
+      }
+    }, 600)
+    return () => clearTimeout(t)
+  }, [text, applicantId])
+
+  // Auto-save edits to an existing note after a short pause in typing.
+  useEffect(() => {
+    if (editingId == null) return
+    const trimmed = editText.trim()
+    // Nothing to persist: empty (backend rejects it) or unchanged.
+    if (!trimmed || trimmed === editBaseline.current) return
+    setEditStatus('unsaved')
+    if (editTimer.current) clearTimeout(editTimer.current)
+    editTimer.current = setTimeout(async () => {
+      setEditStatus('saving')
+      try {
+        const updated = await updateNote(editingId, trimmed)
+        editBaseline.current = updated.content
+        setNotes((prev) => prev.map((n) => (n.id === editingId ? updated : n)))
+        setEditStatus('saved')
+      } catch {
+        setEditStatus('error')
+      }
+    }, 800)
+    return () => { if (editTimer.current) clearTimeout(editTimer.current) }
+  }, [editText, editingId])
 
   function addFiles(selected: FileList | null) {
     if (!selected) return
@@ -2954,6 +3012,8 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
       setNotes((prev) => [note, ...prev])
       setText('')
       setFiles([])
+      try { localStorage.removeItem(draftKey(applicantId)) } catch { /* ignore */ }
+      setDraftSaved(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
       onNoteAdded()
     } catch (err) {
@@ -2966,24 +3026,26 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
   function startEdit(note: CandidateNote) {
     setEditingId(note.id)
     setEditText(note.content)
+    editBaseline.current = note.content
+    setEditStatus('idle')
   }
 
-  function cancelEdit() {
+  // Close the editor, flushing any pending change immediately so the last
+  // keystrokes aren't lost to the debounce.
+  async function closeEdit() {
+    if (editTimer.current) { clearTimeout(editTimer.current); editTimer.current = null }
+    const id = editingId
+    const trimmed = editText.trim()
     setEditingId(null)
     setEditText('')
-  }
-
-  async function saveEdit(noteId: number) {
-    if (!editText.trim()) return
-    setSavingEdit(true)
-    try {
-      const updated = await updateNote(noteId, editText.trim())
-      setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)))
-      cancelEdit()
-    } catch {
-      // keep the editor open so the edit isn't lost
-    } finally {
-      setSavingEdit(false)
+    setEditStatus('idle')
+    if (id != null && trimmed && trimmed !== editBaseline.current) {
+      try {
+        const updated = await updateNote(id, trimmed)
+        setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)))
+      } catch {
+        // ignore — best-effort flush on close
+      }
     }
   }
 
@@ -3165,6 +3227,11 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             <ImageIcon className="size-3.5" />
             Add Image
           </Button>
+          {draftSaved && text.trim() && !submitting && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
+              <Check className="size-3" /> Draft saved
+            </span>
+          )}
         </div>
       </form>
 
@@ -3217,8 +3284,8 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                     rows={3}
                     autoFocus
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit(note.id)
-                      if (e.key === 'Escape') cancelEdit()
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) closeEdit()
+                      if (e.key === 'Escape') closeEdit()
                     }}
                     className={[
                       'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
@@ -3227,17 +3294,21 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                     ].join(' ')}
                   />
                   <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={!editText.trim() || savingEdit}
-                      onClick={() => saveEdit(note.id)}
-                    >
-                      {savingEdit ? 'Saving…' : 'Save'}
+                    <Button type="button" size="sm" onClick={() => closeEdit()}>
+                      Done
                     </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={cancelEdit}>
-                      Cancel
-                    </Button>
+                    <span className="text-xs text-muted-foreground" aria-live="polite">
+                      {editStatus === 'unsaved' && 'Unsaved changes…'}
+                      {editStatus === 'saving' && 'Saving…'}
+                      {editStatus === 'saved' && (
+                        <span className="inline-flex items-center gap-1">
+                          <Check className="size-3" /> Saved
+                        </span>
+                      )}
+                    </span>
+                    {editStatus === 'error' && (
+                      <span className="text-xs text-destructive">Save failed</span>
+                    )}
                   </div>
                 </div>
               ) : (
