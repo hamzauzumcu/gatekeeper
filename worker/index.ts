@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
 import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicationsStageBulk, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
+import { getCandidateEvents, logCandidateEvents } from './events'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
@@ -9,6 +10,15 @@ import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
 import { listUsers, verifyLogin } from './users'
+import {
+  createMentionNotifications,
+  existingRecipients,
+  listNotifications,
+  unreadApplicantIds,
+  markRead,
+  markAllRead,
+  deleteForNote,
+} from './notifications'
 import { SyncJobDO } from './sync-job-do'
 
 export { SyncJobDO }
@@ -71,6 +81,13 @@ function parseNoteImages(raw: unknown): string[] {
 function shapeNote(row: Record<string, unknown> | null) {
   if (!row) return row
   return { ...row, images: parseNoteImages(row.images) }
+}
+
+// Short, single-line preview of a note for the candidate timeline. Strips
+// markdown image syntax and collapses whitespace, then truncates.
+function noteExcerpt(content: string, max = 80): string {
+  const text = content.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\s+/g, ' ').trim()
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text
 }
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'gatekeeper' }))
@@ -197,14 +214,14 @@ app.get('/api/candidates/:id', async (c) => {
 app.patch('/api/applications/:id/status', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
-  let body: { status: string }
+  let body: { status: string; created_by?: string }
   try {
-    body = await c.req.json<{ status: string }>()
+    body = await c.req.json<{ status: string; created_by?: string }>()
   } catch {
     return c.json({ ok: false, error: 'invalid JSON' }, 400)
   }
   try {
-    const updated = await updateApplicationStatus(c.env.DB, id, body.status)
+    const updated = await updateApplicationStatus(c.env.DB, id, body.status, body.created_by)
     if (!updated) return c.json({ ok: false, error: 'application not found' }, 404)
     return c.json({ ok: true })
   } catch (e) {
@@ -214,7 +231,7 @@ app.patch('/api/applications/:id/status', async (c) => {
 
 // Bulk move applications to a pipeline stage (board add/remove via multi-select)
 app.patch('/api/applications/status/bulk', async (c) => {
-  let body: { application_ids: number[]; status: string }
+  let body: { application_ids: number[]; status: string; created_by?: string }
   try {
     body = await c.req.json()
   } catch {
@@ -224,7 +241,7 @@ app.patch('/api/applications/status/bulk', async (c) => {
     return c.json({ ok: false, error: 'application_ids cannot be empty' }, 400)
   }
   try {
-    const updated = await updateApplicationsStageBulk(c.env.DB, body.application_ids, body.status)
+    const updated = await updateApplicationsStageBulk(c.env.DB, body.application_ids, body.status, body.created_by)
     return c.json({ ok: true, updated })
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'update failed' }, 400)
@@ -264,7 +281,7 @@ app.patch('/api/applicants/fit-status', async (c) => {
     return c.json({ ok: false, error: 'ids cannot be empty' }, 400)
   }
   try {
-    const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null)
+    const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null, body.created_by)
     // Every fit-status change counts as processing a CV — including clearing it.
     await logActivity(c.env.DB, body.created_by, body.ids, 'fit_status_set')
     return c.json({ ok: true, updated })
@@ -371,6 +388,10 @@ app.post('/api/candidates/:id/interview-notes', async (c) => {
      VALUES (?, ?, ?, ?)`
   ).bind(id, content.trim(), body.created_by, body.created_by_name).run()
   await logActivity(c.env.DB, body.created_by, [id], 'note_added')
+  await logCandidateEvents(c.env.DB, body.created_by, [
+    { applicant_id: id, event_type: 'note_added', application_id: null,
+      metadata: { note_id: result.meta.last_row_id, excerpt: noteExcerpt(content), generated: true } },
+  ])
   const note = await c.env.DB.prepare(
     `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
@@ -449,6 +470,17 @@ app.post('/api/candidates/:id/notes', async (c) => {
      VALUES (?, ?, ?, ?, ?)`
   ).bind(id, content, body.created_by, body.created_by_name, images.length ? JSON.stringify(images) : null).run()
   await logActivity(c.env.DB, body.created_by, [id], 'note_added')
+  await logCandidateEvents(c.env.DB, body.created_by, [
+    { applicant_id: id, event_type: 'note_added', application_id: null,
+      metadata: { note_id: result.meta.last_row_id, excerpt: noteExcerpt(content) } },
+  ])
+  await createMentionNotifications(c.env.DB, {
+    noteId: Number(result.meta.last_row_id),
+    applicantId: id,
+    actor: body.created_by,
+    actorName: body.created_by_name,
+    content,
+  })
   const note = await c.env.DB.prepare(
     `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
@@ -474,7 +506,19 @@ app.patch('/api/notes/:id', async (c) => {
   const note = await c.env.DB.prepare(
     `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
      FROM candidate_notes WHERE id = ?`
-  ).bind(id).first()
+  ).bind(id).first<{ applicant_id: number; created_by: string; created_by_name: string }>()
+  if (note) {
+    // Only notify mentions added by this edit, not ones already notified before.
+    const already = await existingRecipients(c.env.DB, id)
+    await createMentionNotifications(c.env.DB, {
+      noteId: id,
+      applicantId: note.applicant_id,
+      actor: note.created_by,
+      actorName: note.created_by_name,
+      content: body.content.trim(),
+      skipRecipients: already,
+    })
+  }
   return c.json({ ok: true, note: shapeNote(note) })
 })
 
@@ -482,9 +526,70 @@ app.patch('/api/notes/:id', async (c) => {
 app.delete('/api/notes/:id', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  // Capture the note's owner/content before deleting so we can log the event.
+  const deletedNote = await c.env.DB.prepare(
+    `SELECT applicant_id, content FROM candidate_notes WHERE id = ?`
+  ).bind(id).first<{ applicant_id: number; content: string }>()
+  await deleteForNote(c.env.DB, id)
   const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
+  if (deletedNote) {
+    await logCandidateEvents(c.env.DB, c.req.query('actor'), [
+      { applicant_id: deletedNote.applicant_id, event_type: 'note_deleted', application_id: null,
+        metadata: { note_id: id, excerpt: noteExcerpt(deletedNote.content) } },
+    ])
+  }
   return c.json({ ok: true })
+})
+
+// Candidate timeline / history — status changes and note add/delete events.
+app.get('/api/candidates/:id/events', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const events = await getCandidateEvents(c.env.DB, id)
+  return c.json({ ok: true, events })
+})
+
+// ── Notifications (currently @mentions in notes) ───────────────────────────
+
+// Identify the requesting user. Auth is client-side, so the username is passed
+// as a query param (consistent with the rest of the app's username references).
+function reqUser(c: { req: { query: (k: string) => string | undefined } }): string {
+  return (c.req.query('user') ?? '').trim()
+}
+
+// List recent notifications for a user plus the unread count.
+app.get('/api/notifications', async (c) => {
+  const user = reqUser(c)
+  if (!user) return c.json({ ok: false, error: 'user required' }, 400)
+  const { notifications, unread } = await listNotifications(c.env.DB, user)
+  return c.json({ ok: true, notifications, unread })
+})
+
+// Applicant ids with at least one unread mention — drives the candidate-list marker.
+app.get('/api/notifications/unread-applicants', async (c) => {
+  const user = reqUser(c)
+  if (!user) return c.json({ ok: false, error: 'user required' }, 400)
+  const applicantIds = await unreadApplicantIds(c.env.DB, user)
+  return c.json({ ok: true, applicantIds })
+})
+
+// Mark a single notification read (scoped to the requesting user).
+app.post('/api/notifications/:id/read', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const user = reqUser(c)
+  if (!user) return c.json({ ok: false, error: 'user required' }, 400)
+  await markRead(c.env.DB, id, user)
+  return c.json({ ok: true })
+})
+
+// Mark all of a user's notifications read.
+app.post('/api/notifications/read-all', async (c) => {
+  const user = reqUser(c)
+  if (!user) return c.json({ ok: false, error: 'user required' }, 400)
+  const count = await markAllRead(c.env.DB, user)
+  return c.json({ ok: true, count })
 })
 
 // ── Saved filters (shared, team-wide presets) ──────────────────────────────

@@ -1,6 +1,7 @@
 // Candidate list and detail queries (read-only).
 
 import { CV_COLUMNS } from './cv-schema'
+import { logCandidateEvents } from './events'
 
 export type CandidateListItem = {
   id: number
@@ -404,46 +405,108 @@ export type FitStatus = typeof VALID_FIT_STATUSES[number]
 export async function updateApplicationStatus(
   db: D1Database,
   applicationId: number,
-  status: string
+  status: string,
+  actor?: string | null
 ): Promise<boolean> {
   if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('invalid status')
+  // Read the prior status (and position) first so the timeline can show from→to.
+  const before = await db
+    .prepare(
+      `SELECT a.applicant_id, a.status, p.title AS position_title
+       FROM applications a
+       LEFT JOIN job_positions p ON p.id = a.position_id
+       WHERE a.id = ?`
+    )
+    .bind(applicationId)
+    .first<{ applicant_id: number; status: string; position_title: string | null }>()
+  if (!before) return false
   const res = await db
     .prepare(`UPDATE applications SET status = ? WHERE id = ?`)
     .bind(status, applicationId)
     .run()
-  return (res.meta?.changes ?? 0) > 0
+  const changed = (res.meta?.changes ?? 0) > 0
+  if (changed && before.status !== status) {
+    await logCandidateEvents(db, actor, [
+      {
+        applicant_id: before.applicant_id,
+        event_type: 'pipeline_status_changed',
+        from_value: before.status,
+        to_value: status,
+        application_id: applicationId,
+        metadata: before.position_title ? { position_title: before.position_title } : null,
+      },
+    ])
+  }
+  return changed
 }
 
 // Set one pipeline stage on many applications at once (bulk board add/remove).
 export async function updateApplicationsStageBulk(
   db: D1Database,
   applicationIds: number[],
-  status: string
+  status: string,
+  actor?: string | null
 ): Promise<number> {
   if (applicationIds.length === 0) return 0
   if (!(VALID_STATUSES as readonly string[]).includes(status)) throw new Error('invalid status')
   const placeholders = applicationIds.map(() => '?').join(',')
+  // Snapshot prior statuses so we only log applications that actually moved.
+  const before = await db
+    .prepare(
+      `SELECT a.id, a.applicant_id, a.status, p.title AS position_title
+       FROM applications a
+       LEFT JOIN job_positions p ON p.id = a.position_id
+       WHERE a.id IN (${placeholders})`
+    )
+    .bind(...applicationIds)
+    .all<{ id: number; applicant_id: number; status: string; position_title: string | null }>()
   const res = await db
     .prepare(`UPDATE applications SET status = ? WHERE id IN (${placeholders})`)
     .bind(status, ...applicationIds)
     .run()
+  const events = (before.results ?? [])
+    .filter((r) => r.status !== status)
+    .map((r) => ({
+      applicant_id: r.applicant_id,
+      event_type: 'pipeline_status_changed' as const,
+      from_value: r.status,
+      to_value: status,
+      application_id: r.id,
+      metadata: r.position_title ? { position_title: r.position_title } : null,
+    }))
+  await logCandidateEvents(db, actor, events)
   return res.meta?.changes ?? 0
 }
 
 export async function updateApplicantsFitStatus(
   db: D1Database,
   ids: number[],
-  fit_status: string | null
+  fit_status: string | null,
+  actor?: string | null
 ): Promise<number> {
   if (ids.length === 0) return 0
   if (fit_status !== null && !(VALID_FIT_STATUSES as readonly string[]).includes(fit_status)) {
     throw new Error('invalid fit_status')
   }
   const placeholders = ids.map(() => '?').join(',')
+  // Snapshot prior fit_status per applicant so we only log real changes.
+  const before = await db
+    .prepare(`SELECT id, fit_status FROM applicants WHERE id IN (${placeholders})`)
+    .bind(...ids)
+    .all<{ id: number; fit_status: string | null }>()
   const res = await db
     .prepare(`UPDATE applicants SET fit_status = ? WHERE id IN (${placeholders})`)
     .bind(fit_status, ...ids)
     .run()
+  const events = (before.results ?? [])
+    .filter((r) => (r.fit_status ?? null) !== fit_status)
+    .map((r) => ({
+      applicant_id: r.id,
+      event_type: 'fit_status_changed' as const,
+      from_value: r.fit_status,
+      to_value: fit_status,
+    }))
+  await logCandidateEvents(db, actor, events)
   return res.meta?.changes ?? 0
 }
 

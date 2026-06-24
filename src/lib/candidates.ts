@@ -477,12 +477,13 @@ export async function updateAnswerValue(
 
 export async function updateApplicationStatus(
   applicationId: number,
-  status: string
+  status: string,
+  createdBy?: string
 ): Promise<void> {
   const res = await fetch(`/api/applications/${applicationId}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, created_by: createdBy }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
@@ -492,12 +493,13 @@ export async function updateApplicationStatus(
 // remove from the pipeline). Takes application IDs, not applicant IDs.
 export async function updateApplicationsStageBulk(
   applicationIds: number[],
-  status: string
+  status: string,
+  createdBy?: string
 ): Promise<void> {
   const res = await fetch('/api/applications/status/bulk', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ application_ids: applicationIds, status }),
+    body: JSON.stringify({ application_ids: applicationIds, status, created_by: createdBy }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
@@ -551,6 +553,39 @@ export async function saveDailyTarget(username: string, target: number): Promise
   const data = (await res.json()) as ({ ok: true } & DailyProgress) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to save target')
   return { target: data.target, today_count: data.today_count, date: data.date }
+}
+
+// ── Candidate timeline / history ────────────────────────────────────────────
+
+export type CandidateEventType =
+  | 'fit_status_changed'
+  | 'pipeline_status_changed'
+  | 'note_added'
+  | 'note_deleted'
+
+export type CandidateEvent = {
+  id: number
+  applicant_id: number
+  event_type: CandidateEventType
+  from_value: string | null
+  to_value: string | null
+  application_id: number | null
+  metadata: { position_title?: string; note_id?: number; excerpt?: string; generated?: boolean } | null
+  actor: string
+  actor_name: string
+  created_at: string
+}
+
+export async function fetchCandidateEvents(applicantId: number): Promise<CandidateEvent[]> {
+  const res = await fetch(`/api/candidates/${applicantId}/events`)
+  const data = (await res.json()) as { ok: true; events: CandidateEvent[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to load history')
+  return data.events
+}
+
+// Human label for a fit_status value used in timeline copy ("No status" when null).
+export function fitStatusLabel(value: string | null): string {
+  return FIT_STATUS_OPTIONS.find((o) => o.value === (value ?? 'none'))?.label ?? (value ?? 'No Status')
 }
 
 export type CandidateNote = {
@@ -608,8 +643,9 @@ export async function updateNote(noteId: number, content: string): Promise<Candi
   return data.note
 }
 
-export async function deleteNote(noteId: number): Promise<void> {
-  const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' })
+export async function deleteNote(noteId: number, actor?: string): Promise<void> {
+  const qs = actor ? `?actor=${encodeURIComponent(actor)}` : ''
+  const res = await fetch(`/api/notes/${noteId}${qs}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
 }

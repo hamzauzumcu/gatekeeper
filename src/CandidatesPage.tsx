@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
-  Image as ImageIcon,
+  Image as ImageIcon, History, Clock, ArrowRight,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -45,6 +45,10 @@ import {
   OFF_BOARD,
   normalizeStage,
   isOnBoard,
+  stageLabel,
+  fitStatusLabel,
+  fetchCandidateEvents,
+  type CandidateEvent,
   updateApplicationsStageBulk,
   type PipelineStage,
   FIT_STATUS_OPTIONS,
@@ -94,6 +98,9 @@ import {
 import { DailyStatsSheet } from './DailyStatsSheet'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { fetchUnreadApplicantIds } from '@/lib/notifications'
+import { fetchUsers, type AppUser } from '@/lib/users'
+import MentionTextarea from './components/MentionTextarea'
 
 const FIT_STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   good_fit: { badge: 'bg-green-50 text-green-700 border-green-200', label: 'Good Fit' },
@@ -715,7 +722,15 @@ const VIEW_STORAGE_KEY = 'gk_candidate_view'
 // will render across all stage columns.
 const BOARD_LIMIT = 500
 
-export default function CandidatesPage() {
+export default function CandidatesPage({
+  openNote,
+  onOpenNoteHandled,
+}: {
+  // A pending request (from a notification click) to open a candidate scrolled
+  // to a specific note. Consumed once, then cleared via onOpenNoteHandled.
+  openNote?: { applicantId: number; noteId: number } | null
+  onOpenNoteHandled?: () => void
+} = {}) {
   const [q, setQ] = useState('')
   const [searchOpen, setSearchOpen] = useState(false) // mobile: search field hidden until toggled
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -784,6 +799,10 @@ export default function CandidatesPage() {
   const [open, setOpen] = useState(false)
   const [sheetTab, setSheetTab] = useState('applications')
   const [openedIndex, setOpenedIndex] = useState(-1)
+  // When opened from a notification, the note to scroll to and highlight.
+  const [highlightNoteId, setHighlightNoteId] = useState<number | null>(null)
+  // Applicant ids with an unread @mention for the current user (list marker).
+  const [unreadApplicants, setUnreadApplicants] = useState<Set<number>>(new Set())
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
@@ -916,7 +935,7 @@ export default function CandidatesPage() {
       setCandidates((list) => list.map(patch))
     }
     apply(stage)
-    updateApplicationStatus(appId, stage).catch(() => apply(prevStage))
+    updateApplicationStatus(appId, stage, currentUser.username).catch(() => apply(prevStage))
   }
 
   function updateFilter<K extends keyof ActiveFilters>(key: K, value: ActiveFilters[K]) {
@@ -1080,6 +1099,40 @@ export default function CandidatesPage() {
     openCandidate(candidates[newIdx].id, sheetTab, newIdx)
   }
 
+  // Load the set of applicants with an unread @mention (drives the list marker).
+  // Refresh on mount and whenever notification state changes elsewhere.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetchUnreadApplicantIds(currentUser.username)
+        .then((ids) => {
+          if (!cancelled) setUnreadApplicants(new Set(ids))
+        })
+        .catch(() => {})
+    }
+    load()
+    window.addEventListener('gk:notifications-changed', load)
+    return () => {
+      cancelled = true
+      window.removeEventListener('gk:notifications-changed', load)
+    }
+  }, [currentUser.username])
+
+  // Open a candidate's notes from a notification click, scrolling to the note.
+  useEffect(() => {
+    if (!openNote) return
+    openCandidate(openNote.applicantId, 'notes')
+    setHighlightNoteId(openNote.noteId)
+    setUnreadApplicants((prev) => {
+      if (!prev.has(openNote.applicantId)) return prev
+      const next = new Set(prev)
+      next.delete(openNote.applicantId)
+      return next
+    })
+    onOpenNoteHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openNote])
+
   async function handleSheetFitStatus(fitStatus: string | null) {
     if (!selected) return
     const candId = selected.applicant.id
@@ -1174,7 +1227,7 @@ export default function CandidatesPage() {
     if (appIds.length === 0) return
     setBulkLoading(true)
     try {
-      await updateApplicationsStageBulk(appIds, stage)
+      await updateApplicationsStageBulk(appIds, stage, currentUser.username)
       const patch = (c: CandidateListItem) => (selectedIds.has(c.id) ? { ...c, latest_status: stage } : c)
       setCandidates((prev) => prev.map(patch))
       setBoardCandidates((prev) => prev.map(patch))
@@ -1720,18 +1773,28 @@ export default function CandidatesPage() {
                       <TableCell className="text-center">
                         <button
                           type="button"
-                          title={`${cand.notes_count ?? 0} note${(cand.notes_count ?? 0) !== 1 ? 's' : ''}`}
+                          title={
+                            unreadApplicants.has(cand.id)
+                              ? 'You were mentioned in a note'
+                              : `${cand.notes_count ?? 0} note${(cand.notes_count ?? 0) !== 1 ? 's' : ''}`
+                          }
                           onClick={(e) => {
                             e.stopPropagation()
                             openCandidate(cand.id, 'notes')
                           }}
                           className={[
-                            'inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent',
+                            'relative inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent',
                             (cand.notes_count ?? 0) > 0 ? 'text-primary' : 'text-muted-foreground',
                           ].join(' ')}
                         >
                           <MessageSquare className="size-3.5" />
                           {(cand.notes_count ?? 0) > 0 && <span>{cand.notes_count}</span>}
+                          {unreadApplicants.has(cand.id) && (
+                            <span
+                              className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-destructive ring-2 ring-background"
+                              aria-label="unread mention"
+                            />
+                          )}
                         </button>
                       </TableCell>
                       )}
@@ -1911,6 +1974,8 @@ export default function CandidatesPage() {
               onStageChange={handleSheetStageChange}
               onNavigate={navigateSheet}
               onNoteAdded={refreshDailyProgress}
+              highlightNoteId={highlightNoteId}
+              onHighlightHandled={() => setHighlightNoteId(null)}
               hasPrev={openedIndex > 0}
               hasNext={openedIndex >= 0 && openedIndex < candidates.length - 1}
             />
@@ -2207,6 +2272,8 @@ function CandidateDetailView({
   onStageChange,
   onNavigate,
   onNoteAdded,
+  highlightNoteId,
+  onHighlightHandled,
   hasPrev,
   hasNext,
 }: {
@@ -2218,6 +2285,8 @@ function CandidateDetailView({
   onStageChange: (appId: number, newStatus: string) => void
   onNavigate: (dir: -1 | 1) => void
   onNoteAdded: () => void
+  highlightNoteId: number | null
+  onHighlightHandled: () => void
   hasPrev: boolean
   hasNext: boolean
 }) {
@@ -2304,10 +2373,15 @@ function CandidateDetailView({
     }
   }, [])
 
+  // Bumped after any timeline-affecting action so the History tab refetches even
+  // while it's the active tab (e.g. a fit-status change from the bottom bar).
+  const [historyVersion, setHistoryVersion] = useState(0)
+
   function handleFitClick(status: string) {
     const next = fitStatus === status ? null : status
     setFitStatus(next)
     onFitStatus(next)
+    setHistoryVersion((v) => v + 1)
   }
 
   async function handleDetailStatusChange(appId: number, newStatus: string) {
@@ -2316,7 +2390,8 @@ function CandidateDetailView({
     setAppStatuses((m) => new Map(m).set(appId, newStatus))
     onStageChange(appId, newStatus)
     try {
-      await updateApplicationStatus(appId, newStatus)
+      await updateApplicationStatus(appId, newStatus, currentUser.username)
+      setHistoryVersion((v) => v + 1)
     } catch {
       setAppStatuses((m) => new Map(m).set(appId, prev))
       onStageChange(appId, prev)
@@ -2443,6 +2518,10 @@ function CandidateDetailView({
                 {applicant.notes_count}
               </Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="history">
+            <History className="size-3.5" />
+            History
           </TabsTrigger>
         </TabsList>
 
@@ -2679,7 +2758,11 @@ function CandidateDetailView({
         </TabsContent>
 
         <TabsContent value="notes" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
-          <NotesSection applicantId={applicant.id} candidateName={applicant.full_name} candidateEmail={applicant.email} currentUser={currentUser} onNoteAdded={onNoteAdded} />
+          <NotesSection applicantId={applicant.id} candidateName={applicant.full_name} candidateEmail={applicant.email} currentUser={currentUser} onNoteAdded={onNoteAdded} highlightNoteId={highlightNoteId} onHighlightHandled={onHighlightHandled} />
+        </TabsContent>
+
+        <TabsContent value="history" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
+          <HistorySection applicantId={applicant.id} refreshKey={historyVersion} />
         </TabsContent>
       </Tabs>
 
@@ -2880,9 +2963,146 @@ function OutreachEmailDialog({
   )
 }
 
-function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void }) {
+// Candidate timeline: status changes and note add/delete, newest first.
+// Refetches when refreshKey changes (an action happened while this tab was open)
+// and naturally on mount when the tab is reopened.
+function HistorySection({ applicantId, refreshKey }: { applicantId: number; refreshKey: number }) {
+  const [events, setEvents] = useState<CandidateEvent[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchCandidateEvents(applicantId)
+      .then((e) => { if (!cancelled) setEvents(e) })
+      .catch(() => { if (!cancelled) setEvents([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [applicantId, refreshKey])
+
+  if (loading) {
+    return <div className="py-10 text-center text-sm text-muted-foreground">Loading history…</div>
+  }
+  if (events.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-muted-foreground">
+        <Clock className="size-6 opacity-40" />
+        <span>No activity yet. Status changes and notes will show up here.</span>
+      </div>
+    )
+  }
+
+  return (
+    <ol className="relative ml-1 space-y-5 border-l border-border/60 pl-5 pt-1">
+      {events.map((e) => (
+        <li key={e.id} className="relative">
+          <span className="absolute -left-[1.55rem] top-0.5 size-2.5 rounded-full bg-muted-foreground/40 ring-4 ring-background" />
+          <div className="text-sm leading-snug text-foreground">{renderEventBody(e)}</div>
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground/70">{e.actor_name}</span>
+            <span>·</span>
+            <span title={formatDate(e.created_at)}>{formatRelativeTime(e.created_at)}</span>
+          </div>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+// One pill showing an old -> new state transition for status events.
+function StateTransition({ from, to }: { from: string; to: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">{from}</span>
+      <ArrowRight className="size-3 text-muted-foreground" />
+      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">{to}</span>
+    </span>
+  )
+}
+
+function renderEventBody(e: CandidateEvent): ReactNode {
+  switch (e.event_type) {
+    case 'fit_status_changed': {
+      if (e.to_value == null) return <>Cleared fit status (was <span className="font-medium">{fitStatusLabel(e.from_value)}</span>)</>
+      if (e.from_value == null) return <>Set fit status to <span className="font-medium">{fitStatusLabel(e.to_value)}</span></>
+      return <span className="inline-flex flex-wrap items-center gap-1.5">Fit status <StateTransition from={fitStatusLabel(e.from_value)} to={fitStatusLabel(e.to_value)} /></span>
+    }
+    case 'pipeline_status_changed': {
+      const pos = e.metadata?.position_title
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          Pipeline{pos ? <span className="text-muted-foreground">({pos})</span> : null}
+          <StateTransition from={stageLabel(e.from_value)} to={stageLabel(e.to_value)} />
+        </span>
+      )
+    }
+    case 'note_added':
+      return (
+        <>
+          {e.metadata?.generated ? 'Generated interview notes' : 'Added a note'}
+          {e.metadata?.excerpt ? <span className="mt-0.5 block text-xs text-muted-foreground">“{e.metadata.excerpt}”</span> : null}
+        </>
+      )
+    case 'note_deleted':
+      return (
+        <>
+          Deleted a note
+          {e.metadata?.excerpt ? <span className="mt-0.5 block text-xs text-muted-foreground line-through">“{e.metadata.excerpt}”</span> : null}
+        </>
+      )
+    default:
+      return null
+  }
+}
+
+// Rewrite @handles that resolve to a known user into a sentinel markdown link
+// (#mention) so ReactMarkdown can render them as chips via a component override.
+// Handles that don't match a user (or appear inside emails) are left untouched.
+function linkifyMentions(content: string, known: Set<string>): string {
+  if (!known.size) return content
+  return content.replace(/(^|[^A-Za-z0-9_@])@([A-Za-z0-9_]+)/g, (full, pre: string, handle: string) =>
+    known.has(handle.toLowerCase()) ? `${pre}[@${handle}](#mention)` : full,
+  )
+}
+
+function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded, highlightNoteId, onHighlightHandled }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void; highlightNoteId: number | null; onHighlightHandled: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
+  // Mentionable users for the @autocomplete and mention chips.
+  const [users, setUsers] = useState<AppUser[]>([])
+  // Note DOM nodes by id, so a notification click can scroll to one.
+  const noteRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+  // Note to briefly flash after scrolling to it from a notification.
+  const [flashId, setFlashId] = useState<number | null>(null)
+
+  const knownHandles = useMemo(() => new Set(users.map((u) => u.username.toLowerCase())), [users])
+  // Render @mention sentinel links (see linkifyMentions) as colored chips.
+  const mdComponents = useMemo(
+    () => ({
+      a({ href, children }: { href?: string; children?: ReactNode }) {
+        if (href === '#mention') {
+          const label = Array.isArray(children) ? children.join('') : String(children ?? '')
+          const handle = label.replace(/^@/, '').toLowerCase()
+          const u = users.find((x) => x.username.toLowerCase() === handle)
+          const color = u?.color ?? '#2563eb'
+          return (
+            <span
+              className="rounded px-1 font-medium no-underline"
+              style={{ color, backgroundColor: `${color}1a` }}
+            >
+              @{u?.username ?? handle}
+            </span>
+          )
+        }
+        return (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        )
+      },
+    }),
+    [users],
+  )
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -2974,6 +3194,26 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     return () => { if (editTimer.current) clearTimeout(editTimer.current) }
   }, [editText, editingId])
 
+  // Load mentionable users once (cached in the lib helper).
+  useEffect(() => {
+    fetchUsers()
+      .then(setUsers)
+      .catch(() => setUsers([]))
+  }, [])
+
+  // When opened from a notification, scroll to the mentioning note and flash it.
+  useEffect(() => {
+    if (highlightNoteId == null || loading) return
+    const el = noteRefs.current.get(highlightNoteId)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFlashId(highlightNoteId)
+    onHighlightHandled()
+    const t = setTimeout(() => setFlashId(null), 2500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightNoteId, loading, notes])
+
   function addFiles(selected: FileList | null) {
     if (!selected) return
     const imgs = Array.from(selected).filter((f) => f.type.startsWith('image/'))
@@ -3051,7 +3291,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
 
   async function handleDelete(noteId: number) {
     try {
-      await deleteNote(noteId)
+      await deleteNote(noteId, currentUser.username)
       setNotes((prev) => prev.filter((n) => n.id !== noteId))
     } catch {
       // ignore
@@ -3166,11 +3406,18 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             Drop images to attach
           </div>
         )}
-        <textarea
+        <MentionTextarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
+          users={users}
           onPaste={handlePaste}
-          placeholder="Add a note… (drag, paste, or attach images)"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              e.currentTarget.form?.requestSubmit()
+            }
+          }}
+          placeholder="Add a note… (@ to mention, ⌘↵ to save, drag/paste/attach images)"
           rows={3}
           className={[
             'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
@@ -3248,7 +3495,17 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
       ) : (
         <div className="space-y-3">
           {notes.map((note) => (
-            <div key={note.id} className="rounded-lg border p-3">
+            <div
+              key={note.id}
+              ref={(el) => {
+                if (el) noteRefs.current.set(note.id, el)
+                else noteRefs.current.delete(note.id)
+              }}
+              className={[
+                'rounded-lg border p-3 transition-colors duration-700',
+                flashId === note.id ? 'border-primary bg-primary/5' : '',
+              ].join(' ')}
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="font-medium">{note.created_by_name}</span>
@@ -3278,9 +3535,10 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               </div>
               {editingId === note.id ? (
                 <div className="mt-2 space-y-2">
-                  <textarea
+                  <MentionTextarea
                     value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
+                    onChange={setEditText}
+                    users={users}
                     rows={3}
                     autoFocus
                     onKeyDown={(e) => {
@@ -3315,7 +3573,9 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 <>
                   {note.content && (
                     <div className="prose prose-sm dark:prose-invert mt-2 max-w-none break-words">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                        {linkifyMentions(note.content, knownHandles)}
+                      </ReactMarkdown>
                     </div>
                   )}
                   {note.images.length > 0 && (
