@@ -15,11 +15,14 @@ export default function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [dark, setDark] = useDarkMode()
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const user = login(username.trim(), password)
+    setLoading(true)
+    const user = await login(username.trim(), password)
+    setLoading(false)
     if (user) {
       setError(false)
       onLogin(user)
@@ -75,8 +78,8 @@ export default function LoginPage({ onLogin }: Props) {
             {error && (
               <p className="text-sm text-destructive">Invalid username or password.</p>
             )}
-            <Button type="submit" className="w-full">
-              Sign in
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Signing in…' : 'Sign in'}
             </Button>
           </form>
         </CardContent>

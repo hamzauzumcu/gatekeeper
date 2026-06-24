@@ -8,6 +8,7 @@ import { PARSE_VERSION } from './cv-schema'
 import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
+import { listUsers, verifyLogin } from './users'
 import { SyncJobDO } from './sync-job-do'
 
 export { SyncJobDO }
@@ -124,6 +125,27 @@ app.post('/api/import', async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : 'import error' }, 400)
   }
+})
+
+// Active users — for pickers and @mention autocomplete
+app.get('/api/users', async (c) => {
+  const users = await listUsers(c.env.DB)
+  return c.json({ ok: true, users })
+})
+
+// Validate credentials against the users table (login is server-side now).
+app.post('/api/login', async (c) => {
+  const body: { username?: unknown; password?: unknown } = await c.req
+    .json<{ username?: unknown; password?: unknown }>()
+    .catch(() => ({}))
+  const username = typeof body.username === 'string' ? body.username.trim() : ''
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (!username || !password) {
+    return c.json({ ok: false, error: 'Missing credentials' }, 400)
+  }
+  const user = await verifyLogin(c.env.DB, username, password)
+  if (!user) return c.json({ ok: false, error: 'Invalid username or password' }, 401)
+  return c.json({ ok: true, user: { username: user.username, fullName: user.full_name } })
 })
 
 // Filter options (country + position lists)
