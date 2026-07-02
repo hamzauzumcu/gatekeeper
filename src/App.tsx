@@ -6,25 +6,26 @@ import ImportPage from './ImportPage'
 import CandidatesPage from './CandidatesPage'
 import SettingsPage from './SettingsPage'
 import LeavePage from './LeavePage'
+import AdminPage from './AdminPage'
 import LoginPage from './LoginPage'
 import NotificationBell from './components/NotificationBell'
-import { getUser, logout, type User } from '@/lib/auth'
+import { getUser, logout, can, type User } from '@/lib/auth'
 import { useDarkMode } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 // Top-level modules of the tool. Recruiting is the original applicant workflow;
-// leave is HR time-off management. The header switches between them.
-type Module = 'recruiting' | 'leave'
-const MODULES: { key: Module; label: string }[] = [
-  { key: 'recruiting', label: 'Recruiting' },
-  { key: 'leave', label: 'Leave' },
-]
+// leave is HR time-off management; admin is user & permission management. Which
+// modules a user sees depends on their permissions.
+type Module = 'recruiting' | 'leave' | 'admin'
+
+// Recruiting sub-tabs, each gated by a permission.
+type RecruitingTab = 'candidates' | 'import' | 'settings'
 
 export default function App() {
   const [user, setUser] = useState<User | null>(() => getUser())
   const [dark, setDark] = useDarkMode()
   const [module, setModule] = useState<Module>('recruiting')
-  const [tab, setTab] = useState('candidates')
+  const [tab, setTab] = useState<RecruitingTab>('candidates')
   // A notification click requests opening a specific note; the candidates tab
   // consumes this once it mounts/renders and clears it via onOpenNoteHandled.
   const [openNote, setOpenNote] = useState<{ applicantId: number; noteId: number } | null>(null)
@@ -34,9 +35,27 @@ export default function App() {
   }
 
   function handleLogout() {
-    logout()
+    void logout()
     setUser(null)
   }
+
+  // Which modules/tabs this user may see, in display order.
+  const canRecruiting = can(user, 'view_applications') || can(user, 'recruiting_admin')
+  const modules: { key: Module; label: string }[] = [
+    ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting' }] : []),
+    { key: 'leave' as const, label: 'Leave' },
+    ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
+  ]
+  const recruitingTabs: { key: RecruitingTab; label: string }[] = [
+    ...(can(user, 'view_applications') ? [{ key: 'candidates' as const, label: 'Candidates' }] : []),
+    ...(can(user, 'recruiting_admin') ? [{ key: 'import' as const, label: 'Import CSV' }] : []),
+    ...(can(user, 'recruiting_admin') ? [{ key: 'settings' as const, label: 'Settings' }] : []),
+  ]
+
+  // Fall back to the first permitted module/tab if the current one isn't allowed.
+  const activeModule: Module = modules.some((m) => m.key === module) ? module : modules[0].key
+  const activeTab: RecruitingTab =
+    recruitingTabs.some((t) => t.key === tab) ? tab : (recruitingTabs[0]?.key ?? 'candidates')
 
   function handleOpenNote(applicantId: number, noteId: number) {
     setModule('recruiting')
@@ -50,20 +69,20 @@ export default function App() {
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
           <button
             type="button"
-            onClick={() => setModule('recruiting')}
+            onClick={() => setModule(modules[0].key)}
             className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl"
           >
             Gatekeeper
           </button>
           <nav className="flex items-center gap-1">
-            {MODULES.map((m) => (
+            {modules.map((m) => (
               <button
                 key={m.key}
                 type="button"
                 onClick={() => setModule(m.key)}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  module === m.key
+                  activeModule === m.key
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
@@ -85,26 +104,38 @@ export default function App() {
         </div>
       </header>
 
-      {module === 'recruiting' ? (
-        <Tabs value={tab} onValueChange={setTab} className="mt-6">
+      {activeModule === 'recruiting' && recruitingTabs.length > 0 ? (
+        <Tabs value={activeTab} onValueChange={(v) => setTab(v as RecruitingTab)} className="mt-6">
           <TabsList className="max-w-full overflow-x-auto">
-            <TabsTrigger value="candidates">Candidates</TabsTrigger>
-            <TabsTrigger value="import">Import CSV</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+            {recruitingTabs.map((t) => (
+              <TabsTrigger key={t.key} value={t.key}>
+                {t.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
-          <TabsContent value="candidates" className="mt-4">
-            <CandidatesPage openNote={openNote} onOpenNoteHandled={() => setOpenNote(null)} />
-          </TabsContent>
+          {can(user, 'view_applications') && (
+            <TabsContent value="candidates" className="mt-4">
+              <CandidatesPage user={user} openNote={openNote} onOpenNoteHandled={() => setOpenNote(null)} />
+            </TabsContent>
+          )}
 
-          <TabsContent value="import" className="mt-4">
-            <ImportPage />
-          </TabsContent>
+          {can(user, 'recruiting_admin') && (
+            <TabsContent value="import" className="mt-4">
+              <ImportPage />
+            </TabsContent>
+          )}
 
-          <TabsContent value="settings" className="mt-4">
-            <SettingsPage />
-          </TabsContent>
+          {can(user, 'recruiting_admin') && (
+            <TabsContent value="settings" className="mt-4">
+              <SettingsPage />
+            </TabsContent>
+          )}
         </Tabs>
+      ) : activeModule === 'admin' ? (
+        <div className="mt-6">
+          <AdminPage user={user} />
+        </div>
       ) : (
         <div className="mt-6">
           <LeavePage user={user} />

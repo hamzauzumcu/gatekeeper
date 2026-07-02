@@ -10,7 +10,19 @@ import { PARSE_VERSION } from './cv-schema'
 import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
-import { listUsers, verifyLogin } from './users'
+import { listUsers, verifyLogin, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
+import {
+  authMiddleware,
+  createSession,
+  deleteSession,
+  requirePerm,
+  requireAdmin,
+  permGate,
+  adminGate,
+  PERMISSIONS,
+  type Auth,
+  type Permission,
+} from './permissions'
 import { listEmployees, createEmployee } from './employees'
 import {
   importLeaveRequests,
@@ -44,9 +56,24 @@ type Env = {
     TALLY_WEBHOOK_SECRET?: string
     SYNC_JOB: DurableObjectNamespace<SyncJobDO>
   }
+  Variables: {
+    auth: Auth | null
+  }
 }
 
 const app = new Hono<Env>()
+
+// Resolve the caller's session (if any) for every API request. Individual routes
+// decide whether auth/permissions are required — this only populates c.get('auth').
+app.use('/api/*', authMiddleware)
+
+// Prefix guards. More specific rules are registered first so admin-only user
+// management isn't reachable by a plain recruiting-admin. (adminGate implies
+// recruiting_admin, so admins still pass the broader /api/admin/* gate.)
+app.use('/api/admin/users', adminGate)
+app.use('/api/admin/users/*', adminGate)
+app.use('/api/admin/*', permGate('recruiting_admin'))
+app.use('/api/import', permGate('recruiting_admin'))
 
 // Validate a serialized ActiveFilters blob before persisting it. We store the
 // JSON verbatim, so we only check it parses and looks like the expected shape —
@@ -171,25 +198,46 @@ app.post('/api/login', async (c) => {
   if (!username || !password) {
     return c.json({ ok: false, error: 'Missing credentials' }, 400)
   }
-  const user = await verifyLogin(c.env.DB, username, password)
-  if (!user) return c.json({ ok: false, error: 'Invalid username or password' }, 401)
-  return c.json({ ok: true, user: { username: user.username, fullName: user.full_name } })
+  const auth = await verifyLogin(c.env.DB, username, password)
+  if (!auth) return c.json({ ok: false, error: 'Invalid username or password' }, 401)
+  const token = await createSession(c.env.DB, auth.username)
+  return c.json({
+    ok: true,
+    user: {
+      username: auth.username,
+      fullName: auth.fullName,
+      isAdmin: auth.isAdmin,
+      permissions: auth.permissions,
+      token,
+    },
+  })
+})
+
+// Invalidate the current session token (best-effort; client also clears locally).
+app.post('/api/logout', async (c) => {
+  const header = c.req.header('Authorization') ?? ''
+  const m = /^Bearer\s+(.+)$/i.exec(header.trim())
+  if (m) await deleteSession(c.env.DB, m[1].trim())
+  return c.json({ ok: true })
 })
 
 // Filter options (country + position lists)
 app.get('/api/candidates/filters', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
   const filters = await getCandidateFilters(c.env.DB)
   return c.json({ ok: true, ...filters })
 })
 
 // Question columns available for extra display + filtering
 app.get('/api/candidates/question-columns', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
   const questions = await getQuestionColumns(c.env.DB)
   return c.json({ ok: true, questions })
 })
 
 // Candidate list + search + filter
 app.get('/api/candidates', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
   const q = c.req.query('q') ?? ''
   const countries = c.req.queries('country') ?? []
   const position = c.req.query('position') ?? ''
@@ -208,15 +256,18 @@ app.get('/api/candidates', async (c) => {
   const sort = c.req.query('sort') ?? ''
   const dir = c.req.query('dir') ?? ''
   const sortNumeric = c.req.query('sort_numeric') === '1'
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, sort, dir, sortNumeric })
+  const canViewSalary = c.get('auth')?.permissions.view_salary ?? false
+  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, sort, dir, sortNumeric, canViewSalary })
   return c.json({ ok: true, ...data })
 })
 
 // Candidate detail (applications + answers)
 app.get('/api/candidates/:id', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id)) return c.json({ ok: false, error: 'invalid id' }, 400)
-  const detail = await getCandidate(c.env.DB, id)
+  const canViewSalary = c.get('auth')?.permissions.view_salary ?? false
+  const detail = await getCandidate(c.env.DB, id, canViewSalary)
   if (!detail) return c.json({ ok: false, error: 'candidate not found' }, 404)
   return c.json({ ok: true, ...detail })
 })
@@ -613,6 +664,7 @@ app.get('/api/employees', async (c) => {
 
 // Add an employee (idempotent on name).
 app.post('/api/employees', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const body: { name?: unknown; email?: unknown; department?: unknown; annualQuota?: unknown } =
     await c.req.json().catch(() => ({}))
   const name = typeof body.name === 'string' ? body.name : ''
@@ -638,6 +690,7 @@ app.get('/api/leave', async (c) => {
 // Bulk import from a CSV export (rows normalized client-side). Deduped on the
 // Tally submission id and auto-mapped to employees by name.
 app.post('/api/leave/import', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const body: { rows?: unknown } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(body.rows)) return c.json({ ok: false, error: 'rows array required' }, 400)
   const rows = (body.rows as unknown[])
@@ -665,6 +718,7 @@ app.post('/api/leave/import', async (c) => {
 
 // Map (or re-map) a request to an employee. Body: { employeeId: number | null }.
 app.post('/api/leave/:id/assign-employee', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const body: { employeeId?: unknown } = await c.req.json().catch(() => ({}))
@@ -683,6 +737,7 @@ app.post('/api/leave/:id/assign-employee', async (c) => {
 // Manually correct a request's raw duration (working_days / hours). For fixing
 // messy legacy rows; new Tally submissions arrive clean.
 app.post('/api/leave/:id/duration', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const body: { workingDays?: unknown; hours?: unknown } = await c.req.json().catch(() => ({}))
@@ -698,6 +753,7 @@ app.post('/api/leave/:id/duration', async (c) => {
 // Approve or reject a pending request. Reviewer identity (an app user) comes from
 // the body, consistent with the notes/notifications endpoints.
 app.post('/api/leave/:id/review', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
   const body: { decision?: unknown; reviewer?: unknown; reviewerName?: unknown } = await c.req
@@ -1007,6 +1063,73 @@ app.delete('/api/admin/data', async (c) => {
   }
 
   return c.json({ ok: false, error: 'invalid scope' }, 400)
+})
+
+// ── Admin: user & permission management ────────────────────────────────────
+// All routes below are admin-only (enforced by the /api/admin/users* adminGate).
+
+// Coerce a client permissions payload into the UserPermsInput shape (only known
+// keys, only booleans). is_admin ("Full access") is handled alongside the perms.
+function parsePermsInput(raw: unknown): UserPermsInput {
+  const out: UserPermsInput = {}
+  if (raw == null || typeof raw !== 'object') return out
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.is_admin === 'boolean') out.is_admin = obj.is_admin
+  for (const perm of PERMISSIONS) {
+    if (typeof obj[perm] === 'boolean') out[perm] = obj[perm] as boolean
+  }
+  return out
+}
+
+// List every user (active + inactive) with resolved capability flags.
+app.get('/api/admin/users', async (c) => {
+  const users = await listAllUsers(c.env.DB)
+  return c.json({ ok: true, users })
+})
+
+// Create a user.
+app.post('/api/admin/users', async (c) => {
+  const body: Record<string, unknown> = await c.req.json().catch(() => ({}))
+  const result = await createUser(c.env.DB, {
+    username: typeof body.username === 'string' ? body.username : '',
+    full_name: typeof body.full_name === 'string' ? body.full_name : '',
+    password: typeof body.password === 'string' ? body.password : '',
+    color: typeof body.color === 'string' ? body.color : null,
+    is_active: body.is_active === undefined ? true : body.is_active !== false,
+    perms: parsePermsInput(body.permissions),
+  })
+  if (!result.ok) return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  return c.json({ ok: true, user: result.user })
+})
+
+// Update a user (partial). Blank password leaves the existing one unchanged.
+app.patch('/api/admin/users/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: Record<string, unknown> = await c.req.json().catch(() => ({}))
+
+  // Guard against an admin locking themselves out (removing their own admin flag
+  // or deactivating their own account).
+  const self = c.get('auth')
+  const perms = parsePermsInput(body.permissions)
+  const deactivating = body.is_active === false
+  const demoting = perms.is_admin === false
+  if (self && self.isAdmin && (deactivating || demoting)) {
+    const target = (await listAllUsers(c.env.DB)).find((u) => u.id === id)
+    if (target && target.username === self.username) {
+      return c.json({ ok: false, error: 'you cannot remove your own admin access' }, 400)
+    }
+  }
+
+  const result = await updateUser(c.env.DB, id, {
+    full_name: typeof body.full_name === 'string' ? body.full_name : undefined,
+    password: typeof body.password === 'string' ? body.password : undefined,
+    color: body.color === undefined ? undefined : (typeof body.color === 'string' ? body.color : null),
+    is_active: body.is_active === undefined ? undefined : body.is_active !== false,
+    perms: body.permissions === undefined ? undefined : perms,
+  })
+  if (!result.ok) return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  return c.json({ ok: true, user: result.user })
 })
 
 // Tally webhook — new form responses arrive automatically

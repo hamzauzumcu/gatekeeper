@@ -1,3 +1,4 @@
+import { apiFetch } from './api'
 // Candidate API types + fetch helpers (browser-side).
 
 export type CandidateListItem = {
@@ -278,7 +279,7 @@ export function saveHiddenBaseColumns(keys: BaseColumnKey[]): void {
 }
 
 export async function fetchFilterOptions(): Promise<FilterOptions> {
-  const res = await fetch('/api/candidates/filters')
+  const res = await apiFetch('/api/candidates/filters')
   const data = (await res.json()) as
     | { ok: true; countries: string[]; positions: string[] }
     | { ok: false; error: string }
@@ -287,7 +288,7 @@ export async function fetchFilterOptions(): Promise<FilterOptions> {
 }
 
 export async function fetchQuestionColumns(): Promise<QuestionColumn[]> {
-  const res = await fetch('/api/candidates/question-columns')
+  const res = await apiFetch('/api/candidates/question-columns')
   const data = (await res.json()) as { ok: true; questions: QuestionColumn[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch question columns')
   return data.questions
@@ -318,7 +319,7 @@ export async function fetchCandidates(
     params.set('dir', sort.dir)
     if (sort.numeric) params.set('sort_numeric', '1')
   }
-  const res = await fetch(`/api/candidates?${params}`)
+  const res = await apiFetch(`/api/candidates?${params}`)
   const data = (await res.json()) as
     | { ok: true; candidates: CandidateListItem[]; total: number }
     | { ok: false; error: string }
@@ -327,7 +328,7 @@ export async function fetchCandidates(
 }
 
 export async function fetchCandidate(id: number): Promise<CandidateDetail> {
-  const res = await fetch(`/api/candidates/${id}`)
+  const res = await apiFetch(`/api/candidates/${id}`)
   const data = (await res.json()) as ({ ok: true } & CandidateDetail) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch detail')
   return { applicant: data.applicant, applications: data.applications }
@@ -370,7 +371,7 @@ export function fetchFxRates(): Promise<FxRates | null> {
     if (cached) {
       fxCache = Promise.resolve(cached)
     } else {
-      fxCache = fetch('/api/fx')
+      fxCache = apiFetch('/api/fx')
         .then(async (res) => {
           const data = (await res.json()) as
             | ({ ok: true } & FxRates)
@@ -466,7 +467,7 @@ export async function updateAnswerValue(
   questionId: number,
   value: string | null
 ): Promise<void> {
-  const res = await fetch(`/api/applications/${applicationId}/answers/${questionId}`, {
+  const res = await apiFetch(`/api/applications/${applicationId}/answers/${questionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
@@ -480,7 +481,7 @@ export async function updateApplicationStatus(
   status: string,
   createdBy?: string
 ): Promise<void> {
-  const res = await fetch(`/api/applications/${applicationId}/status`, {
+  const res = await apiFetch(`/api/applications/${applicationId}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status, created_by: createdBy }),
@@ -496,7 +497,7 @@ export async function updateApplicationsStageBulk(
   status: string,
   createdBy?: string
 ): Promise<void> {
-  const res = await fetch('/api/applications/status/bulk', {
+  const res = await apiFetch('/api/applications/status/bulk', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ application_ids: applicationIds, status, created_by: createdBy }),
@@ -510,7 +511,7 @@ export async function updateApplicantsFitStatus(
   fit_status: string | null,
   createdBy?: string
 ): Promise<void> {
-  const res = await fetch('/api/applicants/fit-status', {
+  const res = await apiFetch('/api/applicants/fit-status', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids, fit_status, created_by: createdBy }),
@@ -526,7 +527,7 @@ export type DailyProgress = {
 }
 
 export async function fetchDailyProgress(username: string): Promise<DailyProgress> {
-  const res = await fetch(`/api/settings/daily?username=${encodeURIComponent(username)}`)
+  const res = await apiFetch(`/api/settings/daily?username=${encodeURIComponent(username)}`)
   const data = (await res.json()) as ({ ok: true } & DailyProgress) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to load progress')
   return { target: data.target, today_count: data.today_count, date: data.date }
@@ -545,7 +546,7 @@ export async function fetchDailyHistory(username: string, days = 30): Promise<Da
 }
 
 export async function saveDailyTarget(username: string, target: number): Promise<DailyProgress> {
-  const res = await fetch('/api/settings/daily', {
+  const res = await apiFetch('/api/settings/daily', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, daily_cv_target: target }),
@@ -577,7 +578,7 @@ export type CandidateEvent = {
 }
 
 export async function fetchCandidateEvents(applicantId: number): Promise<CandidateEvent[]> {
-  const res = await fetch(`/api/candidates/${applicantId}/events`)
+  const res = await apiFetch(`/api/candidates/${applicantId}/events`)
   const data = (await res.json()) as { ok: true; events: CandidateEvent[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to load history')
   return data.events
@@ -602,14 +603,14 @@ export type CandidateNote = {
 export async function uploadNoteImage(applicantId: number, file: File): Promise<string> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`/api/candidates/${applicantId}/note-images`, { method: 'POST', body: form })
+  const res = await apiFetch(`/api/candidates/${applicantId}/note-images`, { method: 'POST', body: form })
   const data = (await res.json()) as { ok: true; url: string } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to upload image')
   return data.url
 }
 
 export async function fetchNotes(applicantId: number): Promise<CandidateNote[]> {
-  const res = await fetch(`/api/candidates/${applicantId}/notes`)
+  const res = await apiFetch(`/api/candidates/${applicantId}/notes`)
   const data = (await res.json()) as { ok: true; notes: CandidateNote[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch notes')
   return data.notes
@@ -622,7 +623,7 @@ export async function addNote(
   createdByName: string,
   images: string[] = []
 ): Promise<CandidateNote> {
-  const res = await fetch(`/api/candidates/${applicantId}/notes`, {
+  const res = await apiFetch(`/api/candidates/${applicantId}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName, images }),
@@ -633,7 +634,7 @@ export async function addNote(
 }
 
 export async function updateNote(noteId: number, content: string): Promise<CandidateNote> {
-  const res = await fetch(`/api/notes/${noteId}`, {
+  const res = await apiFetch(`/api/notes/${noteId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -645,7 +646,7 @@ export async function updateNote(noteId: number, content: string): Promise<Candi
 
 export async function deleteNote(noteId: number, actor?: string): Promise<void> {
   const qs = actor ? `?actor=${encodeURIComponent(actor)}` : ''
-  const res = await fetch(`/api/notes/${noteId}${qs}`, { method: 'DELETE' })
+  const res = await apiFetch(`/api/notes/${noteId}${qs}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
 }
@@ -658,7 +659,7 @@ export async function generateInterviewNotes(
   createdBy: string,
   createdByName: string
 ): Promise<CandidateNote> {
-  const res = await fetch(`/api/candidates/${applicantId}/interview-notes`, {
+  const res = await apiFetch(`/api/candidates/${applicantId}/interview-notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ created_by: createdBy, created_by_name: createdByName }),
@@ -679,7 +680,7 @@ export type OutreachEmail = {
 // Generate a short outreach email for a candidate. The result is returned for
 // the UI to display, copy, or open in a mail client — it is not saved.
 export async function generateOutreachEmail(applicantId: number, senderName: string): Promise<OutreachEmail> {
-  const res = await fetch(`/api/candidates/${applicantId}/outreach-email`, {
+  const res = await apiFetch(`/api/candidates/${applicantId}/outreach-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sender_name: senderName }),
@@ -694,7 +695,7 @@ export async function generateOutreachEmail(applicantId: number, senderName: str
 export type InterviewPrompt = { prompt: string; is_custom: boolean }
 
 export async function fetchInterviewPrompt(): Promise<InterviewPrompt> {
-  const res = await fetch('/api/settings/interview-prompt')
+  const res = await apiFetch('/api/settings/interview-prompt')
   const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch interview prompt')
   return { prompt: data.prompt, is_custom: data.is_custom }
@@ -702,7 +703,7 @@ export async function fetchInterviewPrompt(): Promise<InterviewPrompt> {
 
 // Save a custom prompt, or pass an empty string to revert to the built-in default.
 export async function saveInterviewPrompt(prompt: string): Promise<InterviewPrompt> {
-  const res = await fetch('/api/settings/interview-prompt', {
+  const res = await apiFetch('/api/settings/interview-prompt', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
@@ -715,7 +716,7 @@ export async function saveInterviewPrompt(prompt: string): Promise<InterviewProm
 // ── Outreach-email prompt (global template) ─────────────────────────────────
 
 export async function fetchOutreachPrompt(): Promise<InterviewPrompt> {
-  const res = await fetch('/api/settings/outreach-prompt')
+  const res = await apiFetch('/api/settings/outreach-prompt')
   const data = (await res.json()) as ({ ok: true } & InterviewPrompt) | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch outreach prompt')
   return { prompt: data.prompt, is_custom: data.is_custom }
@@ -723,7 +724,7 @@ export async function fetchOutreachPrompt(): Promise<InterviewPrompt> {
 
 // Save a custom prompt, or pass an empty string to revert to the built-in default.
 export async function saveOutreachPrompt(prompt: string): Promise<InterviewPrompt> {
-  const res = await fetch('/api/settings/outreach-prompt', {
+  const res = await apiFetch('/api/settings/outreach-prompt', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
@@ -778,14 +779,14 @@ function rowToSavedFilter(row: SavedFilterRow): SavedFilter {
 }
 
 export async function fetchSavedFilters(): Promise<SavedFilter[]> {
-  const res = await fetch('/api/saved-filters')
+  const res = await apiFetch('/api/saved-filters')
   const data = (await res.json()) as { ok: true; filters: SavedFilterRow[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch saved filters')
   return data.filters.map(rowToSavedFilter)
 }
 
 export async function createSavedFilter(name: string, filters: ActiveFilters, createdBy: string): Promise<SavedFilter> {
-  const res = await fetch('/api/saved-filters', {
+  const res = await apiFetch('/api/saved-filters', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, filters_json: JSON.stringify(filters), created_by: createdBy }),
@@ -802,7 +803,7 @@ export async function updateSavedFilter(
   const body: { name?: string; filters_json?: string } = {}
   if (patch.name !== undefined) body.name = patch.name
   if (patch.filters !== undefined) body.filters_json = JSON.stringify(patch.filters)
-  const res = await fetch(`/api/saved-filters/${id}`, {
+  const res = await apiFetch(`/api/saved-filters/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -813,7 +814,7 @@ export async function updateSavedFilter(
 }
 
 export async function deleteSavedFilter(id: number): Promise<void> {
-  const res = await fetch(`/api/saved-filters/${id}`, { method: 'DELETE' })
+  const res = await apiFetch(`/api/saved-filters/${id}`, { method: 'DELETE' })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete filter')
 }
@@ -850,14 +851,14 @@ export type PositionWithPrompt = {
 }
 
 export async function fetchScoringPrompts(): Promise<PositionWithPrompt[]> {
-  const res = await fetch('/api/admin/scoring-prompts')
+  const res = await apiFetch('/api/admin/scoring-prompts')
   const data = (await res.json()) as { ok: true; positions: PositionWithPrompt[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch scoring prompts')
   return data.positions
 }
 
 export async function saveScoringPrompt(positionId: number, prompt: string): Promise<void> {
-  const res = await fetch(`/api/admin/scoring-prompts/${positionId}`, {
+  const res = await apiFetch(`/api/admin/scoring-prompts/${positionId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
@@ -867,7 +868,7 @@ export async function saveScoringPrompt(positionId: number, prompt: string): Pro
 }
 
 export async function syncScores(opts: { limit?: number; dryRun?: boolean } = {}): Promise<{ pending?: number; processed?: number; failed?: number; remaining?: number }> {
-  const res = await fetch('/api/admin/sync-scores', {
+  const res = await apiFetch('/api/admin/sync-scores', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts),
@@ -886,33 +887,33 @@ export type CvSyncResult = {
 }
 
 export async function fetchPendingCvIds(): Promise<number[]> {
-  const res = await fetch('/api/admin/pending-cvs')
+  const res = await apiFetch('/api/admin/pending-cvs')
   const data = (await res.json()) as { ok: true; ids: number[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'fetch failed')
   return data.ids
 }
 
 export async function parseSingleCv(id: number): Promise<void> {
-  const res = await fetch(`/api/admin/parse-cv/${id}`, { method: 'POST' })
+  const res = await apiFetch(`/api/admin/parse-cv/${id}`, { method: 'POST' })
   const data = (await res.json()) as { ok: true } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'parse failed')
 }
 
 export async function fetchPendingScoreIds(): Promise<number[]> {
-  const res = await fetch('/api/admin/pending-scores')
+  const res = await apiFetch('/api/admin/pending-scores')
   const data = (await res.json()) as { ok: true; ids: number[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'fetch failed')
   return data.ids
 }
 
 export async function scoreOneApplication(id: number): Promise<void> {
-  const res = await fetch(`/api/admin/score-application/${id}`, { method: 'POST' })
+  const res = await apiFetch(`/api/admin/score-application/${id}`, { method: 'POST' })
   const data = (await res.json()) as { ok: true } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'score failed')
 }
 
 export async function syncCv(opts: { limit?: number; dryRun?: boolean } = {}): Promise<CvSyncResult> {
-  const res = await fetch('/api/admin/sync-cv', {
+  const res = await apiFetch('/api/admin/sync-cv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts),
@@ -948,7 +949,7 @@ export async function startSyncJob(
   batchSize: number,
   positionId: number | null = null,
 ): Promise<SyncJobState> {
-  const res = await fetch(`/api/admin/sync/${kind}/start`, {
+  const res = await apiFetch(`/api/admin/sync/${kind}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ batchSize, positionId }),
@@ -959,28 +960,28 @@ export async function startSyncJob(
 }
 
 export async function fetchSyncStatus(kind: SyncJobKind): Promise<SyncJobState> {
-  const res = await fetch(`/api/admin/sync/${kind}/status`)
+  const res = await apiFetch(`/api/admin/sync/${kind}/status`)
   const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch status')
   return data.state
 }
 
 export async function stopSyncJob(kind: SyncJobKind): Promise<SyncJobState> {
-  const res = await fetch(`/api/admin/sync/${kind}/stop`, { method: 'POST' })
+  const res = await apiFetch(`/api/admin/sync/${kind}/stop`, { method: 'POST' })
   const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to stop sync')
   return data.state
 }
 
 export async function resetSyncJob(kind: SyncJobKind): Promise<SyncJobState> {
-  const res = await fetch(`/api/admin/sync/${kind}/reset`, { method: 'POST' })
+  const res = await apiFetch(`/api/admin/sync/${kind}/reset`, { method: 'POST' })
   const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to reset sync')
   return data.state
 }
 
 export async function clearData(scope: 'cv_data' | 'scores' | 'all_candidates'): Promise<{ deleted?: number; updated?: number }> {
-  const res = await fetch('/api/admin/data', {
+  const res = await apiFetch('/api/admin/data', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ scope }),

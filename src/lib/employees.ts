@@ -1,3 +1,4 @@
+import { apiFetch } from './api'
 // Client API for employees (people whose leave we track, distinct from app users).
 
 export type Employee = {
@@ -11,7 +12,7 @@ export type Employee = {
 }
 
 export async function fetchEmployees(): Promise<Employee[]> {
-  const res = await fetch('/api/employees')
+  const res = await apiFetch('/api/employees')
   const data = (await res.json()) as { ok: true; employees: Employee[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch employees')
   return data.employees
@@ -23,7 +24,7 @@ export async function createEmployee(input: {
   department?: string
   annualQuota?: number
 }): Promise<Employee> {
-  const res = await fetch('/api/employees', {
+  const res = await apiFetch('/api/employees', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),

@@ -71,7 +71,7 @@ import {
   type AnswerFilter,
   type AnswerFilterOp,
 } from './lib/candidates'
-import { getUser, type User } from './lib/auth'
+import { getUser, can, type User } from './lib/auth'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -723,14 +723,19 @@ const VIEW_STORAGE_KEY = 'gk_candidate_view'
 const BOARD_LIMIT = 500
 
 export default function CandidatesPage({
+  user,
   openNote,
   onOpenNoteHandled,
 }: {
+  user: User
   // A pending request (from a notification click) to open a candidate scrolled
   // to a specific note. Consumed once, then cleared via onOpenNoteHandled.
   openNote?: { applicantId: number; noteId: number } | null
   onOpenNoteHandled?: () => void
-} = {}) {
+}) {
+  // Salary figures are only shown to users with the view_salary permission (the
+  // server also strips them, so this just hides the empty column).
+  const canSalary = can(user, 'view_salary')
   const [q, setQ] = useState('')
   const [searchOpen, setSearchOpen] = useState(false) // mobile: search field hidden until toggled
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -1636,7 +1641,7 @@ export default function CandidatesPage({
                 <SortHeader label="Country" sortKey="country" numeric={false} sort={sort} onSort={toggleSort} />
               )}
               {isBaseVisible('position') && <TableHead>Position</TableHead>}
-              {isBaseVisible('salary') && <TableHead>Salary Expectation</TableHead>}
+              {canSalary && isBaseVisible('salary') && <TableHead>Salary Expectation</TableHead>}
               {isBaseVisible('status') && <TableHead>Status</TableHead>}
               {isBaseVisible('score') && (
                 <SortHeader label="Score" sortKey="score" numeric sort={sort} onSort={toggleSort} className="w-20 text-center">
@@ -1740,7 +1745,7 @@ export default function CandidatesPage({
                         {cand.positions ?? '—'}
                       </TableCell>
                       )}
-                      {isBaseVisible('salary') && (
+                      {canSalary && isBaseVisible('salary') && (
                       <TableCell className="text-sm font-medium tabular-nums">
                         {formatSalary(cand.salary_expectation)}
                       </TableCell>

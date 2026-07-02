@@ -1,3 +1,4 @@
+import { apiFetch } from './api'
 // Client API for leave requests. Requests arrive via a Tally form / CSV export
 // and are stored raw; an admin maps each to an employee, then approves/rejects.
 
@@ -41,7 +42,7 @@ export type LeaveImportRow = {
 }
 
 export async function fetchLeaveRequests(): Promise<LeaveRequest[]> {
-  const res = await fetch('/api/leave')
+  const res = await apiFetch('/api/leave')
   const data = (await res.json()) as { ok: true; requests: LeaveRequest[] } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch leave requests')
   return data.requests
@@ -50,7 +51,7 @@ export async function fetchLeaveRequests(): Promise<LeaveRequest[]> {
 export async function importLeaveRequests(
   rows: LeaveImportRow[],
 ): Promise<{ inserted: number; skipped: number }> {
-  const res = await fetch('/api/leave/import', {
+  const res = await apiFetch('/api/leave/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rows }),
@@ -63,7 +64,7 @@ export async function importLeaveRequests(
 }
 
 export async function assignEmployee(id: number, employeeId: number | null): Promise<void> {
-  const res = await fetch(`/api/leave/${id}/assign-employee`, {
+  const res = await apiFetch(`/api/leave/${id}/assign-employee`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ employeeId }),
@@ -77,7 +78,7 @@ export async function updateLeaveDuration(
   workingDays: string | null,
   hours: string | null,
 ): Promise<void> {
-  const res = await fetch(`/api/leave/${id}/duration`, {
+  const res = await apiFetch(`/api/leave/${id}/duration`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workingDays, hours }),
@@ -115,7 +116,7 @@ export async function reviewLeaveRequest(
   reviewer: string,
   reviewerName: string,
 ): Promise<LeaveRequest> {
-  const res = await fetch(`/api/leave/${id}/review`, {
+  const res = await apiFetch(`/api/leave/${id}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ decision, reviewer, reviewerName }),

@@ -235,8 +235,11 @@ export async function listCandidates(
     sort?: string
     dir?: string
     sortNumeric?: boolean
+    canViewSalary?: boolean
   }
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
+  // Users without the view_salary permission never receive salary figures.
+  const canViewSalary = opts.canViewSalary !== false
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
@@ -341,7 +344,8 @@ export async function listCandidates(
            max(a.submitted_at)    AS latest_submitted_at,
            group_concat(DISTINCT p.title) AS positions,
            (SELECT count(*) FROM candidate_notes cn WHERE cn.applicant_id = ap.id) AS notes_count,
-           (SELECT aa.value
+           ${canViewSalary
+             ? `(SELECT aa.value
             FROM applications a_sal
             JOIN application_answers aa ON aa.application_id = a_sal.id
             JOIN position_questions pq ON pq.id = aa.question_id
@@ -351,7 +355,8 @@ export async function listCandidates(
                 OR lower(pq.label) LIKE '%maaş%'
                 OR lower(pq.label) LIKE '%maas%')
             ORDER BY a_sal.submitted_at DESC
-            LIMIT 1) AS salary_expectation,
+            LIMIT 1)`
+             : `NULL`} AS salary_expectation,
            (SELECT a_ls.status FROM applications a_ls
             WHERE a_ls.applicant_id = ap.id
             ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_status,
@@ -609,9 +614,14 @@ export async function setDailyTarget(
     .run()
 }
 
+// Matches an answer that reveals a candidate's salary expectation. Kept in sync
+// with the SQL heuristic in listCandidates and the client isSalary check.
+const SALARY_LABEL_RE = /salary|maaş|maas|ücret|ucret|wage|compensation/i
+
 export async function getCandidate(
   db: D1Database,
-  id: number
+  id: number,
+  canViewSalary = true
 ): Promise<CandidateDetail | null> {
   const applicant = await db
     .prepare(
@@ -650,17 +660,19 @@ export async function getCandidate(
     const placeholders = ids.map(() => '?').join(',')
     const ans = await db
       .prepare(
-        `SELECT aa.application_id, aa.question_id, q.label, q.type, q.sort_order, aa.value
+        `SELECT aa.application_id, aa.question_id, q.label, q.type, q.field_key, q.sort_order, aa.value
          FROM application_answers aa
          JOIN position_questions q ON q.id = aa.question_id
          WHERE aa.application_id IN (${placeholders})
          ORDER BY q.sort_order`
       )
       .bind(...ids)
-      .all<{ application_id: number; question_id: number; label: string; type: string; value: string | null }>()
+      .all<{ application_id: number; question_id: number; label: string; type: string; field_key: string | null; value: string | null }>()
 
     const byApp = new Map<number, CandidateAnswer[]>()
     for (const r of ans.results ?? []) {
+      // Hide salary answers from users without the view_salary permission.
+      if (!canViewSalary && SALARY_LABEL_RE.test(`${r.label ?? ''} ${r.field_key ?? ''}`)) continue
       const list = byApp.get(r.application_id) ?? []
       list.push({ question_id: r.question_id, label: r.label, type: r.type, value: r.value })
       byApp.set(r.application_id, list)

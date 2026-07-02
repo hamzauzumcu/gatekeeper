@@ -5,7 +5,15 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -16,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { User } from '@/lib/auth'
+import { can, type User } from '@/lib/auth'
 import { fetchEmployees, createEmployee, type Employee } from '@/lib/employees'
 import {
   fetchLeaveRequests,
@@ -32,19 +40,57 @@ import {
   type LeaveStatus,
 } from '@/lib/leave'
 
-const STATUS_VARIANT: Record<LeaveStatus, 'secondary' | 'default' | 'destructive'> = {
-  pending: 'secondary',
-  approved: 'default',
-  rejected: 'destructive',
+// Solid, friendly status colors: a deep green for approved, a sweet amber-orange
+// for pending, and a rich near-dark red for rejected. Same in light and dark.
+const STATUS_CLASS: Record<LeaveStatus, string> = {
+  pending: 'border-transparent bg-amber-500 text-white dark:bg-amber-500',
+  approved: 'border-transparent bg-emerald-600 text-white dark:bg-emerald-600',
+  rejected: 'border-transparent bg-red-700 text-white dark:bg-red-800',
 }
 
-const SELECT_CLASS =
-  'h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
+// Sentinel Select values (Radix items can't use an empty string).
+const UNMAPPED = '__unmapped__'
+const ADD_NEW = '__add__'
+const NONE = '0'
+
+// Duration is edited via day/hour dropdowns. Build the pick lists once: days in
+// 0.5 steps up to 20, hours in 0.5 steps up to 9 (a workday). "0" means none.
+function numOptions(max: number, step: number): string[] {
+  const out: string[] = []
+  for (let i = 0; i * step <= max + 1e-9; i++) {
+    out.push(fmtNum(Math.round(i * step * 100) / 100))
+  }
+  return out
+}
+const DAY_OPTIONS = numOptions(20, 0.5)
+const HOUR_OPTIONS = numOptions(9, 0.5)
+
+// A raw duration field ("2,5", "1 buçuk", "5 hours"…) as a clean option string
+// ("2.5", "1.5", "5"), or "0" when it holds no number.
+function toOption(raw: string | null): string {
+  const n = parseAmount(raw)
+  return n ? fmtNum(n) : NONE
+}
+
+// Ensure the current value is selectable even if it falls off the fixed grid.
+function withCurrent(base: string[], value: string): string[] {
+  if (value === NONE || base.includes(value)) return base
+  return [...base, value].sort((a, b) => parseFloat(a) - parseFloat(b))
+}
+
+// Show dates as DD.MM.YYYY (the format expected locally, e.g. 08.07.2026).
+// Falls back to the raw string if it isn't a plain YYYY-MM-DD value.
+function formatDate(raw: string): string {
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return raw
+  return `${m[3]}.${m[2]}.${m[1]}`
+}
 
 function formatDates(start: string | null, end: string | null): string {
   if (!start && !end) return '—'
-  if (start && end && start !== end) return `${start} → ${end}`
-  return start || end || '—'
+  if (start && end && start !== end) return `${formatDate(start)} → ${formatDate(end)}`
+  const one = start || end
+  return one ? formatDate(one) : '—'
 }
 
 // Render the two raw duration fields as clean "N d" / "N h" (hiding zeros). If
@@ -82,6 +128,9 @@ function fmtTotals(t: Totals): string {
 }
 
 export default function LeavePage({ user }: { user: User }) {
+  // Only leave managers can review requests and manage employees; everyone else
+  // sees the data read-only. The server enforces this too.
+  const canManage = can(user, 'manage_leave')
   const [requests, setRequests] = useState<LeaveRequest[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
@@ -167,7 +216,7 @@ export default function LeavePage({ user }: { user: User }) {
   }
 
   async function onAssign(req: LeaveRequest, value: string) {
-    if (value === '__add__') {
+    if (value === ADD_NEW) {
       const name = window.prompt('New employee name:', req.raw_name)?.trim()
       if (!name) return
       setBusyId(req.id)
@@ -184,7 +233,7 @@ export default function LeavePage({ user }: { user: User }) {
     }
     setBusyId(req.id)
     try {
-      await assignEmployee(req.id, value ? Number(value) : null)
+      await assignEmployee(req.id, value === UNMAPPED ? null : Number(value))
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to map employee')
@@ -195,14 +244,19 @@ export default function LeavePage({ user }: { user: User }) {
 
   function startEditDuration(r: LeaveRequest) {
     setEditDurId(r.id)
-    setEditDays(r.working_days ?? '')
-    setEditHours(r.hours_requested ?? '')
+    setEditDays(toOption(r.working_days))
+    setEditHours(toOption(r.hours_requested))
   }
 
   async function saveDuration(id: number) {
     setBusyId(id)
     try {
-      await updateLeaveDuration(id, editDays.trim() || null, editHours.trim() || null)
+      // "0" means the field is cleared; store the picked number otherwise.
+      await updateLeaveDuration(
+        id,
+        editDays === NONE ? null : editDays,
+        editHours === NONE ? null : editHours,
+      )
       setEditDurId(null)
       await load()
     } catch (e) {
@@ -262,7 +316,7 @@ export default function LeavePage({ user }: { user: User }) {
             </Badge>
           )}
         </TabsTrigger>
-        <TabsTrigger value="employees">Employees</TabsTrigger>
+        {canManage && <TabsTrigger value="employees">Employees</TabsTrigger>}
       </TabsList>
 
       {error && (
@@ -272,25 +326,27 @@ export default function LeavePage({ user }: { user: User }) {
       )}
 
       <TabsContent value="requests" className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            onChange={onImportFile}
-            className="hidden"
-          />
-          <Button variant="outline" disabled={importing} onClick={() => fileRef.current?.click()}>
-            <Upload className="h-4 w-4" />
-            {importing ? 'Importing…' : 'Import CSV'}
-          </Button>
-          {unmappedCount > 0 && (
-            <span className="text-sm text-muted-foreground">
-              {unmappedCount} request(s) not yet mapped to an employee
-            </span>
-          )}
-          {importMsg && <span className="text-sm text-muted-foreground">{importMsg}</span>}
-        </div>
+        {canManage && (
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={onImportFile}
+              className="hidden"
+            />
+            <Button variant="outline" disabled={importing} onClick={() => fileRef.current?.click()}>
+              <Upload className="h-4 w-4" />
+              {importing ? 'Importing…' : 'Import CSV'}
+            </Button>
+            {unmappedCount > 0 && (
+              <span className="text-sm text-muted-foreground">
+                {unmappedCount} request(s) not yet mapped to an employee
+              </span>
+            )}
+            {importMsg && <span className="text-sm text-muted-foreground">{importMsg}</span>}
+          </div>
+        )}
 
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
@@ -317,20 +373,28 @@ export default function LeavePage({ user }: { user: User }) {
                 {requests.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell>
-                      <select
-                        className={SELECT_CLASS}
-                        value={r.employee_id ?? ''}
-                        disabled={busyId === r.id}
-                        onChange={(e) => onAssign(r, e.target.value)}
-                      >
-                        <option value="">— Unmapped —</option>
-                        {employees.map((emp) => (
-                          <option key={emp.id} value={emp.id}>
-                            {emp.name}
-                          </option>
-                        ))}
-                        <option value="__add__">+ Add new…</option>
-                      </select>
+                      {canManage ? (
+                        <Select
+                          value={r.employee_id ? String(r.employee_id) : UNMAPPED}
+                          disabled={busyId === r.id}
+                          onValueChange={(value) => onAssign(r, value)}
+                        >
+                          <SelectTrigger size="sm" className="w-44">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={UNMAPPED}>— Unmapped —</SelectItem>
+                            {employees.map((emp) => (
+                              <SelectItem key={emp.id} value={String(emp.id)}>
+                                {emp.name}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value={ADD_NEW}>+ Add new…</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-sm">{r.employee_name ?? '— Unmapped —'}</span>
+                      )}
                       {(!r.employee_id ||
                         employeesById.get(r.employee_id)?.name !== r.raw_name) && (
                         <div className="mt-1 text-xs text-muted-foreground">form: {r.raw_name}</div>
@@ -342,19 +406,33 @@ export default function LeavePage({ user }: { user: User }) {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {editDurId === r.id ? (
-                        <div className="flex items-center gap-1">
-                          <Input
-                            value={editDays}
-                            onChange={(e) => setEditDays(e.target.value)}
-                            placeholder="days"
-                            className="h-8 w-16"
-                          />
-                          <Input
-                            value={editHours}
-                            onChange={(e) => setEditHours(e.target.value)}
-                            placeholder="hrs"
-                            className="h-8 w-16"
-                          />
+                        <div className="flex items-center gap-1.5">
+                          <Select value={editDays} onValueChange={setEditDays}>
+                            <SelectTrigger size="sm" className="w-[4.5rem]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {withCurrent(DAY_OPTIONS, editDays).map((v) => (
+                                <SelectItem key={v} value={v}>
+                                  {v}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <span className="text-xs text-muted-foreground">d</span>
+                          <Select value={editHours} onValueChange={setEditHours}>
+                            <SelectTrigger size="sm" className="w-[4.5rem]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {withCurrent(HOUR_OPTIONS, editHours).map((v) => (
+                                <SelectItem key={v} value={v}>
+                                  {v}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <span className="text-xs text-muted-foreground">h</span>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -373,7 +451,7 @@ export default function LeavePage({ user }: { user: User }) {
                             <X className="h-4 w-4" />
                           </Button>
                         </div>
-                      ) : (
+                      ) : canManage ? (
                         <button
                           type="button"
                           className="group inline-flex items-center gap-1"
@@ -383,10 +461,30 @@ export default function LeavePage({ user }: { user: User }) {
                           {formatDuration(r.working_days, r.hours_requested)}
                           <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                         </button>
+                      ) : (
+                        <span>{formatDuration(r.working_days, r.hours_requested)}</span>
                       )}
                     </TableCell>
-                    <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={r.reason ?? ''}>
-                      {r.reason || '—'}
+                    <TableCell className="max-w-[18rem] text-muted-foreground">
+                      {r.reason ? (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="block w-full truncate text-left hover:text-foreground hover:underline"
+                            >
+                              {r.reason}
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="start" className="max-h-80 w-80 overflow-y-auto">
+                            <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+                              {r.reason}
+                            </p>
+                          </PopoverContent>
+                        </Popover>
+                      ) : (
+                        '—'
+                      )}
                     </TableCell>
                     <TableCell>
                       {r.document_url ? (
@@ -403,7 +501,7 @@ export default function LeavePage({ user }: { user: User }) {
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_VARIANT[r.status]} className="capitalize">
+                      <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>
                         {r.status}
                       </Badge>
                       {r.status !== 'pending' && r.reviewer_name && (
@@ -411,7 +509,7 @@ export default function LeavePage({ user }: { user: User }) {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {r.status === 'pending' ? (
+                      {r.status === 'pending' && canManage ? (
                         <div className="flex justify-end gap-2">
                           <Button
                             size="sm"
@@ -449,19 +547,19 @@ export default function LeavePage({ user }: { user: User }) {
           <Label htmlFor="year" className="text-sm">
             Year
           </Label>
-          <select
-            id="year"
-            className={SELECT_CLASS}
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-          >
-            <option value="all">All years</option>
-            {years.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </select>
+          <Select value={year} onValueChange={setYear}>
+            <SelectTrigger id="year" size="sm" className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All years</SelectItem>
+              {years.map((y) => (
+                <SelectItem key={y} value={y}>
+                  {y}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {selectedEmp !== null
@@ -525,7 +623,7 @@ export default function LeavePage({ user }: { user: User }) {
                                   {formatDuration(r.working_days, r.hours_requested)}
                                 </TableCell>
                                 <TableCell>
-                                  <Badge variant={STATUS_VARIANT[r.status]} className="capitalize">
+                                  <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>
                                     {r.status}
                                   </Badge>
                                 </TableCell>

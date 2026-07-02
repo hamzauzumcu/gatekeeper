@@ -128,3 +128,18 @@ export function requireAdmin(c: Context): Response | null {
   if (!auth.isAdmin) return c.json({ ok: false, error: 'forbidden' }, 403)
   return null
 }
+
+// Middleware form of the guards, for gating whole route prefixes via app.use().
+export function permGate(perm: Permission): MiddlewareHandler {
+  return async (c, next) => {
+    const denied = requirePerm(c, perm)
+    if (denied) return denied
+    await next()
+  }
+}
+
+export const adminGate: MiddlewareHandler = async (c, next) => {
+  const denied = requireAdmin(c)
+  if (denied) return denied
+  await next()
+}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Papa from 'papaparse'
 import { CheckCircle2, AlertCircle, Upload } from 'lucide-react'
+import { apiFetch } from '@/lib/api'
 import {
   classify,
   guessPosition,
@@ -121,7 +122,7 @@ export default function ImportPage() {
           total: normalized.length,
           status: hasResume ? `${name} — uploading CV…` : `${name} — saving…`,
         })
-        const res = await fetch('/api/import', {
+        const res = await apiFetch('/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ position, questions, rows: chunk }),
