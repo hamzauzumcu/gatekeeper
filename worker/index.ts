@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
 import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicationsStageBulk, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
@@ -10,6 +11,16 @@ import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
 import { listUsers, verifyLogin } from './users'
+import { listEmployees, createEmployee } from './employees'
+import {
+  importLeaveRequests,
+  listLeaveRequests,
+  reviewLeaveRequest,
+  assignEmployee,
+  updateLeaveDuration,
+  type LeaveImportRow,
+} from './leave'
+import { handleLeaveTallyWebhook } from './leave-tally'
 import {
   createMentionNotifications,
   existingRecipients,
@@ -592,6 +603,119 @@ app.post('/api/notifications/read-all', async (c) => {
   return c.json({ ok: true, count })
 })
 
+// ── Employees (people whose leave we track) ────────────────────────────────
+
+// All active employees, alphabetical.
+app.get('/api/employees', async (c) => {
+  const employees = await listEmployees(c.env.DB)
+  return c.json({ ok: true, employees })
+})
+
+// Add an employee (idempotent on name).
+app.post('/api/employees', async (c) => {
+  const body: { name?: unknown; email?: unknown; department?: unknown; annualQuota?: unknown } =
+    await c.req.json().catch(() => ({}))
+  const name = typeof body.name === 'string' ? body.name : ''
+  if (!name.trim()) return c.json({ ok: false, error: 'name required' }, 400)
+  const result = await createEmployee(c.env.DB, {
+    name,
+    email: typeof body.email === 'string' ? body.email : null,
+    department: typeof body.department === 'string' ? body.department : null,
+    annualQuota: typeof body.annualQuota === 'number' ? body.annualQuota : null,
+  })
+  if (!result.ok) return c.json({ ok: false, error: result.error }, 400)
+  return c.json({ ok: true, employee: result.employee })
+})
+
+// ── Leave requests (time-off management) ───────────────────────────────────
+
+// All leave requests, newest first (small team → no pagination for now).
+app.get('/api/leave', async (c) => {
+  const requests = await listLeaveRequests(c.env.DB)
+  return c.json({ ok: true, requests })
+})
+
+// Bulk import from a CSV export (rows normalized client-side). Deduped on the
+// Tally submission id and auto-mapped to employees by name.
+app.post('/api/leave/import', async (c) => {
+  const body: { rows?: unknown } = await c.req.json().catch(() => ({}))
+  if (!Array.isArray(body.rows)) return c.json({ ok: false, error: 'rows array required' }, 400)
+  const rows = (body.rows as unknown[])
+    .filter((r): r is Record<string, unknown> => r != null && typeof r === 'object')
+    .map((r) => {
+      const s = (k: string) => (typeof r[k] === 'string' ? (r[k] as string) : null)
+      return {
+        submissionId: s('submissionId'),
+        respondentId: s('respondentId'),
+        name: s('name') ?? '',
+        leaveType: s('leaveType'),
+        startDate: s('startDate'),
+        endDate: s('endDate'),
+        hoursRequested: s('hoursRequested'),
+        workingDays: s('workingDays'),
+        reason: s('reason'),
+        documentUrl: s('documentUrl'),
+        submittedAt: s('submittedAt'),
+      } satisfies LeaveImportRow
+    })
+    .filter((r) => r.name.trim())
+  const summary = await importLeaveRequests(c.env.DB, rows)
+  return c.json({ ok: true, summary })
+})
+
+// Map (or re-map) a request to an employee. Body: { employeeId: number | null }.
+app.post('/api/leave/:id/assign-employee', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { employeeId?: unknown } = await c.req.json().catch(() => ({}))
+  const employeeId =
+    body.employeeId === null || body.employeeId === undefined ? null : Number(body.employeeId)
+  if (employeeId !== null && (!Number.isInteger(employeeId) || employeeId <= 0)) {
+    return c.json({ ok: false, error: 'invalid employeeId' }, 400)
+  }
+  const result = await assignEmployee(c.env.DB, id, employeeId)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
+})
+
+// Manually correct a request's raw duration (working_days / hours). For fixing
+// messy legacy rows; new Tally submissions arrive clean.
+app.post('/api/leave/:id/duration', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { workingDays?: unknown; hours?: unknown } = await c.req.json().catch(() => ({}))
+  const workingDays = typeof body.workingDays === 'string' ? body.workingDays : null
+  const hours = typeof body.hours === 'string' ? body.hours : null
+  const result = await updateLeaveDuration(c.env.DB, id, workingDays, hours)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
+})
+
+// Approve or reject a pending request. Reviewer identity (an app user) comes from
+// the body, consistent with the notes/notifications endpoints.
+app.post('/api/leave/:id/review', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { decision?: unknown; reviewer?: unknown; reviewerName?: unknown } = await c.req
+    .json()
+    .catch(() => ({}))
+  const decision = body.decision === 'approved' || body.decision === 'rejected' ? body.decision : null
+  const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : ''
+  const reviewerName = typeof body.reviewerName === 'string' ? body.reviewerName.trim() : ''
+  if (!decision) return c.json({ ok: false, error: 'invalid decision' }, 400)
+  if (!reviewer || !reviewerName) return c.json({ ok: false, error: 'reviewer required' }, 400)
+
+  const result = await reviewLeaveRequest(c.env.DB, id, decision, reviewer, reviewerName)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true, request: result.request })
+})
+
 // ── Saved filters (shared, team-wide presets) ──────────────────────────────
 
 // List all saved filters, most recently updated first.
@@ -897,6 +1021,15 @@ app.post('/api/webhook/tally', async (c) => {
     c.env.RESUMES,
     c.env.R2_PUBLIC_URL,
   )
+  return c.json(result.body, result.status as 200 | 400 | 401 | 500)
+})
+
+// Tally webhook for the leave-request form — SEPARATE from the applicant webhook
+// above. Point the Tally leave form's webhook at this URL.
+app.post('/api/webhook/tally/leave', async (c) => {
+  const rawBody = await c.req.text()
+  const sig = c.req.header('tally-signature') ?? null
+  const result = await handleLeaveTallyWebhook(rawBody, sig, c.env.TALLY_WEBHOOK_SECRET, c.env.DB)
   return c.json(result.body, result.status as 200 | 400 | 401 | 500)
 })
 

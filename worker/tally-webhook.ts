@@ -25,7 +25,7 @@ type TallyFieldType =
 type TallyFileValue = { url: string; name?: string; mimeType?: string; size?: number }
 type TallyOption = { id: string; text: string }
 
-type TallyField = {
+export type TallyField = {
   key: string
   label: string | null
   type: TallyFieldType
@@ -33,7 +33,7 @@ type TallyField = {
   options?: TallyOption[]
 }
 
-type TallyWebhookPayload = {
+export type TallyWebhookPayload = {
   eventId?: string
   eventType: string
   createdAt?: string
@@ -78,7 +78,7 @@ export async function verifyTallySignature(
 
 // ── Field value → string ───────────────────────────────────────────────────
 
-function extractValue(field: TallyField): string | null {
+export function extractValue(field: TallyField): string | null {
   const v = field.value
   if (v === null || v === undefined || v === '') return null
   if (typeof v === 'string') return v.trim() || null
