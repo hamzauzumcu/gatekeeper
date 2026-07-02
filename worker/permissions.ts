@@ -82,7 +82,10 @@ export async function resolveSession(db: D1Database, token: string): Promise<Aut
   if (!token) return null
   const row = await db
     .prepare(
-      `SELECT ${SELECT_AUTH_COLUMNS}
+      // Columns qualified with the `u.` alias — `username` also exists on
+      // user_sessions, so an unqualified list is ambiguous under the join.
+      `SELECT u.id, u.username, u.full_name, u.color, u.is_admin,
+              u.perm_view_applications, u.perm_view_salary, u.perm_manage_leave, u.perm_recruiting_admin
          FROM users u
          JOIN user_sessions s ON s.username = u.username
         WHERE s.token = ? AND u.is_active = 1`,

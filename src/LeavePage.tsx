@@ -43,9 +43,9 @@ import {
 // Solid, friendly status colors: a deep green for approved, a sweet amber-orange
 // for pending, and a rich near-dark red for rejected. Same in light and dark.
 const STATUS_CLASS: Record<LeaveStatus, string> = {
-  pending: 'border-transparent bg-amber-500 text-white dark:bg-amber-500',
-  approved: 'border-transparent bg-emerald-600 text-white dark:bg-emerald-600',
-  rejected: 'border-transparent bg-red-700 text-white dark:bg-red-800',
+  pending: 'border-transparent bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
+  approved: 'border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
+  rejected: 'border-transparent bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
 }
 
 // Sentinel Select values (Radix items can't use an empty string).
