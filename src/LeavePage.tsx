@@ -40,8 +40,8 @@ import {
   type LeaveStatus,
 } from '@/lib/leave'
 
-// Solid, friendly status colors: a deep green for approved, a sweet amber-orange
-// for pending, and a rich near-dark red for rejected. Same in light and dark.
+// Soft, tinted status colors: light background + colored text for each status
+// (green / amber / red), with a subtle translucent variant in dark mode.
 const STATUS_CLASS: Record<LeaveStatus, string> = {
   pending: 'border-transparent bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
   approved: 'border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
