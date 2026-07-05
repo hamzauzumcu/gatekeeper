@@ -103,18 +103,30 @@ Evaluate the candidate's CV, cover letter, and application form answers. Score t
 Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
 }
 
-function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSaved: (pos: PositionWithPrompt) => void }) {
+function PromptCard({
+  position,
+  onSaved,
+  onResync,
+  resyncDisabled,
+}: {
+  position: PositionWithPrompt
+  onSaved: (pos: PositionWithPrompt) => void
+  // Starts a re-score sync job scoped to this position (wired to the scores sync panel).
+  onResync: (positionId: number) => void
+  resyncDisabled: boolean
+}) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState(position.prompt ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [resyncStarted, setResyncStarted] = useState(false)
 
   const defaultPrompt = getDefaultPrompt(position.title)
   const isDirty = text !== (position.prompt ?? '')
   const isEmpty = !text.trim()
 
-  async function handleSave() {
+  async function handleSave(resync = false) {
     if (isEmpty) return
     setSaving(true)
     setError(null)
@@ -123,6 +135,11 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
       onSaved({ ...position, prompt: text.trim(), updated_at: new Date().toISOString() })
+      if (resync) {
+        onResync(position.id)
+        setResyncStarted(true)
+        setTimeout(() => setResyncStarted(false), 8000)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
@@ -182,10 +199,22 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              onClick={handleSave}
+              onClick={() => handleSave(false)}
               disabled={saving || isEmpty || !isDirty}
             >
               {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Prompt'}
+            </Button>
+            {/* Save (bumping the prompt timestamp invalidates every score for this
+                position) and immediately kick a re-score job scoped to it. Enabled even
+                when the text is unchanged, so it doubles as "re-score this position". */}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleSave(true)}
+              disabled={saving || isEmpty || resyncDisabled}
+              title={resyncDisabled ? 'A score sync is already running' : undefined}
+            >
+              Save &amp; Re-score All
             </Button>
             {!text.trim() && (
               <Button variant="outline" size="sm" onClick={loadDefault}>
@@ -205,6 +234,11 @@ function PromptCard({ position, onSaved }: { position: PositionWithPrompt; onSav
               {text.length} chars
             </span>
           </div>
+          {resyncStarted && (
+            <p className="text-xs text-emerald-600 font-medium">
+              Re-scoring started — track progress in the "Sync AI Scores" panel below.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -235,6 +269,8 @@ interface SyncPanelProps {
   positionOptions?: { id: number; title: string }[]
   selectedPositionId?: number | null
   onPositionChange?: (id: number | null) => void
+  // Optional force start (scores only): re-process every item in scope, not just pending.
+  onForceStart?: () => void
 }
 
 function SyncPanel({
@@ -256,8 +292,10 @@ function SyncPanel({
   positionOptions,
   selectedPositionId,
   onPositionChange,
+  onForceStart,
 }: SyncPanelProps) {
   const [errorsOpen, setErrorsOpen] = useState(false)
+  const [forceConfirming, setForceConfirming] = useState(false)
   const running = phase === 'fetching' || phase === 'running'
   const done = phase === 'done'
   const pct = total > 0 ? Math.round(((processed + failed) / total) * 100) : 0
@@ -309,14 +347,36 @@ function SyncPanel({
             </Button>
           </>
         ) : (
-          <Button size="sm" onClick={onStart} disabled={disabled}>
-            Start Sync
-          </Button>
+          <>
+            <Button size="sm" onClick={onStart} disabled={disabled}>
+              Start Sync
+            </Button>
+            {onForceStart && !forceConfirming && (
+              <Button size="sm" variant="outline" onClick={() => setForceConfirming(true)} disabled={disabled}>
+                Re-score All
+              </Button>
+            )}
+          </>
         )}
         {!running && disabled && disabledHint && (
           <span className="text-xs text-muted-foreground">{disabledHint}</span>
         )}
       </div>
+
+      {/* Force re-run confirmation — re-processes every item in scope, not just pending. */}
+      {!running && onForceStart && forceConfirming && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2">
+          <span className="text-xs text-muted-foreground">
+            Re-run AI scoring for every application in the selected scope, including ones already up to date?
+          </span>
+          <Button size="sm" variant="destructive" onClick={() => { setForceConfirming(false); onForceStart() }}>
+            Yes, re-score all
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setForceConfirming(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
 
       {/* Progress */}
       {phase !== 'idle' && (
@@ -461,11 +521,11 @@ function useSyncJob(kind: SyncJobKind) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind])
 
-  async function start(batchSize: number, positionId: number | null = null) {
+  async function start(batchSize: number, positionId: number | null = null, force = false) {
     setError(null)
     setStarting(true)
     try {
-      const s = await startSyncJob(kind, batchSize, positionId)
+      const s = await startSyncJob(kind, batchSize, positionId, force)
       setState(s)
       if (!isTerminal(s.status)) startPolling()
     } catch (e) {
@@ -815,6 +875,16 @@ export default function SettingsPage() {
   const promptedPositions = positions.filter((p) => p.prompt)
   const promptedCount = promptedPositions.length
 
+  const scoresPhase = toPhase(scores.state, scores.starting)
+  const scoresRunning = scoresPhase === 'fetching' || scoresPhase === 'running'
+
+  // "Save & Re-score All" on a prompt card: the save already invalidated that position's
+  // scores, so a normal (non-force) job scoped to the position re-scores all of its CVs.
+  function handlePromptResync(positionId: number) {
+    setScoresPositionId(positionId)
+    scores.start(scoresBatchSize, positionId)
+  }
+
   // ── Danger Zone state ──────────────────────────────────────────────────
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [deleteRunning, setDeleteRunning] = useState(false)
@@ -871,7 +941,13 @@ export default function SettingsPage() {
               </div>
               <div className="space-y-4">
                 {positions.map((pos) => (
-                  <PromptCard key={pos.id} position={pos} onSaved={updatePosition} />
+                  <PromptCard
+                    key={pos.id}
+                    position={pos}
+                    onSaved={updatePosition}
+                    onResync={handlePromptResync}
+                    resyncDisabled={scoresRunning}
+                  />
                 ))}
               </div>
             </>
@@ -893,7 +969,8 @@ export default function SettingsPage() {
             Run AI scoring for applications that have a configured prompt but haven't been scored yet.
             Saving a new prompt resets all scores for that position so they are re-evaluated. Pick a
             position to re-score only that one — e.g. after editing a single prompt — or leave it on
-            "All positions".
+            "All positions". "Re-score All" forces a full re-sync: every application in the selected
+            scope is re-scored, even if its score is already up to date.
           </p>
         </CardHeader>
         <CardContent>
@@ -908,6 +985,7 @@ export default function SettingsPage() {
             batchSize={scoresBatchSize}
             onBatchSizeChange={setScoresBatchSize}
             onStart={() => scores.start(scoresBatchSize, scoresPositionId)}
+            onForceStart={() => scores.start(scoresBatchSize, scoresPositionId, true)}
             onStop={scores.stop}
             onReset={scores.reset}
             disabled={promptedCount === 0}

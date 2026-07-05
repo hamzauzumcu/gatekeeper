@@ -948,11 +948,13 @@ export async function startSyncJob(
   kind: SyncJobKind,
   batchSize: number,
   positionId: number | null = null,
+  // force (scores only): re-queue every application in scope, not just stale ones.
+  force = false,
 ): Promise<SyncJobState> {
   const res = await apiFetch(`/api/admin/sync/${kind}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ batchSize, positionId }),
+    body: JSON.stringify({ batchSize, positionId, force }),
   })
   const data = (await res.json()) as { ok: true; state: SyncJobState } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to start sync')
