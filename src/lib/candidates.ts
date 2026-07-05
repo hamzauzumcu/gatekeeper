@@ -906,6 +906,24 @@ export async function fetchPendingScoreIds(): Promise<number[]> {
   return data.ids
 }
 
+export type ScoreHistoryEntry = {
+  id: number
+  score: number
+  reasoning: string | null
+  score_version: number
+  prompt_updated_at: string | null
+  scored_at: string
+  // Prompt version the score was produced with; null for entries predating prompt snapshots.
+  prompt: string | null
+}
+
+export async function fetchScoreHistory(applicationId: number): Promise<ScoreHistoryEntry[]> {
+  const res = await apiFetch(`/api/applications/${applicationId}/score-history`)
+  const data = (await res.json()) as { ok: true; history: ScoreHistoryEntry[] } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch score history')
+  return data.history
+}
+
 export async function scoreOneApplication(id: number): Promise<void> {
   const res = await apiFetch(`/api/admin/score-application/${id}`, { method: 'POST' })
   const data = (await res.json()) as { ok: true } | { ok: false; error: string }

@@ -75,6 +75,16 @@ export async function upsertScoringPrompt(
     )
     .bind(positionId, prompt)
     .run()
+  // Snapshot the saved version so score-history entries can show the prompt they were
+  // scored with. saved_at is copied from the row just written, so it matches the
+  // prompt_updated_at stamped onto scores exactly.
+  await db
+    .prepare(
+      `INSERT INTO scoring_prompt_history (position_id, prompt, saved_at)
+       SELECT position_id, prompt, updated_at FROM scoring_prompts WHERE position_id = ?`
+    )
+    .bind(positionId)
+    .run()
 }
 
 export async function scoreApplication(
@@ -222,13 +232,22 @@ export async function scoreApplication(
     reasoning = reasoning ? `${reasoning} [${note}]` : note
   }
 
-  await db
-    .prepare(
-      `UPDATE applications
-       SET ai_score = ?, ai_score_reasoning = ?, ai_score_version = ?,
-           ai_scored_prompt_at = ?, ai_scored_at = datetime('now')
-       WHERE id = ?`
-    )
-    .bind(score, reasoning, SCORE_VERSION, row.prompt_updated_at, applicationId)
-    .run()
+  // Write the current score and append it to the history log in one atomic batch,
+  // so the log can't drift from what the application row shows.
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE applications
+         SET ai_score = ?, ai_score_reasoning = ?, ai_score_version = ?,
+             ai_scored_prompt_at = ?, ai_scored_at = datetime('now')
+         WHERE id = ?`
+      )
+      .bind(score, reasoning, SCORE_VERSION, row.prompt_updated_at, applicationId),
+    db
+      .prepare(
+        `INSERT INTO ai_score_history (application_id, score, reasoning, score_version, prompt_updated_at, scored_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))`
+      )
+      .bind(applicationId, score, reasoning, SCORE_VERSION, row.prompt_updated_at),
+  ])
 }

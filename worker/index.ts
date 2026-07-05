@@ -604,6 +604,30 @@ app.delete('/api/notes/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// AI score history for one application — every past scoring run, newest first,
+// each joined to the prompt version it was scored with (NULL prompt for entries
+// predating prompt snapshots).
+app.get('/api/applications/:id/score-history', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT h.id, h.score, h.reasoning, h.score_version, h.prompt_updated_at, h.scored_at,
+              ph.prompt
+       FROM ai_score_history h
+       JOIN applications a ON a.id = h.application_id
+       LEFT JOIN scoring_prompt_history ph
+         ON ph.position_id = a.position_id AND ph.saved_at = h.prompt_updated_at
+       WHERE h.application_id = ?
+       GROUP BY h.id
+       ORDER BY h.scored_at DESC, h.id DESC`
+    )
+    .bind(id)
+    .all()
+  return c.json({ ok: true, history: results })
+})
+
 // Candidate timeline / history — status changes and note add/delete events.
 app.get('/api/candidates/:id/events', async (c) => {
   const id = Number(c.req.param('id'))
@@ -1063,6 +1087,8 @@ app.delete('/api/admin/data', async (c) => {
   }
 
   if (body.scope === 'scores') {
+    // Danger Zone wipes scoring data entirely, including the history log.
+    await c.env.DB.prepare(`DELETE FROM ai_score_history`).run()
     const result = await c.env.DB.prepare(
       `UPDATE applications SET ai_score = NULL, ai_score_reasoning = NULL, ai_score_version = 0,
         ai_scored_prompt_at = NULL, ai_scored_at = NULL`

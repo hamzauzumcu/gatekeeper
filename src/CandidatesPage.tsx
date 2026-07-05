@@ -49,6 +49,8 @@ import {
   fitStatusLabel,
   fetchCandidateEvents,
   type CandidateEvent,
+  fetchScoreHistory,
+  type ScoreHistoryEntry,
   updateApplicationsStageBulk,
   type PipelineStage,
   FIT_STATUS_OPTIONS,
@@ -131,6 +133,85 @@ function ScoreBadge({ score }: { score: number | null | undefined }) {
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls}`}>
       {score}
     </span>
+  )
+}
+
+// Lazy-loaded log of past AI scoring runs for one application. Collapsed by
+// default; fetched on first open. Each entry shows the score, when it was
+// produced, its reasoning, and (expandable) the prompt version it was scored
+// against — so after a prompt change you can compare old vs new scores.
+function ScoreHistorySection({ applicationId }: { applicationId: number }) {
+  const [open, setOpen] = useState(false)
+  const [entries, setEntries] = useState<ScoreHistoryEntry[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [promptOpenId, setPromptOpenId] = useState<number | null>(null)
+
+  async function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && entries === null) {
+      try {
+        setEntries(await fetchScoreHistory(applicationId))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load history')
+      }
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <History className="size-3" />
+        Score history
+        <ChevronDown className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          {!error && entries === null && <p className="text-xs text-muted-foreground">Loading…</p>}
+          {entries !== null && entries.length === 0 && (
+            <p className="text-xs text-muted-foreground">No score history recorded yet.</p>
+          )}
+          {entries?.map((e, i) => (
+            <div key={e.id} className="rounded-lg border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <ScoreBadge score={e.score} />
+                <span className="text-xs text-muted-foreground">{formatDate(e.scored_at)}</span>
+                {e.prompt_updated_at && (
+                  <span className="text-xs text-muted-foreground/70">
+                    · prompt saved {formatDate(e.prompt_updated_at)}
+                  </span>
+                )}
+                {i === 0 && (
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-600">current</span>
+                )}
+                {e.prompt && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptOpenId(promptOpenId === e.id ? null : e.id)}
+                    className="ml-auto text-xs text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    {promptOpenId === e.id ? 'Hide prompt' : 'View prompt'}
+                  </button>
+                )}
+              </div>
+              {e.reasoning && (
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{e.reasoning}</p>
+              )}
+              {promptOpenId === e.id && e.prompt && (
+                <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                  {e.prompt}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2551,6 +2632,7 @@ function CandidateDetailView({
                         {app.ai_score_reasoning}
                       </p>
                     )}
+                    {app.ai_score != null && <ScoreHistorySection applicationId={app.id} />}
                   </div>
                   <StageSelect
                     value={appStatuses.get(app.id) ?? DEFAULT_STAGE}
