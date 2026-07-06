@@ -51,6 +51,8 @@ import {
   type CandidateEvent,
   fetchScoreHistory,
   type ScoreHistoryEntry,
+  parseScoreReasoning,
+  scoreReasoningSummary,
   updateApplicationsStageBulk,
   type PipelineStage,
   FIT_STATUS_OPTIONS,
@@ -136,6 +138,58 @@ function ScoreBadge({ score }: { score: number | null | undefined }) {
   )
 }
 
+// Renders an application's AI score reasoning. Legacy prompts return a single string;
+// newer prompts return structured sections. For the structured form we show the summary
+// inline and tuck the detailed sections behind an accordion so the card stays compact.
+function ScoreReasoning({ raw }: { raw: string }) {
+  const [open, setOpen] = useState(false)
+  const parsed = parseScoreReasoning(raw)
+  if (!parsed) return null
+
+  if (parsed.kind === 'text') {
+    return (
+      <p className="mt-1.5 max-w-prose text-xs text-muted-foreground leading-relaxed">{parsed.text}</p>
+    )
+  }
+
+  const d = parsed.detail
+  const sections = [
+    { label: 'Core competencies', value: d.core_reasoning, tone: 'text-muted-foreground' },
+    { label: 'Strong differentiators', value: d.strong_differentiator_reasoning, tone: 'text-violet-600' },
+    { label: 'Red flags', value: d.red_flag_reasoning, tone: 'text-red-600' },
+    { label: 'Good fit signal', value: d.good_fit_signal, tone: 'text-emerald-600' },
+    { label: 'Deal breaker', value: d.deal_breaker_signal, tone: 'text-red-600' },
+  ].filter((s) => s.value)
+
+  return (
+    <div className="mt-1.5 max-w-prose">
+      {d.summary && <p className="text-xs text-muted-foreground leading-relaxed">{d.summary}</p>}
+      {sections.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ChevronDown className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+            {open ? 'Hide breakdown' : 'Show breakdown'}
+          </button>
+          {open && (
+            <dl className="mt-2 space-y-2">
+              {sections.map((s) => (
+                <div key={s.label}>
+                  <dt className={`text-[11px] font-semibold uppercase tracking-wide ${s.tone}`}>{s.label}</dt>
+                  <dd className="mt-0.5 text-xs text-muted-foreground leading-relaxed">{s.value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 // Lazy-loaded log of past AI scoring runs for one application. Collapsed by
 // default; fetched on first open. Each entry shows the score, when it was
 // produced, its reasoning, and (expandable) the prompt version it was scored
@@ -199,8 +253,10 @@ function ScoreHistorySection({ applicationId }: { applicationId: number }) {
                   </button>
                 )}
               </div>
-              {e.reasoning && (
-                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{e.reasoning}</p>
+              {scoreReasoningSummary(e.reasoning) && (
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  {scoreReasoningSummary(e.reasoning)}
+                </p>
               )}
               {promptOpenId === e.id && e.prompt && (
                 <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
@@ -2627,11 +2683,7 @@ function CandidateDetailView({
                         <span className="ml-2 font-medium text-foreground/50">#{idx + 1}</span>
                       )}
                     </div>
-                    {app.ai_score_reasoning && (
-                      <p className="mt-1.5 text-xs text-muted-foreground max-w-prose leading-relaxed">
-                        {app.ai_score_reasoning}
-                      </p>
-                    )}
+                    {app.ai_score_reasoning && <ScoreReasoning raw={app.ai_score_reasoning} />}
                     {app.ai_score != null && <ScoreHistorySection applicationId={app.id} />}
                   </div>
                   <StageSelect

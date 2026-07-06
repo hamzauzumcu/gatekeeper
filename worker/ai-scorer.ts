@@ -13,6 +13,17 @@ import { universityBonus } from './cv-schema'
 // v3: top-tier university bonus is added on top of the model score (UNIVERSITY_TIER_BONUS).
 export const SCORE_VERSION = 3
 
+// Optional structured reasoning fields a scoring prompt may return instead of a single
+// `reasoning` string. Kept in sync with parseScoreReasoning() in src/lib/candidates.ts.
+const STRUCTURED_FIELDS = [
+  'summary',
+  'core_reasoning',
+  'strong_differentiator_reasoning',
+  'red_flag_reasoning',
+  'good_fit_signal',
+  'deal_breaker_signal',
+] as const
+
 // Minimal env surface scoreApplication needs (lazy CV recovery may re-OCR via GPT-4o).
 export type ScoreEnv = {
   DEEPSEEK_API_KEY: string
@@ -210,9 +221,25 @@ export async function scoreApplication(
   )
 
   const jsonText = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim()
-  const result = JSON.parse(jsonText) as { score: unknown; reasoning?: unknown }
+  const result = JSON.parse(jsonText) as Record<string, unknown>
   const baseScore = Math.min(100, Math.max(0, Math.round(Number(result.score) || 0)))
-  let reasoning = typeof result.reasoning === 'string' ? result.reasoning : null
+
+  // The scoring prompt may return either the legacy shape { score, reasoning } or the
+  // richer shape { score, summary, core_reasoning, strong_differentiator_reasoning,
+  // red_flag_reasoning, good_fit_signal, deal_breaker_signal }. Both are valid — different
+  // accounts run different prompts. We normalize here: if any structured field is present we
+  // store the whole object as JSON (the UI renders it as a summary + expandable breakdown);
+  // otherwise we fall back to the plain `reasoning` string. When neither is present but a
+  // summary exists, the summary doubles as the reasoning fallback.
+  const asStr = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const detail: Record<string, string | null> = {}
+  let hasStructured = false
+  for (const k of STRUCTURED_FIELDS) {
+    const v = asStr(result[k])
+    detail[k] = v
+    if (v) hasStructured = true
+  }
+  let reasoning = asStr(result.reasoning) ?? detail.summary
 
   // Top-tier university bonus, applied deterministically on top of the model score
   // (capped at 100). The model can't reliably rank Turkish universities, so we award
@@ -229,8 +256,17 @@ export async function scoreApplication(
   if (uniBonus) {
     score = Math.min(100, baseScore + uniBonus.bonus)
     const note = `+${uniBonus.bonus} ${uniBonus.school} (top-tier university)`
-    reasoning = reasoning ? `${reasoning} [${note}]` : note
+    // Attach the bonus note to the summary (structured shape) or to the plain reasoning,
+    // whichever is the stored value, so it stays visible without breaking the stored JSON.
+    if (hasStructured) {
+      detail.summary = detail.summary ? `${detail.summary} [${note}]` : note
+    } else {
+      reasoning = reasoning ? `${reasoning} [${note}]` : note
+    }
   }
+
+  // Stored value: structured JSON when the model returned the richer shape, else plain text.
+  const storedReasoning = hasStructured ? JSON.stringify(detail) : reasoning
 
   // Write the current score and append it to the history log in one atomic batch,
   // so the log can't drift from what the application row shows.
@@ -242,12 +278,12 @@ export async function scoreApplication(
              ai_scored_prompt_at = ?, ai_scored_at = datetime('now')
          WHERE id = ?`
       )
-      .bind(score, reasoning, SCORE_VERSION, row.prompt_updated_at, applicationId),
+      .bind(score, storedReasoning, SCORE_VERSION, row.prompt_updated_at, applicationId),
     db
       .prepare(
         `INSERT INTO ai_score_history (application_id, score, reasoning, score_version, prompt_updated_at, scored_at)
          VALUES (?, ?, ?, ?, ?, datetime('now'))`
       )
-      .bind(applicationId, score, reasoning, SCORE_VERSION, row.prompt_updated_at),
+      .bind(applicationId, score, storedReasoning, SCORE_VERSION, row.prompt_updated_at),
   ])
 }

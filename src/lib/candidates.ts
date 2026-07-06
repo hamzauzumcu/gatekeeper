@@ -906,6 +906,54 @@ export async function fetchPendingScoreIds(): Promise<number[]> {
   return data.ids
 }
 
+// AI score reasoning is stored either as plain text (legacy `{ reasoning }` prompt shape)
+// or as a JSON object with structured sections (richer prompt shape). Parse into a
+// discriminated result so the UI can render a summary + expandable breakdown for the
+// structured form and plain text for the legacy form. Kept in sync with STRUCTURED_FIELDS
+// in worker/ai-scorer.ts.
+export type ScoreReasoningDetail = {
+  summary: string | null
+  core_reasoning: string | null
+  strong_differentiator_reasoning: string | null
+  red_flag_reasoning: string | null
+  good_fit_signal: string | null
+  deal_breaker_signal: string | null
+}
+
+export type ParsedScoreReasoning =
+  | { kind: 'text'; text: string }
+  | { kind: 'structured'; detail: ScoreReasoningDetail }
+
+export function parseScoreReasoning(raw: string | null | undefined): ParsedScoreReasoning | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('{')) {
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>
+      const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+      const detail: ScoreReasoningDetail = {
+        summary: str(obj.summary),
+        core_reasoning: str(obj.core_reasoning),
+        strong_differentiator_reasoning: str(obj.strong_differentiator_reasoning),
+        red_flag_reasoning: str(obj.red_flag_reasoning),
+        good_fit_signal: str(obj.good_fit_signal),
+        deal_breaker_signal: str(obj.deal_breaker_signal),
+      }
+      if (Object.values(detail).some(Boolean)) return { kind: 'structured', detail }
+    } catch {
+      /* not JSON — fall through to plain text */
+    }
+  }
+  return { kind: 'text', text: trimmed }
+}
+
+// Compact single-line reasoning for places that can't show the full breakdown (score history).
+export function scoreReasoningSummary(raw: string | null | undefined): string | null {
+  const parsed = parseScoreReasoning(raw)
+  if (!parsed) return null
+  return parsed.kind === 'text' ? parsed.text : parsed.detail.summary
+}
+
 export type ScoreHistoryEntry = {
   id: number
   score: number
