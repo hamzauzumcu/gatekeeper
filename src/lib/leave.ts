@@ -110,6 +110,56 @@ export function leaveYear(r: Pick<LeaveRequest, 'start_date' | 'submitted_at'>):
   return m ? m[1] : null
 }
 
+// --- Date helpers (plain YYYY-MM-DD strings, UTC math to dodge DST/timezone) ---
+
+// Normalize a raw date to a YYYY-MM-DD key, or null if it isn't a plain ISO date.
+export function isoDay(raw: string | null | undefined): string | null {
+  const m = (raw ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null
+}
+
+function toUTC(day: string): number {
+  const [y, m, d] = day.split('-').map(Number)
+  return Date.UTC(y, m - 1, d)
+}
+
+// A YYYY-MM-DD key n days after `day` (n may be negative).
+export function addDays(day: string, n: number): string {
+  const dt = new Date(toUTC(day) + n * 86400000)
+  const y = dt.getUTCFullYear()
+  const mo = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const da = String(dt.getUTCDate()).padStart(2, '0')
+  return `${y}-${mo}-${da}`
+}
+
+// Whole days from a to b (b - a); negative if b precedes a.
+export function daysBetween(a: string, b: string): number {
+  return Math.round((toUTC(b) - toUTC(a)) / 86400000)
+}
+
+// Weekday of an ISO day as 0=Monday … 6=Sunday.
+export function weekdayMon(day: string): number {
+  return (new Date(toUTC(day)).getUTCDay() + 6) % 7
+}
+
+// The calendar span a leave occupies. Prefer an explicit end_date; otherwise
+// derive the end from working_days so a "30.03.2026 · 3 days" request with no
+// (or a same-as-start) end_date still spans three cells. Returns null if the
+// start date isn't a usable ISO date.
+export function leaveSpan(
+  r: Pick<LeaveRequest, 'start_date' | 'end_date' | 'working_days'>,
+): { start: string; end: string; days: number } | null {
+  const start = isoDay(r.start_date)
+  if (!start) return null
+  const end = isoDay(r.end_date)
+  if (end && daysBetween(start, end) > 0) {
+    return { start, end, days: daysBetween(start, end) + 1 }
+  }
+  const dur = parseAmount(r.working_days)
+  const span = Math.max(1, Math.ceil(dur ?? 1))
+  return { start, end: addDays(start, span - 1), days: span }
+}
+
 export async function reviewLeaveRequest(
   id: number,
   decision: 'approved' | 'rejected',

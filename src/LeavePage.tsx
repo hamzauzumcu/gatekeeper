@@ -25,6 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { can, type User } from '@/lib/auth'
+import LeaveCalendar from './LeaveCalendar'
 import { fetchEmployees, createEmployee, type Employee } from '@/lib/employees'
 import {
   fetchLeaveRequests,
@@ -316,6 +317,7 @@ export default function LeavePage({ user }: { user: User }) {
             </Badge>
           )}
         </TabsTrigger>
+        <TabsTrigger value="calendar">Calendar</TabsTrigger>
         {canManage && <TabsTrigger value="employees">Employees</TabsTrigger>}
       </TabsList>
 
@@ -539,6 +541,14 @@ export default function LeavePage({ user }: { user: User }) {
               </TableBody>
             </Table>
           </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="calendar" className="flex flex-col gap-4">
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <LeaveCalendar requests={requests} />
         )}
       </TabsContent>
 
