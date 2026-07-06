@@ -2151,6 +2151,7 @@ const STAGE_STYLES: Record<string, { dot: string; badge: string }> = {
   outreach:     { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 border-amber-200' },
   interviewing: { dot: 'bg-violet-400',  badge: 'bg-violet-50 text-violet-700 border-violet-200' },
   interviewed:  { dot: 'bg-indigo-400',  badge: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  offer_sent:   { dot: 'bg-teal-400',    badge: 'bg-teal-50 text-teal-700 border-teal-200' },
   hired:        { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   rejected:     { dot: 'bg-red-400',     badge: 'bg-red-50 text-red-700 border-red-200' },
 }

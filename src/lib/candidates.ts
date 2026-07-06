@@ -45,6 +45,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   { value: 'outreach', label: 'Outreach' },
   { value: 'interviewing', label: 'Interviewing' },
   { value: 'interviewed', label: 'Interviewed' },
+  { value: 'offer_sent', label: 'Offer Sent' },
   { value: 'hired', label: 'Hired', terminal: true },
   { value: 'rejected', label: 'Rejected', terminal: true },
 ]

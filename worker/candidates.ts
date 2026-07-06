@@ -403,7 +403,7 @@ export async function listCandidates(
 // lib/candidates.ts PIPELINE_STAGES; here we only gate which values are writable.
 // 'none' = off the board (not in the pipeline). The rest are kanban stages,
 // ordered client-side in lib/candidates.ts PIPELINE_STAGES.
-const VALID_STATUSES = ['none', 'shortlisted', 'outreach', 'interviewing', 'interviewed', 'hired', 'rejected'] as const
+const VALID_STATUSES = ['none', 'shortlisted', 'outreach', 'interviewing', 'interviewed', 'offer_sent', 'hired', 'rejected'] as const
 export const VALID_FIT_STATUSES = ['not_fit', 'good_fit', 'maybe'] as const
 export type FitStatus = typeof VALID_FIT_STATUSES[number]
 
