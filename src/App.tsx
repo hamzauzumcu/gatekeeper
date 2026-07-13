@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Sun, Moon } from 'lucide-react'
@@ -26,9 +26,23 @@ export default function App() {
   const [dark, setDark] = useDarkMode()
   const [module, setModule] = useState<Module>('recruiting')
   const [tab, setTab] = useState<RecruitingTab>('candidates')
-  // A notification click requests opening a specific note; the candidates tab
-  // consumes this once it mounts/renders and clears it via onOpenNoteHandled.
-  const [openNote, setOpenNote] = useState<{ applicantId: number; noteId: number } | null>(null)
+  // A notification click or a shared deep link (?applicant=<id>&note=<id>)
+  // requests opening a specific note; the candidates tab consumes this once it
+  // mounts/renders and clears it via onOpenNoteHandled. Captured in the
+  // initializer so the link survives the login screen.
+  const [openNote, setOpenNote] = useState<{ applicantId: number; noteId: number } | null>(() => {
+    const params = new URLSearchParams(window.location.search)
+    const applicantId = Number(params.get('applicant'))
+    const noteId = Number(params.get('note'))
+    return Number.isInteger(applicantId) && applicantId > 0 && Number.isInteger(noteId) && noteId > 0
+      ? { applicantId, noteId }
+      : null
+  })
+
+  // Strip the deep-link params so a refresh doesn't re-open the note.
+  useEffect(() => {
+    if (window.location.search) window.history.replaceState(null, '', window.location.pathname)
+  }, [])
 
   if (!user) {
     return <LoginPage onLogin={setUser} />

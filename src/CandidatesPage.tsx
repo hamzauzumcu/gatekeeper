@@ -3,7 +3,7 @@ import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
-  Image as ImageIcon, History, Clock, ArrowRight,
+  Image as ImageIcon, History, Clock, ArrowRight, Link2,
 } from 'lucide-react'
 import {
   fetchCandidates,
@@ -3212,8 +3212,11 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
   const [users, setUsers] = useState<AppUser[]>([])
   // Note DOM nodes by id, so a notification click can scroll to one.
   const noteRefs = useRef<Map<number, HTMLDivElement>>(new Map())
-  // Note to briefly flash after scrolling to it from a notification.
-  const [flashId, setFlashId] = useState<number | null>(null)
+  // Note to keep highlighted after scrolling to it from a notification or a
+  // shared link; stays selected until the candidate changes.
+  const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null)
+  // Note whose share link was just copied (drives the check-mark feedback).
+  const [copiedNoteId, setCopiedNoteId] = useState<number | null>(null)
 
   const knownHandles = useMemo(() => new Set(users.map((u) => u.username.toLowerCase())), [users])
   // Render @mention sentinel links (see linkifyMentions) as colored chips.
@@ -3277,6 +3280,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     setLoading(true)
     setEditingId(null)
     setGenError(null)
+    setSelectedNoteId(null)
     // Restore any unsent draft for this candidate (synchronously, before the
     // fetch resolves, so the draft-save effect never writes one candidate's
     // text under another's key).
@@ -3341,18 +3345,29 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
       .catch(() => setUsers([]))
   }, [])
 
-  // When opened from a notification, scroll to the mentioning note and flash it.
+  // When opened from a notification or a shared link, scroll to the note and
+  // keep it highlighted like a shared comment.
   useEffect(() => {
     if (highlightNoteId == null || loading) return
     const el = noteRefs.current.get(highlightNoteId)
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setFlashId(highlightNoteId)
+    setSelectedNoteId(highlightNoteId)
     onHighlightHandled()
-    const t = setTimeout(() => setFlashId(null), 2500)
-    return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightNoteId, loading, notes])
+
+  // Copy a shareable deep link that opens this candidate scrolled to the note.
+  async function copyNoteLink(noteId: number) {
+    const url = `${window.location.origin}${window.location.pathname}?applicant=${applicantId}&note=${noteId}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiedNoteId(noteId)
+      setTimeout(() => setCopiedNoteId((prev) => (prev === noteId ? null : prev)), 1500)
+    } catch {
+      // Clipboard unavailable (non-secure context) — no feedback to give.
+    }
+  }
 
   function addFiles(selected: FileList | null) {
     if (!selected) return
@@ -3643,7 +3658,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               }}
               className={[
                 'rounded-lg border p-3 transition-colors duration-700',
-                flashId === note.id ? 'border-primary bg-primary/5' : '',
+                selectedNoteId === note.id ? 'note-linked' : '',
               ].join(' ')}
             >
               <div className="flex items-start justify-between gap-2">
@@ -3652,26 +3667,40 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   <span className="text-muted-foreground">·</span>
                   <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
                 </div>
-                {note.created_by === currentUser.username && editingId !== note.id && (
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => startEdit(note)}
-                      title="Edit note"
-                      className="text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(note.id)}
-                      title="Delete note"
-                      className="text-muted-foreground transition-colors hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </div>
-                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => copyNoteLink(note.id)}
+                    title="Copy link to note"
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {copiedNoteId === note.id ? (
+                      <Check className="size-3.5 text-primary" />
+                    ) : (
+                      <Link2 className="size-3.5" />
+                    )}
+                  </button>
+                  {note.created_by === currentUser.username && editingId !== note.id && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(note)}
+                        title="Edit note"
+                        className="text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(note.id)}
+                        title="Delete note"
+                        className="text-muted-foreground transition-colors hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
               {editingId === note.id ? (
                 <div className="mt-2 space-y-2">
