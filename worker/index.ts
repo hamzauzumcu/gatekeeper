@@ -30,6 +30,7 @@ import {
   reviewLeaveRequest,
   assignEmployee,
   updateLeaveDuration,
+  updateLeaveDates,
   type LeaveImportRow,
 } from './leave'
 import { handleLeaveTallyWebhook } from './leave-tally'
@@ -768,6 +769,32 @@ app.post('/api/leave/:id/duration', async (c) => {
   const workingDays = typeof body.workingDays === 'string' ? body.workingDays : null
   const hours = typeof body.hours === 'string' ? body.hours : null
   const result = await updateLeaveDuration(c.env.DB, id, workingDays, hours)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
+})
+
+// Manually set (or clear) a request's start/end dates. Body:
+// { startDate?: string | null, endDate?: string | null } as YYYY-MM-DD.
+app.post('/api/leave/:id/dates', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { startDate?: unknown; endDate?: unknown } = await c.req.json().catch(() => ({}))
+  const parse = (v: unknown): string | null | undefined => {
+    if (v === null || v === undefined) return null
+    if (typeof v !== 'string') return undefined
+    const s = v.trim()
+    if (!s) return null
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined
+  }
+  const startDate = parse(body.startDate)
+  const endDate = parse(body.endDate)
+  if (startDate === undefined || endDate === undefined) {
+    return c.json({ ok: false, error: 'dates must be YYYY-MM-DD' }, 400)
+  }
+  const result = await updateLeaveDates(c.env.DB, id, startDate, endDate)
   if (!result.ok) {
     return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
   }

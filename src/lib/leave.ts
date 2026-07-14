@@ -87,6 +87,20 @@ export async function updateLeaveDuration(
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to update duration')
 }
 
+export async function updateLeaveDates(
+  id: number,
+  startDate: string | null,
+  endDate: string | null,
+): Promise<void> {
+  const res = await apiFetch(`/api/leave/${id}/dates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ startDate, endDate }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to update dates')
+}
+
 // Parse a raw duration string into a number. Handles comma decimals ("2,5"),
 // Turkish half-words ("buçuk"/"yarım" → +0.5), and free text with a number
 // embedded ("5 hours" → 5, "1 buçuk saat" → 1.5). Returns null if no amount.

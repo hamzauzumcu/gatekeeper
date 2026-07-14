@@ -33,10 +33,12 @@ import {
   assignEmployee,
   reviewLeaveRequest,
   updateLeaveDuration,
+  updateLeaveDates,
   csvRowsToImportRows,
   parseAmount,
   fmtNum,
   leaveYear,
+  isoDay,
   type LeaveRequest,
   type LeaveStatus,
 } from '@/lib/leave'
@@ -150,6 +152,11 @@ export default function LeavePage({ user }: { user: User }) {
   const [editDays, setEditDays] = useState('')
   const [editHours, setEditHours] = useState('')
 
+  // Inline date editing (start/end as YYYY-MM-DD; empty clears the field).
+  const [editDatesId, setEditDatesId] = useState<number | null>(null)
+  const [editStart, setEditStart] = useState('')
+  const [editEnd, setEditEnd] = useState('')
+
   // Employees tab: year filter + drill-down.
   const [year, setYear] = useState<string>('all')
   const [selectedEmp, setSelectedEmp] = useState<number | null>(null)
@@ -262,6 +269,25 @@ export default function LeavePage({ user }: { user: User }) {
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update duration')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function startEditDates(r: LeaveRequest) {
+    setEditDatesId(r.id)
+    setEditStart(isoDay(r.start_date) ?? '')
+    setEditEnd(isoDay(r.end_date) ?? '')
+  }
+
+  async function saveDates(id: number) {
+    setBusyId(id)
+    try {
+      await updateLeaveDates(id, editStart || null, editEnd || null)
+      setEditDatesId(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update dates')
     } finally {
       setBusyId(null)
     }
@@ -404,7 +430,52 @@ export default function LeavePage({ user }: { user: User }) {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{r.leave_type || '—'}</TableCell>
                     <TableCell className="whitespace-nowrap">
-                      {formatDates(r.start_date, r.end_date)}
+                      {editDatesId === r.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            type="date"
+                            value={editStart}
+                            onChange={(e) => setEditStart(e.target.value)}
+                            className="h-8 w-36"
+                          />
+                          <span className="text-xs text-muted-foreground">→</span>
+                          <Input
+                            type="date"
+                            value={editEnd}
+                            onChange={(e) => setEditEnd(e.target.value)}
+                            className="h-8 w-36"
+                          />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8"
+                            disabled={busyId === r.id}
+                            onClick={() => saveDates(r.id)}
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8"
+                            onClick={() => setEditDatesId(null)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : canManage ? (
+                        <button
+                          type="button"
+                          className="group inline-flex items-center gap-1"
+                          onClick={() => startEditDates(r)}
+                          title="Edit dates"
+                        >
+                          {formatDates(r.start_date, r.end_date)}
+                          <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                        </button>
+                      ) : (
+                        <span>{formatDates(r.start_date, r.end_date)}</span>
+                      )}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {editDurId === r.id ? (

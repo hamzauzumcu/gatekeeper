@@ -153,6 +153,26 @@ export async function updateLeaveDuration(
   return { ok: true }
 }
 
+// Manually set (or clear) a request's start/end dates. Stored as plain
+// YYYY-MM-DD strings (validated by the route); either may be null. If both are
+// present and out of order they are swapped, mirroring the CSV import.
+export async function updateLeaveDates(
+  db: D1Database,
+  id: number,
+  startDate: string | null,
+  endDate: string | null,
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
+  let start = clean(startDate)
+  let end = clean(endDate)
+  if (start && end && start > end) [start, end] = [end, start]
+  const res = await db
+    .prepare(`UPDATE leave_requests SET start_date = ?, end_date = ? WHERE id = ?`)
+    .bind(start, end, id)
+    .run()
+  if ((res.meta?.changes ?? 0) === 0) return { ok: false, error: 'request not found', status: 404 }
+  return { ok: true }
+}
+
 // Approve or reject a pending request. Reviewer is an app user.
 export async function reviewLeaveRequest(
   db: D1Database,
