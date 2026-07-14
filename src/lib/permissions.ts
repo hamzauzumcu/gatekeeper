@@ -24,7 +24,7 @@ export const PERMISSION_META: Record<Permission, { label: string; description: s
   },
   manage_leave: {
     label: 'Manage leave',
-    description: 'Approve/reject leave and map employees (everyone can still view).',
+    description: 'See the leave module, approve/reject leave, and map employees.',
   },
   recruiting_admin: {
     label: 'Recruiting admin',

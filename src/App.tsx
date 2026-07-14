@@ -85,7 +85,7 @@ export default function App() {
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
           <button
             type="button"
-            onClick={() => setModule(modules[0].key)}
+            onClick={() => modules[0] && setModule(modules[0].key)}
             className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl"
           >
             Gatekeeper
@@ -152,10 +152,14 @@ export default function App() {
         <div className="mt-6">
           <AdminPage user={user} />
         </div>
-      ) : (
+      ) : activeModule === 'leave' ? (
         <div className="mt-6">
           <LeavePage user={user} />
         </div>
+      ) : (
+        <p className="mt-6 text-sm text-muted-foreground">
+          You don't have access to any modules yet. Ask an admin to grant you permissions.
+        </p>
       )}
     </div>
   )

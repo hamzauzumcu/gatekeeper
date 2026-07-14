@@ -683,6 +683,7 @@ app.post('/api/notifications/read-all', async (c) => {
 
 // All active employees, alphabetical.
 app.get('/api/employees', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const employees = await listEmployees(c.env.DB)
   return c.json({ ok: true, employees })
 })
@@ -708,6 +709,7 @@ app.post('/api/employees', async (c) => {
 
 // All leave requests, newest first (small team → no pagination for now).
 app.get('/api/leave', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
   const requests = await listLeaveRequests(c.env.DB)
   return c.json({ ok: true, requests })
 })
