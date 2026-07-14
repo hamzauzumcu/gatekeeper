@@ -57,7 +57,7 @@ export default function App() {
   const canRecruiting = can(user, 'view_applications') || can(user, 'recruiting_admin')
   const modules: { key: Module; label: string }[] = [
     ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting' }] : []),
-    { key: 'leave' as const, label: 'Leave' },
+    ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave' }] : []),
     ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
   ]
   const recruitingTabs: { key: RecruitingTab; label: string }[] = [
@@ -67,7 +67,9 @@ export default function App() {
   ]
 
   // Fall back to the first permitted module/tab if the current one isn't allowed.
-  const activeModule: Module = modules.some((m) => m.key === module) ? module : modules[0].key
+  const activeModule: Module | undefined = modules.some((m) => m.key === module)
+    ? module
+    : modules[0]?.key
   const activeTab: RecruitingTab =
     recruitingTabs.some((t) => t.key === tab) ? tab : (recruitingTabs[0]?.key ?? 'candidates')
 
