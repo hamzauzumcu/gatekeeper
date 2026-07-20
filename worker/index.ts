@@ -31,6 +31,8 @@ import {
   assignEmployee,
   updateLeaveDuration,
   updateLeaveDates,
+  setLeaveStatus,
+  deleteLeaveRequest,
   type LeaveImportRow,
 } from './leave'
 import { handleLeaveTallyWebhook } from './leave-tally'
@@ -823,6 +825,46 @@ app.post('/api/leave/:id/review', async (c) => {
     return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
   }
   return c.json({ ok: true, request: result.request })
+})
+
+// Set a request's status directly. Unlike /review this also corrects an
+// already-decided request or reverts it to pending (which clears the reviewer).
+app.post('/api/leave/:id/status', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { status?: unknown; reviewer?: unknown; reviewerName?: unknown } = await c.req
+    .json()
+    .catch(() => ({}))
+  const status =
+    body.status === 'pending' || body.status === 'approved' || body.status === 'rejected'
+      ? body.status
+      : null
+  const reviewer = typeof body.reviewer === 'string' ? body.reviewer.trim() : ''
+  const reviewerName = typeof body.reviewerName === 'string' ? body.reviewerName.trim() : ''
+  if (!status) return c.json({ ok: false, error: 'invalid status' }, 400)
+  // Reverting to pending clears the reviewer, so it needs no acting identity.
+  if (status !== 'pending' && (!reviewer || !reviewerName)) {
+    return c.json({ ok: false, error: 'reviewer required' }, 400)
+  }
+
+  const result = await setLeaveStatus(c.env.DB, id, status, reviewer, reviewerName)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true, request: result.request })
+})
+
+// Delete a leave request (duplicate or mistaken submission). Permanent.
+app.delete('/api/leave/:id', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const result = await deleteLeaveRequest(c.env.DB, id)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
 })
 
 // ── Saved filters (shared, team-wide presets) ──────────────────────────────

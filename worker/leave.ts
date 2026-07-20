@@ -173,6 +173,72 @@ export async function updateLeaveDates(
   return { ok: true }
 }
 
+// Load one request with its employee name joined in (the shape the UI expects).
+async function getLeaveRequest(db: D1Database, id: number): Promise<LeaveRequestRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT lr.id, lr.submission_id, lr.respondent_id, lr.employee_id,
+              e.name AS employee_name, lr.raw_name, lr.leave_type,
+              lr.start_date, lr.end_date, lr.hours_requested, lr.working_days,
+              lr.reason, lr.document_url, lr.submitted_at, lr.status,
+              lr.reviewer, lr.reviewer_name, lr.reviewed_at, lr.created_at
+         FROM leave_requests lr
+         LEFT JOIN employees e ON e.id = lr.employee_id
+        WHERE lr.id = ?`,
+    )
+    .bind(id)
+    .first<LeaveRequestRow>()
+  return row ?? null
+}
+
+// Delete a request outright. Used to clear duplicate or mistaken submissions;
+// there is no soft-delete, so the row is gone for good.
+export async function deleteLeaveRequest(
+  db: D1Database,
+  id: number,
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
+  const res = await db.prepare(`DELETE FROM leave_requests WHERE id = ?`).bind(id).run()
+  if ((res.meta?.changes ?? 0) === 0) return { ok: false, error: 'request not found', status: 404 }
+  return { ok: true }
+}
+
+// Set a request's status directly, unlike reviewLeaveRequest this also allows
+// correcting an already-decided request or reverting it to pending. Reverting
+// clears the reviewer fields so the row looks untouched again; deciding stamps
+// the acting user as reviewer.
+export async function setLeaveStatus(
+  db: D1Database,
+  id: number,
+  status: LeaveStatus,
+  reviewer: string,
+  reviewerName: string,
+): Promise<{ ok: true; request: LeaveRequestRow } | { ok: false; error: string; status?: number }> {
+  const res =
+    status === 'pending'
+      ? await db
+          .prepare(
+            `UPDATE leave_requests
+                SET status = 'pending', reviewer = NULL, reviewer_name = NULL, reviewed_at = NULL
+              WHERE id = ?`,
+          )
+          .bind(id)
+          .run()
+      : await db
+          .prepare(
+            `UPDATE leave_requests
+                SET status = ?, reviewer = ?, reviewer_name = ?,
+                    reviewed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+              WHERE id = ?`,
+          )
+          .bind(status, reviewer, reviewerName, id)
+          .run()
+  if ((res.meta?.changes ?? 0) === 0) return { ok: false, error: 'request not found', status: 404 }
+
+  const row = await getLeaveRequest(db, id)
+  if (!row) return { ok: false, error: 'failed to load request', status: 500 }
+  return { ok: true, request: row }
+}
+
 // Approve or reject a pending request. Reviewer is an app user.
 export async function reviewLeaveRequest(
   db: D1Database,
@@ -198,19 +264,7 @@ export async function reviewLeaveRequest(
     .bind(decision, reviewer, reviewerName, id)
     .run()
 
-  const row = await db
-    .prepare(
-      `SELECT lr.id, lr.submission_id, lr.respondent_id, lr.employee_id,
-              e.name AS employee_name, lr.raw_name, lr.leave_type,
-              lr.start_date, lr.end_date, lr.hours_requested, lr.working_days,
-              lr.reason, lr.document_url, lr.submitted_at, lr.status,
-              lr.reviewer, lr.reviewer_name, lr.reviewed_at, lr.created_at
-         FROM leave_requests lr
-         LEFT JOIN employees e ON e.id = lr.employee_id
-        WHERE lr.id = ?`,
-    )
-    .bind(id)
-    .first<LeaveRequestRow>()
+  const row = await getLeaveRequest(db, id)
   if (!row) return { ok: false, error: 'failed to load request', status: 500 }
   return { ok: true, request: row }
 }

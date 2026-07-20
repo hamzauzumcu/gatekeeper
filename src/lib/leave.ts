@@ -190,6 +190,31 @@ export async function reviewLeaveRequest(
   return data.request
 }
 
+// Set a request's status directly. Unlike reviewLeaveRequest this also changes
+// an already-decided request, including reverting it to pending.
+export async function setLeaveStatus(
+  id: number,
+  status: LeaveStatus,
+  reviewer: string,
+  reviewerName: string,
+): Promise<LeaveRequest> {
+  const res = await apiFetch(`/api/leave/${id}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, reviewer, reviewerName }),
+  })
+  const data = (await res.json()) as { ok: true; request: LeaveRequest } | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to update status')
+  return data.request
+}
+
+// Permanently delete a leave request.
+export async function deleteLeaveRequest(id: number): Promise<void> {
+  const res = await apiFetch(`/api/leave/${id}`, { method: 'DELETE' })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete request')
+}
+
 // Parse a Tally CSV export (already parsed into row objects by PapaParse) into
 // import rows. Column headers vary slightly, so we match them flexibly.
 export function csvRowsToImportRows(rows: Record<string, string>[]): LeaveImportRow[] {

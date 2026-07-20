@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Papa from 'papaparse'
-import { Check, X, Upload, UserPlus, ExternalLink, Pencil, ChevronLeft } from 'lucide-react'
+import { Check, X, Upload, UserPlus, ExternalLink, Pencil, ChevronLeft, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -34,6 +34,8 @@ import {
   reviewLeaveRequest,
   updateLeaveDuration,
   updateLeaveDates,
+  setLeaveStatus,
+  deleteLeaveRequest,
   csvRowsToImportRows,
   parseAmount,
   fmtNum,
@@ -50,6 +52,8 @@ const STATUS_CLASS: Record<LeaveStatus, string> = {
   approved: 'border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400',
   rejected: 'border-transparent bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
 }
+
+const STATUS_OPTIONS: LeaveStatus[] = ['pending', 'approved', 'rejected']
 
 // Sentinel Select values (Radix items can't use an empty string).
 const UNMAPPED = '__unmapped__'
@@ -156,6 +160,9 @@ export default function LeavePage({ user }: { user: User }) {
   const [editDatesId, setEditDatesId] = useState<number | null>(null)
   const [editStart, setEditStart] = useState('')
   const [editEnd, setEditEnd] = useState('')
+
+  // Inline status editing (to correct a decision or revert it to pending).
+  const [editStatusId, setEditStatusId] = useState<number | null>(null)
 
   // Employees tab: year filter + drill-down.
   const [year, setYear] = useState<string>('all')
@@ -300,6 +307,33 @@ export default function LeavePage({ user }: { user: User }) {
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to review')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function onChangeStatus(id: number, status: LeaveStatus) {
+    setBusyId(id)
+    try {
+      await setLeaveStatus(id, status, user.username, user.fullName)
+      setEditStatusId(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update status')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function onDelete(r: LeaveRequest) {
+    const who = r.employee_name ?? r.raw_name
+    if (!window.confirm(`Delete the leave request from ${who}? This cannot be undone.`)) return
+    setBusyId(r.id)
+    try {
+      await deleteLeaveRequest(r.id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete request')
     } finally {
       setBusyId(null)
     }
@@ -574,33 +608,84 @@ export default function LeavePage({ user }: { user: User }) {
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>
-                        {r.status}
-                      </Badge>
+                      {editStatusId === r.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <Select
+                            value={r.status}
+                            disabled={busyId === r.id}
+                            onValueChange={(value) => onChangeStatus(r.id, value as LeaveStatus)}
+                          >
+                            <SelectTrigger size="sm" className="w-32">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {STATUS_OPTIONS.map((s) => (
+                                <SelectItem key={s} value={s} className="capitalize">
+                                  {s}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8"
+                            onClick={() => setEditStatusId(null)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : canManage ? (
+                        <button
+                          type="button"
+                          className="group inline-flex items-center gap-1"
+                          onClick={() => setEditStatusId(r.id)}
+                          title="Change status"
+                        >
+                          <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>{r.status}</Badge>
+                          <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                        </button>
+                      ) : (
+                        <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>{r.status}</Badge>
+                      )}
                       {r.status !== 'pending' && r.reviewer_name && (
                         <div className="mt-1 text-xs text-muted-foreground">by {r.reviewer_name}</div>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {r.status === 'pending' && canManage ? (
-                        <div className="flex justify-end gap-2">
+                      {canManage ? (
+                        <div className="flex items-center justify-end gap-2">
+                          {r.status === 'pending' && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busyId === r.id}
+                                onClick={() => onReview(r.id, 'approved')}
+                              >
+                                <Check className="h-4 w-4" />
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busyId === r.id}
+                                onClick={() => onReview(r.id, 'rejected')}
+                              >
+                                <X className="h-4 w-4" />
+                                Reject
+                              </Button>
+                            </>
+                          )}
                           <Button
-                            size="sm"
-                            variant="outline"
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
                             disabled={busyId === r.id}
-                            onClick={() => onReview(r.id, 'approved')}
+                            onClick={() => onDelete(r)}
+                            title="Delete request"
                           >
-                            <Check className="h-4 w-4" />
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busyId === r.id}
-                            onClick={() => onReview(r.id, 'rejected')}
-                          >
-                            <X className="h-4 w-4" />
-                            Reject
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : (
