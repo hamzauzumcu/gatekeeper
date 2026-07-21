@@ -18,6 +18,7 @@ type TallyFieldType =
   | 'RATING'
   | 'LINEAR_SCALE'
   | 'DATE'
+  | 'INPUT_DATE'
   | 'FILE_UPLOAD'
   | 'HIDDEN_FIELDS'
   | string

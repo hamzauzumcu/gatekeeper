@@ -3,9 +3,10 @@
 // the Tally leave form's webhook at /api/webhook/tally/leave.
 //
 // The leave form's exact field labels aren't fully known ahead of time, so the
-// mapper is tolerant: it matches known fields by label, and treats the DATE
-// fields positionally (first = start, second = end). Anything unmatched is
-// ignored. Fields are stored raw by insertLeaveRequest (see worker/leave.ts).
+// mapper is tolerant: it matches known fields by label, and for date fields it
+// prefers a start/end label match, falling back to position (first = start,
+// second = end). Anything unmatched is ignored. Fields are stored raw by
+// insertLeaveRequest (see worker/leave.ts).
 
 import {
   extractValue,
@@ -31,6 +32,14 @@ function matchTarget(label: string | null): keyof LeaveImportRow | null {
   return null
 }
 
+// Tally sends date questions as INPUT_DATE; older payloads used DATE.
+function isDateField(field: TallyField): boolean {
+  return field.type === 'DATE' || field.type === 'INPUT_DATE'
+}
+
+const START_LABEL = /start|from|begin|başlangıç|baslangic/i
+const END_LABEL = /end|until|finish|bitiş|bitis/i
+
 // Map a Tally submission to a LeaveImportRow. DATE fields fill start/end by
 // order; the rest match by label.
 export function tallyToLeaveRow(payload: TallyWebhookPayload): LeaveImportRow {
@@ -42,12 +51,15 @@ export function tallyToLeaveRow(payload: TallyWebhookPayload): LeaveImportRow {
     name: '',
   }
 
-  const dateValues: string[] = []
+  const unlabelledDates: string[] = []
   for (const field of data.fields as TallyField[]) {
     const val = extractValue(field)
     if (val === null) continue
-    if (field.type === 'DATE') {
-      dateValues.push(val)
+    if (isDateField(field)) {
+      const label = field.label ?? ''
+      if (START_LABEL.test(label)) row.startDate ??= val
+      else if (END_LABEL.test(label)) row.endDate ??= val
+      else unlabelledDates.push(val)
       continue
     }
     const target = matchTarget(field.label)
@@ -57,8 +69,11 @@ export function tallyToLeaveRow(payload: TallyWebhookPayload): LeaveImportRow {
     }
   }
 
-  if (dateValues.length >= 1) row.startDate = dateValues[0]
-  if (dateValues.length >= 2) row.endDate = dateValues[1]
+  // Fall back to submission order for dates whose labels say nothing.
+  for (const val of unlabelledDates) {
+    if (row.startDate == null) row.startDate = val
+    else if (row.endDate == null) row.endDate = val
+  }
 
   return row
 }
