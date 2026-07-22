@@ -9,6 +9,7 @@ import LeavePage from './LeavePage'
 import AdminPage from './AdminPage'
 import LoginPage from './LoginPage'
 import NotificationBell from './components/NotificationBell'
+import BuildBadge from './components/BuildBadge'
 import { getUser, logout, can, type User } from '@/lib/auth'
 import { useDarkMode } from '@/lib/theme'
 import { cn } from '@/lib/utils'
@@ -124,13 +125,16 @@ export default function App() {
     <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 sm:py-8">
       <header className="flex items-center justify-between gap-3 border-b pb-4">
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
-          <button
-            type="button"
-            onClick={() => modules[0] && navigate(modules[0].key)}
-            className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl"
-          >
-            Gatekeeper
-          </button>
+          <div className="shrink-0">
+            <button
+              type="button"
+              onClick={() => modules[0] && navigate(modules[0].key)}
+              className="block text-xl font-semibold tracking-tight sm:text-2xl"
+            >
+              Gatekeeper
+            </button>
+            <BuildBadge />
+          </div>
           <nav className="flex items-center gap-1">
             {modules.map((m) => (
               <button
