@@ -299,7 +299,12 @@ export const AI_SCORE_TOOLTIP =
 export const INTERVIEW_SCORE_TOOLTIP =
   'Scorecard Score (0–100): weighted result of human interview scorecards — criterion averages across interviewers, N/A excluded.'
 
-const HIDDEN_BASE_COLUMN_STORAGE_KEY = 'gk_candidate_hidden_base_columns'
+// v2: bumped when 'interview_score' shipped as a hidden-by-default column —
+// v1 preferences predate it, so loading them verbatim would surface the new
+// column for anyone who had ever touched column visibility. Migration below
+// folds the defaults into a legacy value once.
+const HIDDEN_BASE_COLUMN_STORAGE_KEY = 'gk_candidate_hidden_base_columns_v2'
+const LEGACY_HIDDEN_BASE_COLUMN_STORAGE_KEY = 'gk_candidate_hidden_base_columns'
 
 // Columns hidden by default to keep the table uncluttered — they only appear
 // when the user opts in via the column picker. Applies when no explicit
@@ -314,6 +319,13 @@ export function loadHiddenBaseColumns(): BaseColumnKey[] {
   try {
     const raw = localStorage.getItem(HIDDEN_BASE_COLUMN_STORAGE_KEY)
     if (raw) return JSON.parse(raw) as BaseColumnKey[]
+    // Migrate a v1 preference: keep what the user hid, and additionally hide
+    // the opt-in columns they never had a chance to opt into.
+    const legacy = localStorage.getItem(LEGACY_HIDDEN_BASE_COLUMN_STORAGE_KEY)
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as BaseColumnKey[]
+      return [...new Set([...parsed, ...DEFAULT_HIDDEN_BASE_COLUMNS])]
+    }
   } catch {}
   return [...DEFAULT_HIDDEN_BASE_COLUMNS]
 }
