@@ -12,6 +12,16 @@ function buildInfo() {
   let version = 0
   try {
     sha = execSync('git rev-parse --short HEAD').toString().trim()
+    // CI (e.g. Cloudflare Workers Builds) clones with --depth=1, which would
+    // make the commit count 1. Deepen the history first so the version matches
+    // local builds.
+    if (execSync('git rev-parse --is-shallow-repository').toString().trim() === 'true') {
+      try {
+        execSync('git fetch --quiet --unshallow', { stdio: 'ignore' })
+      } catch {
+        // offline or no fetch credentials — count may undercount in that case
+      }
+    }
     version = Number(execSync('git rev-list --count HEAD').toString().trim())
   } catch {
     // keep fallbacks
