@@ -125,11 +125,11 @@ export default function App() {
     <div className="mx-auto w-full max-w-[1800px] px-4 py-6 sm:px-6 sm:py-8">
       <header className="flex items-center justify-between gap-3 border-b pb-4">
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
-          <div className="shrink-0">
+          <div className="flex shrink-0 flex-col items-start gap-1">
             <button
               type="button"
               onClick={() => modules[0] && navigate(modules[0].key)}
-              className="block text-xl font-semibold tracking-tight sm:text-2xl"
+              className="block text-xl font-semibold leading-none tracking-tight sm:text-2xl"
             >
               Gatekeeper
             </button>
