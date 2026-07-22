@@ -21,11 +21,26 @@ type Module = 'recruiting' | 'leave' | 'admin'
 // Recruiting sub-tabs, each gated by a permission.
 type RecruitingTab = 'candidates' | 'import' | 'settings'
 
+type Route = { module: Module; tab: RecruitingTab }
+
+// Every screen has its own URL: /leave, /admin, and /recruiting/<tab>.
+function pathFor(module: Module, tab: RecruitingTab): string {
+  return module === 'recruiting' ? `/recruiting/${tab}` : `/${module}`
+}
+
+// Unknown or partial paths fall back to recruiting/candidates so stale or
+// mistyped links still land somewhere sensible.
+function parsePath(pathname: string): Route {
+  const [first, second] = pathname.split('/').filter(Boolean)
+  if (first === 'leave' || first === 'admin') return { module: first, tab: 'candidates' }
+  const tab = second === 'import' || second === 'settings' ? second : 'candidates'
+  return { module: 'recruiting', tab }
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(() => getUser())
   const [dark, setDark] = useDarkMode()
-  const [module, setModule] = useState<Module>('recruiting')
-  const [tab, setTab] = useState<RecruitingTab>('candidates')
+  const [route, setRoute] = useState<Route>(() => parsePath(window.location.pathname))
   // A notification click or a shared deep link (?applicant=<id>&note=<id>)
   // requests opening a specific note; the candidates tab consumes this once it
   // mounts/renders and clears it via onOpenNoteHandled. Captured in the
@@ -44,6 +59,46 @@ export default function App() {
     if (window.location.search) window.history.replaceState(null, '', window.location.pathname)
   }, [])
 
+  // Browser back/forward moves between screens.
+  useEffect(() => {
+    const onPop = () => setRoute(parsePath(window.location.pathname))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // Which modules/tabs this user may see, in display order.
+  const canRecruiting = user ? can(user, 'view_applications') || can(user, 'recruiting_admin') : false
+  const modules: { key: Module; label: string }[] = user
+    ? [
+        ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting' }] : []),
+        ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave' }] : []),
+        ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
+      ]
+    : []
+  const recruitingTabs: { key: RecruitingTab; label: string }[] = user
+    ? [
+        ...(can(user, 'view_applications') ? [{ key: 'candidates' as const, label: 'Candidates' }] : []),
+        ...(can(user, 'recruiting_admin') ? [{ key: 'import' as const, label: 'Import CSV' }] : []),
+        ...(can(user, 'recruiting_admin') ? [{ key: 'settings' as const, label: 'Settings' }] : []),
+      ]
+    : []
+
+  // Fall back to the first permitted module/tab if the current one isn't allowed.
+  const activeModule: Module | undefined = modules.some((m) => m.key === route.module)
+    ? route.module
+    : modules[0]?.key
+  const activeTab: RecruitingTab = recruitingTabs.some((t) => t.key === route.tab)
+    ? route.tab
+    : (recruitingTabs[0]?.key ?? 'candidates')
+
+  // If permissions forced a fallback away from the requested path, rewrite the
+  // address bar so the URL always matches what's on screen.
+  useEffect(() => {
+    if (!user || !activeModule) return
+    const path = pathFor(activeModule, activeTab)
+    if (window.location.pathname !== path) window.history.replaceState(null, '', path)
+  }, [user, activeModule, activeTab])
+
   if (!user) {
     return <LoginPage onLogin={setUser} />
   }
@@ -53,29 +108,15 @@ export default function App() {
     setUser(null)
   }
 
-  // Which modules/tabs this user may see, in display order.
-  const canRecruiting = can(user, 'view_applications') || can(user, 'recruiting_admin')
-  const modules: { key: Module; label: string }[] = [
-    ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting' }] : []),
-    ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave' }] : []),
-    ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
-  ]
-  const recruitingTabs: { key: RecruitingTab; label: string }[] = [
-    ...(can(user, 'view_applications') ? [{ key: 'candidates' as const, label: 'Candidates' }] : []),
-    ...(can(user, 'recruiting_admin') ? [{ key: 'import' as const, label: 'Import CSV' }] : []),
-    ...(can(user, 'recruiting_admin') ? [{ key: 'settings' as const, label: 'Settings' }] : []),
-  ]
-
-  // Fall back to the first permitted module/tab if the current one isn't allowed.
-  const activeModule: Module | undefined = modules.some((m) => m.key === module)
-    ? module
-    : modules[0]?.key
-  const activeTab: RecruitingTab =
-    recruitingTabs.some((t) => t.key === tab) ? tab : (recruitingTabs[0]?.key ?? 'candidates')
+  function navigate(module: Module, tab?: RecruitingTab) {
+    const next = { module, tab: tab ?? route.tab }
+    const path = pathFor(next.module, next.tab)
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setRoute(next)
+  }
 
   function handleOpenNote(applicantId: number, noteId: number) {
-    setModule('recruiting')
-    setTab('candidates')
+    navigate('recruiting', 'candidates')
     setOpenNote({ applicantId, noteId })
   }
 
@@ -85,7 +126,7 @@ export default function App() {
         <div className="flex min-w-0 items-center gap-4 sm:gap-6">
           <button
             type="button"
-            onClick={() => modules[0] && setModule(modules[0].key)}
+            onClick={() => modules[0] && navigate(modules[0].key)}
             className="shrink-0 text-xl font-semibold tracking-tight sm:text-2xl"
           >
             Gatekeeper
@@ -95,7 +136,7 @@ export default function App() {
               <button
                 key={m.key}
                 type="button"
-                onClick={() => setModule(m.key)}
+                onClick={() => navigate(m.key)}
                 className={cn(
                   'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                   activeModule === m.key
@@ -121,7 +162,7 @@ export default function App() {
       </header>
 
       {activeModule === 'recruiting' && recruitingTabs.length > 0 ? (
-        <Tabs value={activeTab} onValueChange={(v) => setTab(v as RecruitingTab)} className="mt-6">
+        <Tabs value={activeTab} onValueChange={(v) => navigate('recruiting', v as RecruitingTab)} className="mt-6">
           <TabsList className="max-w-full overflow-x-auto">
             {recruitingTabs.map((t) => (
               <TabsTrigger key={t.key} value={t.key}>

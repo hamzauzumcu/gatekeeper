@@ -11,6 +11,8 @@ export const CANDIDATE_EVENT_TYPES = [
   'pipeline_status_changed',
   'note_added',
   'note_deleted',
+  'scorecard_submitted',
+  'scorecard_updated',
 ] as const
 
 export type CandidateEventType = (typeof CANDIDATE_EVENT_TYPES)[number]

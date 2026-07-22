@@ -19,6 +19,10 @@ export type CandidateListItem = {
   fit_status: string | null
   notes_count: number
   ai_score: number | null
+  // Interview scorecard final score of the latest application (denormalized
+  // cache, migration 0024). NULL = no submissions; complete = 0 means partial.
+  interview_score: number | null
+  interview_score_complete: number
   extra_answers?: Record<string, string | null>
 }
 
@@ -36,6 +40,13 @@ export type CandidateApplication = {
   resume_parse_version: number
   ai_score: number | null
   ai_score_reasoning: string | null
+  // Interview scorecard availability for the detail panel: number of active
+  // criteria on the position's template (0 = no scorecard, tab hidden) and how
+  // many interviewers have submitted one.
+  scorecard_criteria_count: number
+  scorecards_count: number
+  interview_score: number | null
+  interview_score_complete: number
 }
 
 export type CandidateDetail = {
@@ -116,6 +127,7 @@ function buildOrderBy(sort: string | undefined, dir: string | undefined, sortNum
     case 'country': expr = 'ap.country'; break
     case 'apply_date': expr = 'latest_submitted_at'; break
     case 'score': expr = 'ai_score'; numeric = true; break
+    case 'interview_score': expr = 'interview_score'; numeric = true; break
     default:
       if (sort.startsWith('q:')) {
         const qId = Number(sort.slice(2))
@@ -232,6 +244,8 @@ export async function listCandidates(
     answerFilters?: AnswerFilter[]
     min_score?: string
     max_score?: string
+    min_interview_score?: string
+    max_interview_score?: string
     sort?: string
     dir?: string
     sortNumeric?: boolean
@@ -322,6 +336,20 @@ export async function listCandidates(
     bindings.push(maxScore)
   }
 
+  const interviewScoreSubq = `(SELECT a_is.interview_score FROM applications a_is WHERE a_is.applicant_id = ap.id ORDER BY a_is.submitted_at DESC LIMIT 1)`
+  const minInterviewScore =
+    opts.min_interview_score !== undefined && opts.min_interview_score !== '' ? Number(opts.min_interview_score) : null
+  const maxInterviewScore =
+    opts.max_interview_score !== undefined && opts.max_interview_score !== '' ? Number(opts.max_interview_score) : null
+  if (minInterviewScore !== null && !isNaN(minInterviewScore)) {
+    conditions.push(`${interviewScoreSubq} >= ?${++idx}`)
+    bindings.push(minInterviewScore)
+  }
+  if (maxInterviewScore !== null && !isNaN(maxInterviewScore)) {
+    conditions.push(`${interviewScoreSubq} <= ?${++idx}`)
+    bindings.push(maxInterviewScore)
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const extraColSelects = extraCols
@@ -365,7 +393,13 @@ export async function listCandidates(
             ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id,
            (SELECT a_sc.ai_score FROM applications a_sc
             WHERE a_sc.applicant_id = ap.id
-            ORDER BY a_sc.submitted_at DESC LIMIT 1) AS ai_score${extraCols.length ? `,\n           ${extraColSelects}` : ''}
+            ORDER BY a_sc.submitted_at DESC LIMIT 1) AS ai_score,
+           (SELECT a_is.interview_score FROM applications a_is
+            WHERE a_is.applicant_id = ap.id
+            ORDER BY a_is.submitted_at DESC LIMIT 1) AS interview_score,
+           (SELECT a_is.interview_score_complete FROM applications a_is
+            WHERE a_is.applicant_id = ap.id
+            ORDER BY a_is.submitted_at DESC LIMIT 1) AS interview_score_complete${extraCols.length ? `,\n           ${extraColSelects}` : ''}
     FROM applicants ap
     LEFT JOIN applications a ON a.applicant_id = ap.id
     LEFT JOIN job_positions p ON p.id = a.position_id
@@ -645,7 +679,12 @@ export async function getCandidate(
       `SELECT a.id, a.submitted_at, a.status, a.resume_url, a.cover_letter,
               a.resume_parsed, a.resume_parse_version,
               a.ai_score, a.ai_score_reasoning,
-              p.title AS position_title
+              a.interview_score, a.interview_score_complete,
+              p.title AS position_title,
+              (SELECT count(*) FROM scorecard_criteria sc
+                WHERE sc.position_id = a.position_id AND sc.archived_at IS NULL) AS scorecard_criteria_count,
+              (SELECT count(*) FROM interview_scorecards isc
+                WHERE isc.application_id = a.id) AS scorecards_count
        FROM applications a
        LEFT JOIN job_positions p ON p.id = a.position_id
        WHERE a.applicant_id = ?

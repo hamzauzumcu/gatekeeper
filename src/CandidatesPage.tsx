@@ -3,8 +3,15 @@ import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
-  Image as ImageIcon, History, Clock, ArrowRight, Link2,
+  Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList,
 } from 'lucide-react'
+import {
+  fetchApplicationScorecard,
+  saveInterviewScorecard,
+  SCORE_LABELS,
+  SCORECARD_CATEGORY_LABELS,
+  type ApplicationScorecard,
+} from './lib/scorecards'
 import {
   fetchCandidates,
   fetchCandidate,
@@ -18,8 +25,12 @@ import {
   saveSort,
   type SortState,
   BASE_COLUMNS,
+  EMPTY_FILTERS,
+  AI_SCORE_TOOLTIP,
+  INTERVIEW_SCORE_TOOLTIP,
   loadHiddenBaseColumns,
   saveHiddenBaseColumns,
+  loadDefaultHiddenBaseColumns,
   formatDate,
   formatRelativeTime,
   formatSalary,
@@ -132,8 +143,42 @@ function ScoreBadge({ score }: { score: number | null | undefined }) {
         ? 'bg-amber-50 text-amber-700 border-amber-200'
         : 'bg-red-50 text-red-700 border-red-200'
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls}`}>
+    <span
+      title={AI_SCORE_TOOLTIP}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls}`}
+    >
+      <Sparkles className="size-3 opacity-60" />
       {score}
+    </span>
+  )
+}
+
+// Interview scorecard score badge — deliberately styled apart from the AI
+// ScoreBadge (clipboard icon, two decimals, dashed border while partial) so
+// the two 0-100 numbers can't be confused at a glance.
+function InterviewScoreBadge({
+  score,
+  complete,
+}: {
+  score: number | null | undefined
+  complete?: boolean
+}) {
+  if (score == null) return <span className="text-muted-foreground">—</span>
+  const cls =
+    score >= 75
+      ? 'bg-green-50 text-green-700 border-green-300'
+      : score >= 50
+        ? 'bg-amber-50 text-amber-700 border-amber-300'
+        : 'bg-red-50 text-red-700 border-red-300'
+  const partial = complete === false
+  return (
+    <span
+      title={partial ? `${INTERVIEW_SCORE_TOOLTIP} Partial — some criteria are not assessed yet.` : INTERVIEW_SCORE_TOOLTIP}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls} ${partial ? 'border-dashed' : ''}`}
+    >
+      <ClipboardList className="size-3 opacity-60" />
+      {score.toFixed(2)}
+      {partial && <span aria-hidden>*</span>}
     </span>
   )
 }
@@ -276,7 +321,8 @@ const FIXED_FILTER_KINDS = [
   { key: 'country', label: 'Country' },
   { key: 'position', label: 'Position' },
   { key: 'status', label: 'Status' },
-  { key: 'score', label: 'Score' },
+  { key: 'score', label: 'AI Score' },
+  { key: 'interview_score', label: 'Scorecard Score' },
 ] as const
 
 // Shared checkbox list used inside multi-value filter chips
@@ -824,6 +870,7 @@ function SortHeader({
   sort,
   onSort,
   className,
+  tooltip,
   children,
 }: {
   label: string
@@ -832,6 +879,8 @@ function SortHeader({
   sort: SortState | null
   onSort: (key: string, numeric: boolean) => void
   className?: string
+  // Optional hover explanation; falls back to the generic sort hint.
+  tooltip?: string
   children?: ReactNode
 }) {
   const active = sort?.key === sortKey
@@ -841,7 +890,7 @@ function SortHeader({
         type="button"
         onClick={() => onSort(sortKey, numeric)}
         className="group inline-flex items-center gap-1 transition-colors hover:text-foreground"
-        title={`Sort by ${label}`}
+        title={tooltip ?? `Sort by ${label}`}
       >
         {children ?? label}
         {active ? (
@@ -893,6 +942,7 @@ export default function CandidatesPage({
     if (f.position) s.add('position')
     if (f.fit_statuses.length) s.add('status')
     if (f.min_score || f.max_score) s.add('score')
+    if (f.min_interview_score || f.max_interview_score) s.add('interview_score')
     return s
   })
   // Id of the chip whose editor popover is currently open (only one at a time).
@@ -1087,7 +1137,7 @@ export default function CandidatesPage({
   }
 
   function clearFilters() {
-    const cleared: ActiveFilters = { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
+    const cleared: ActiveFilters = { ...EMPTY_FILTERS }
     setFilters(cleared)
     saveFilters(cleared)
     setShownKinds(new Set())
@@ -1176,8 +1226,11 @@ export default function CandidatesPage({
   }
 
   function resetBaseColumns() {
-    setHiddenBaseColumns([])
-    saveHiddenBaseColumns([])
+    // "Reset" returns to the default view, which keeps the opt-in columns
+    // (Scorecard Score) hidden rather than showing everything.
+    const defaults = loadDefaultHiddenBaseColumns()
+    setHiddenBaseColumns(defaults)
+    saveHiddenBaseColumns(defaults)
   }
 
   // Show a fixed-filter chip and immediately open its editor so the user can pick a value.
@@ -1195,6 +1248,11 @@ export default function CandidatesPage({
     else if (key === 'status') updateFilter('fit_statuses', [])
     else if (key === 'score') {
       const next = { ...filters, min_score: '', max_score: '' }
+      setFilters(next)
+      saveFilters(next)
+    }
+    else if (key === 'interview_score') {
+      const next = { ...filters, min_interview_score: '', max_interview_score: '' }
       setFilters(next)
       saveFilters(next)
     }
@@ -1421,7 +1479,8 @@ export default function CandidatesPage({
     (filters.position ? 1 : 0) +
     (filters.fit_statuses.length > 0 ? 1 : 0) +
     filters.answerFilters.length +
-    (filters.min_score || filters.max_score ? 1 : 0)
+    (filters.min_score || filters.max_score ? 1 : 0) +
+    (filters.min_interview_score || filters.max_interview_score ? 1 : 0)
 
   const allSelected = candidates.length > 0 && selectedIds.size === candidates.length
   const someSelected = selectedIds.size > 0 && !allSelected
@@ -1433,7 +1492,7 @@ export default function CandidatesPage({
     .map((id) => questionColumns.find((q) => q.id === id))
     .filter(Boolean) as QuestionColumn[]
 
-  const totalCols = 9 - hiddenBaseColumns.length + visibleQuestions.length
+  const totalCols = 10 - hiddenBaseColumns.length + visibleQuestions.length
 
   return (
     <Card>
@@ -1671,7 +1730,7 @@ export default function CandidatesPage({
               id="score"
               openChip={openChip}
               setOpenChip={setOpenChip}
-              label="Score"
+              label="AI Score"
               summary={(filters.min_score || filters.max_score) ? `${filters.min_score || '0'}–${filters.max_score || '100'}` : null}
               onRemove={() => removeFilterKind('score')}
             >
@@ -1694,6 +1753,40 @@ export default function CandidatesPage({
                   placeholder="max"
                   value={filters.max_score}
                   onChange={(e) => updateFilter('max_score', e.target.value)}
+                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                />
+              </div>
+            </FilterChip>
+          )}
+
+          {shownKinds.has('interview_score') && (
+            <FilterChip
+              id="interview_score"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Scorecard Score"
+              summary={(filters.min_interview_score || filters.max_interview_score) ? `${filters.min_interview_score || '0'}–${filters.max_interview_score || '100'}` : null}
+              onRemove={() => removeFilterKind('interview_score')}
+            >
+              <div className="flex items-center gap-1.5 p-1.5">
+                <ClipboardList className="size-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder="min"
+                  value={filters.min_interview_score}
+                  onChange={(e) => updateFilter('min_interview_score', e.target.value)}
+                  className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                />
+                <span className="text-xs text-muted-foreground">–</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder="max"
+                  value={filters.max_interview_score}
+                  onChange={(e) => updateFilter('max_interview_score', e.target.value)}
                   className="h-8 w-16 rounded-md border border-input bg-background px-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 />
               </div>
@@ -1781,10 +1874,18 @@ export default function CandidatesPage({
               {canSalary && isBaseVisible('salary') && <TableHead>Salary Expectation</TableHead>}
               {isBaseVisible('status') && <TableHead>Status</TableHead>}
               {isBaseVisible('score') && (
-                <SortHeader label="Score" sortKey="score" numeric sort={sort} onSort={toggleSort} className="w-20 text-center">
+                <SortHeader label="AI Score" sortKey="score" numeric sort={sort} onSort={toggleSort} className="w-20 text-center" tooltip={AI_SCORE_TOOLTIP}>
                   <span className="inline-flex items-center gap-1">
                     <Sparkles className="size-3 text-muted-foreground" />
-                    Score
+                    AI Score
+                  </span>
+                </SortHeader>
+              )}
+              {isBaseVisible('interview_score') && (
+                <SortHeader label="Scorecard Score" sortKey="interview_score" numeric sort={sort} onSort={toggleSort} className="w-24 text-center" tooltip={INTERVIEW_SCORE_TOOLTIP}>
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <ClipboardList className="size-3 text-muted-foreground" />
+                    Scorecard
                   </span>
                 </SortHeader>
               )}
@@ -1895,6 +1996,14 @@ export default function CandidatesPage({
                       {isBaseVisible('score') && (
                       <TableCell className="text-center">
                         <ScoreBadge score={cand.ai_score} />
+                      </TableCell>
+                      )}
+                      {isBaseVisible('interview_score') && (
+                      <TableCell className="text-center">
+                        <InterviewScoreBadge
+                          score={cand.interview_score}
+                          complete={cand.interview_score_complete === 1}
+                        />
                       </TableCell>
                       )}
                       {isBaseVisible('apply_date') && (
@@ -2358,7 +2467,15 @@ function PipelineBoard({
                       >
                         <div className="flex items-start justify-between gap-2">
                           <span className="min-w-0 flex-1 truncate text-sm font-medium">{c.full_name ?? '—'}</span>
-                          <ScoreBadge score={c.ai_score} />
+                          <span className="flex shrink-0 items-center gap-1">
+                            {c.ai_score != null && <ScoreBadge score={c.ai_score} />}
+                            {c.interview_score != null && (
+                              <InterviewScoreBadge
+                                score={c.interview_score}
+                                complete={c.interview_score_complete === 1}
+                              />
+                            )}
+                          </span>
                         </div>
                         {c.positions && (
                           <div className="mt-0.5 truncate text-xs text-muted-foreground" title={c.positions}>
@@ -2520,6 +2637,24 @@ function CandidateDetailView({
   // while it's the active tab (e.g. a fit-status change from the bottom bar).
   const [historyVersion, setHistoryVersion] = useState(0)
 
+  // Applications whose position has an interview scorecard configured. The
+  // Scorecard tab only exists when there is at least one; with several, a
+  // selector picks which application to score.
+  const scorecardApps = applications.filter((a) => a.scorecard_criteria_count > 0)
+  const totalScorecards = scorecardApps.reduce((s, a) => s + a.scorecards_count, 0)
+  const [scorecardAppId, setScorecardAppId] = useState<number | null>(scorecardApps[0]?.id ?? null)
+  useEffect(() => {
+    setScorecardAppId(applications.find((a) => a.scorecard_criteria_count > 0)?.id ?? null)
+  }, [applicant.id, applications])
+  const scorecardApp = scorecardApps.find((a) => a.id === scorecardAppId) ?? scorecardApps[0] ?? null
+
+  // Navigating to a candidate without a scorecard while the Scorecard tab is
+  // active would leave an empty pane — fall back to Applications.
+  useEffect(() => {
+    if (activeTab === 'scorecard' && scorecardApps.length === 0) onTabChange('applications')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, scorecardApps.length])
+
   function handleFitClick(status: string) {
     const next = fitStatus === status ? null : status
     setFitStatus(next)
@@ -2662,6 +2797,17 @@ function CandidateDetailView({
               </Badge>
             )}
           </TabsTrigger>
+          {scorecardApps.length > 0 && (
+            <TabsTrigger value="scorecard">
+              <ClipboardList className="size-3.5" />
+              Scorecard
+              {totalScorecards > 0 && (
+                <Badge variant="secondary" className="ml-1 px-1.5 text-xs">
+                  {totalScorecards}
+                </Badge>
+              )}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="history">
             <History className="size-3.5" />
             History
@@ -2677,6 +2823,12 @@ function CandidateDetailView({
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{app.position_title ?? 'Position'}</span>
                       {app.ai_score != null && <ScoreBadge score={app.ai_score} />}
+                      {app.interview_score != null && (
+                        <InterviewScoreBadge
+                          score={app.interview_score}
+                          complete={app.interview_score_complete === 1}
+                        />
+                      )}
                     </div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
                       {formatDate(app.submitted_at)}
@@ -2901,6 +3053,35 @@ function CandidateDetailView({
           <NotesSection applicantId={applicant.id} candidateName={applicant.full_name} candidateEmail={applicant.email} currentUser={currentUser} onNoteAdded={onNoteAdded} highlightNoteId={highlightNoteId} onHighlightHandled={onHighlightHandled} />
         </TabsContent>
 
+        {scorecardApp && (
+          <TabsContent value="scorecard" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
+            <div className="space-y-4">
+              {scorecardApps.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-muted-foreground">Application:</label>
+                  <select
+                    value={scorecardApp.id}
+                    onChange={(e) => setScorecardAppId(Number(e.target.value))}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    {scorecardApps.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.position_title ?? 'Position'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <ScorecardSection
+                key={scorecardApp.id}
+                applicationId={scorecardApp.id}
+                currentUser={currentUser}
+                onSubmitted={() => setHistoryVersion((v) => v + 1)}
+              />
+            </div>
+          </TabsContent>
+        )}
+
         <TabsContent value="history" className="mt-0 flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
           <HistorySection applicantId={applicant.id} refreshKey={historyVersion} />
         </TabsContent>
@@ -3106,6 +3287,269 @@ function OutreachEmailDialog({
 // Candidate timeline: status changes and note add/delete, newest first.
 // Refetches when refreshKey changes (an action happened while this tab was open)
 // and naturally on mount when the tab is reopened.
+// ── Interview scorecard tab ────────────────────────────────────────────────
+
+// Segmented 1-5 / N/A picker for one criterion. Clicking the active score
+// again clears it back to N/A.
+function ScorePicker({
+  value,
+  onChange,
+}: {
+  value: number | null
+  onChange: (v: number | null) => void
+}) {
+  const base =
+    'flex h-8 items-center justify-center rounded-md border text-sm font-medium transition-colors'
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          title={SCORE_LABELS[n]}
+          onClick={() => onChange(value === n ? null : n)}
+          className={`${base} w-8 ${
+            value === n
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-input hover:bg-accent'
+          }`}
+        >
+          {n}
+        </button>
+      ))}
+      <button
+        type="button"
+        title="Not observed"
+        onClick={() => onChange(null)}
+        className={`${base} px-2 text-xs ${
+          value === null
+            ? 'border-muted-foreground/40 bg-muted text-foreground'
+            : 'border-input text-muted-foreground hover:bg-accent'
+        }`}
+      >
+        N/A
+      </button>
+    </div>
+  )
+}
+
+// Scorecard tab body for one application: the caller's editable scorecard on
+// top, then the all-interviewers matrix with the offer-stage aggregate.
+function ScorecardSection({
+  applicationId,
+  currentUser,
+  onSubmitted,
+}: {
+  applicationId: number
+  currentUser: User
+  onSubmitted: () => void
+}) {
+  const [data, setData] = useState<ApplicationScorecard | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // criterion_id -> 1-5; missing key = N/A. Baseline is the saved form of the
+  // caller's submission, for dirty-checking.
+  const [draft, setDraft] = useState<Record<number, number>>({})
+  const [baseline, setBaseline] = useState('{}')
+  const [saving, setSaving] = useState(false)
+  const [savedFlag, setSavedFlag] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setData(null)
+    setLoadError(null)
+    fetchApplicationScorecard(applicationId)
+      .then((sc) => {
+        if (cancelled) return
+        setData(sc)
+        const mine = sc.submissions.find((s) => s.interviewer === currentUser.username)
+        const init = mine ? { ...mine.scores } : {}
+        setDraft(init)
+        setBaseline(JSON.stringify(init))
+      })
+      .catch((e) => {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Failed to load scorecard')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [applicationId, currentUser.username])
+
+  if (loadError) return <p className="py-10 text-center text-sm text-destructive">{loadError}</p>
+  if (!data) return <div className="py-10 text-center text-sm text-muted-foreground">Loading scorecard…</div>
+
+  const mine = data.submissions.find((s) => s.interviewer === currentUser.username)
+  const scoredCount = Object.keys(draft).length
+  const isDirty = JSON.stringify(draft) !== baseline
+
+  function setScore(criterionId: number, v: number | null) {
+    setDraft((d) => {
+      const next = { ...d }
+      if (v === null) delete next[criterionId]
+      else next[criterionId] = v
+      return next
+    })
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const fresh = await saveInterviewScorecard(applicationId, draft)
+      setData(fresh)
+      const savedMine = fresh.submissions.find((s) => s.interviewer === currentUser.username)
+      const init = savedMine ? { ...savedMine.scores } : {}
+      setDraft(init)
+      setBaseline(JSON.stringify(init))
+      setSavedFlag(true)
+      setTimeout(() => setSavedFlag(false), 2000)
+      onSubmitted()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fmt = (n: number) => n.toFixed(2)
+
+  return (
+    <div className="space-y-6">
+      {/* Own scorecard form */}
+      <div className="rounded-xl border">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold">Your scorecard</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Score only what you observed — leave the rest N/A.
+              {mine && <> Last saved {formatRelativeTime(mine.updated_at)} ago.</>}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {scoredCount}/{data.criteria.length} scored
+            </span>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || !isDirty || scoredCount === 0}
+            >
+              {saving ? 'Saving…' : savedFlag ? 'Saved!' : mine ? 'Update Scorecard' : 'Submit Scorecard'}
+            </Button>
+          </div>
+        </div>
+        <div className="space-y-4 p-4">
+          {(['hard', 'soft'] as const).map((cat) => {
+            const rows = data.criteria.filter((c) => c.category === cat)
+            if (rows.length === 0) return null
+            return (
+              <div key={cat} className="space-y-1">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {SCORECARD_CATEGORY_LABELS[cat]}
+                </div>
+                <div className="divide-y">
+                  {rows.map((c) => (
+                    <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                      <div className="min-w-0 flex-1 basis-52">
+                        <div className="text-sm font-medium">
+                          {c.name}{' '}
+                          <span className="text-xs font-normal text-muted-foreground">({c.weight}%)</span>
+                        </div>
+                        {c.description && (
+                          <div className="mt-0.5 text-xs leading-snug text-muted-foreground">{c.description}</div>
+                        )}
+                      </div>
+                      <ScorePicker value={draft[c.id] ?? null} onChange={(v) => setScore(c.id, v)} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+          {saveError && <p className="text-xs text-destructive">{saveError}</p>}
+        </div>
+      </div>
+
+      {/* Aggregate matrix — the offer-stage view */}
+      {data.submissions.length > 0 && (
+        <div className="rounded-xl border">
+          <div className="border-b bg-muted/40 px-4 py-3">
+            <div className="text-sm font-semibold">
+              Offer decision summary
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {data.submissions.length} scorecard{data.submissions.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Criterion averages exclude N/A. Weighted points = (average / 5) × weight.
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-xs text-muted-foreground">
+                  <th className="px-4 py-2 text-left font-medium">Criterion</th>
+                  {data.submissions.map((s) => (
+                    <th key={s.id} className="px-2 py-2 text-center font-medium" title={s.interviewer_name}>
+                      {getInitials(s.interviewer_name)}
+                    </th>
+                  ))}
+                  <th className="px-2 py-2 text-right font-medium">Avg</th>
+                  <th className="px-2 py-2 text-right font-medium">Weight</th>
+                  <th className="px-4 py-2 text-right font-medium">Points</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {data.criteria.map((c) => {
+                  const agg = data.aggregate.per_criterion.find((p) => p.criterion_id === c.id)
+                  return (
+                    <tr key={c.id}>
+                      <td className="px-4 py-2">{c.name}</td>
+                      {data.submissions.map((s) => (
+                        <td key={s.id} className="px-2 py-2 text-center tabular-nums">
+                          {s.scores[c.id] ?? <span className="text-muted-foreground/50">—</span>}
+                        </td>
+                      ))}
+                      <td className="px-2 py-2 text-right tabular-nums">
+                        {agg?.average != null ? (
+                          fmt(agg.average)
+                        ) : (
+                          <span className="whitespace-nowrap text-xs text-amber-600">Not assessed</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{c.weight}%</td>
+                      <td className="px-4 py-2 text-right tabular-nums">
+                        {agg?.weighted_points != null ? fmt(agg.weighted_points) : <span className="text-muted-foreground/50">—</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t bg-muted/30 font-semibold">
+                  <td className="px-4 py-2.5" colSpan={data.submissions.length + 1}>
+                    Final score
+                  </td>
+                  <td className="px-2 py-2.5 text-right tabular-nums text-muted-foreground">100%</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap">
+                    {data.aggregate.final_score != null ? fmt(data.aggregate.final_score) : '—'} / 100
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          {!data.aggregate.complete && (
+            <p className="border-t px-4 py-2.5 text-xs text-amber-600">
+              Some criteria have no numeric score yet — the final score is partial. Complete the
+              assessment before the offer decision.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function HistorySection({ applicantId, refreshKey }: { applicantId: number; refreshKey: number }) {
   const [events, setEvents] = useState<CandidateEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -3190,6 +3634,24 @@ function renderEventBody(e: CandidateEvent): ReactNode {
           {e.metadata?.excerpt ? <span className="mt-0.5 block text-xs text-muted-foreground line-through">“{e.metadata.excerpt}”</span> : null}
         </>
       )
+    case 'scorecard_submitted':
+    case 'scorecard_updated': {
+      const pos = e.metadata?.position_title
+      const n = e.metadata?.scored_criteria
+      return (
+        <>
+          {e.event_type === 'scorecard_submitted'
+            ? 'Submitted an interview scorecard'
+            : 'Updated their interview scorecard'}
+          {pos ? <span className="text-muted-foreground"> ({pos})</span> : null}
+          {typeof n === 'number' ? (
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {n} criteri{n === 1 ? 'on' : 'a'} scored
+            </span>
+          ) : null}
+        </>
+      )
+    }
     default:
       return null
   }

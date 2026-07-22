@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { ChevronDown, Sparkles, TriangleAlert } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { ArrowDown, ArrowUp, ChevronDown, ClipboardList, Plus, Sparkles, X } from 'lucide-react'
+import {
+  fetchScorecards,
+  saveScorecard,
+  EXAMPLE_SCORECARD,
+  SCORECARD_CATEGORY_LABELS,
+  type PositionScorecard,
+  type ScorecardCategory,
+  type ScorecardCriterion,
+} from './lib/scorecards'
 import {
   fetchScoringPrompts,
   saveScoringPrompt,
@@ -13,7 +23,6 @@ import {
   fetchSyncStatus,
   stopSyncJob,
   resetSyncJob,
-  clearData,
   fetchDailyProgress,
   saveDailyTarget,
   type DailyProgress,
@@ -101,6 +110,42 @@ Evaluate the candidate's CV, cover letter, and application form answers. Score t
 4. Overall Profile (0–15 pts): University details matter — note which university the candidate attended, its reputation/ranking, the specific degree and field, and graduation year. Beyond education, weigh career trajectory, communication quality, and overall fit.
 
 Return ONLY valid JSON: {"score": <integer 0-100>, "reasoning": "<2-3 sentence explanation of the score>"}`
+}
+
+// Card that acts as an accordion: only the title is shown until the header is
+// clicked. Starts collapsed so the settings page stays scannable.
+function CollapsibleCard({
+  title,
+  description,
+  children,
+}: {
+  title: ReactNode
+  description?: ReactNode
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card className={open ? undefined : 'gap-0'}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-start justify-between gap-4 px-4 text-left sm:px-6"
+      >
+        <div className="space-y-2">
+          <CardTitle className="flex items-center gap-2">{title}</CardTitle>
+          {open && description && (
+            <p className="text-sm text-muted-foreground">{description}</p>
+          )}
+        </div>
+        <ChevronDown
+          className={`mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && <CardContent>{children}</CardContent>}
+    </Card>
+  )
 }
 
 function PromptCard({
@@ -242,6 +287,377 @@ function PromptCard({
         </div>
       )}
     </div>
+  )
+}
+
+// ── Interview scorecards ───────────────────────────────────────────────────
+
+// Editor row state. `key` is a stable local identity for React lists (new rows
+// have no DB id yet); `weight` stays a string so the input can be temporarily
+// empty/invalid while typing.
+type DraftCriterion = {
+  key: number
+  id?: number
+  category: ScorecardCategory
+  name: string
+  description: string
+  weight: string
+}
+
+let draftKeySeq = 1
+
+function toDrafts(criteria: ScorecardCriterion[]): DraftCriterion[] {
+  return criteria.map((c) => ({
+    key: draftKeySeq++,
+    id: c.id,
+    category: c.category,
+    name: c.name,
+    description: c.description ?? '',
+    weight: String(c.weight),
+  }))
+}
+
+function draftWeight(d: DraftCriterion): number {
+  const n = Number(d.weight)
+  return Number.isInteger(n) && n > 0 ? n : 0
+}
+
+// Serialized form used for dirty-checking a draft against its saved baseline
+// (ignores the local `key`).
+function draftSignature(drafts: DraftCriterion[]): string {
+  return JSON.stringify(
+    drafts.map((d) => [d.id ?? null, d.category, d.name.trim(), d.description.trim(), d.weight.trim()])
+  )
+}
+
+// Per-position scorecard editor: collapsible row (like PromptCard) with the
+// criteria grouped into hard/soft sections and live weight totals.
+function ScorecardEditor({
+  scorecard,
+  copySources,
+  onSaved,
+}: {
+  scorecard: PositionScorecard
+  // Other positions with a configured scorecard, offered as copy sources.
+  copySources: PositionScorecard[]
+  onSaved: (positionId: number, criteria: ScorecardCriterion[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [drafts, setDrafts] = useState<DraftCriterion[]>(() => toDrafts(scorecard.criteria))
+  const [baseline, setBaseline] = useState<string>(() => draftSignature(toDrafts(scorecard.criteria)))
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const total = drafts.reduce((s, d) => s + draftWeight(d), 0)
+  const isDirty = draftSignature(drafts) !== baseline
+  // Client-side mirror of worker validateScorecard; an empty list is a valid
+  // "clear scorecard" save.
+  const problem = (() => {
+    if (drafts.length === 0) return null
+    if (drafts.some((d) => !d.name.trim())) return 'Every criterion needs a name.'
+    if (
+      drafts.some((d) => {
+        const n = Number(d.weight)
+        return !Number.isInteger(n) || n < 1 || n > 100
+      })
+    )
+      return 'Weights must be whole numbers between 1 and 100.'
+    if (total !== 100) return `Weights must sum to 100% — currently ${total}%.`
+    return null
+  })()
+
+  function update(key: number, patch: Partial<DraftCriterion>) {
+    setDrafts((ds) => ds.map((d) => (d.key === key ? { ...d, ...patch } : d)))
+  }
+
+  function remove(key: number) {
+    setDrafts((ds) => ds.filter((d) => d.key !== key))
+  }
+
+  function add(category: ScorecardCategory) {
+    setDrafts((ds) => [...ds, { key: draftKeySeq++, category, name: '', description: '', weight: '' }])
+  }
+
+  // Swap a row with its nearest neighbor in the same category group (rows are
+  // rendered grouped by category, so only relative order within one matters).
+  function move(key: number, dir: -1 | 1) {
+    setDrafts((ds) => {
+      const idx = ds.findIndex((d) => d.key === key)
+      if (idx === -1) return ds
+      let j = idx + dir
+      while (j >= 0 && j < ds.length && ds[j].category !== ds[idx].category) j += dir
+      if (j < 0 || j >= ds.length) return ds
+      const next = [...ds]
+      ;[next[idx], next[j]] = [next[j], next[idx]]
+      return next
+    })
+  }
+
+  function loadTemplate(criteria: { category: ScorecardCategory; name: string; description: string | null; weight: number }[]) {
+    setDrafts(
+      criteria.map((c) => ({
+        key: draftKeySeq++,
+        category: c.category,
+        name: c.name,
+        description: c.description ?? '',
+        weight: String(c.weight),
+      }))
+    )
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const result = await saveScorecard(
+        scorecard.position_id,
+        drafts.map((d) => ({
+          id: d.id,
+          category: d.category,
+          name: d.name.trim(),
+          description: d.description.trim() || null,
+          weight: Number(d.weight),
+        }))
+      )
+      const fresh = toDrafts(result)
+      setDrafts(fresh)
+      setBaseline(draftSignature(fresh))
+      onSaved(scorecard.position_id, result)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function discard() {
+    const fresh = toDrafts(scorecard.criteria)
+    setDrafts(fresh)
+    setError(null)
+  }
+
+  const savedHard = scorecard.criteria.filter((c) => c.category === 'hard').reduce((s, c) => s + c.weight, 0)
+  const savedSoft = scorecard.criteria.filter((c) => c.category === 'soft').reduce((s, c) => s + c.weight, 0)
+
+  return (
+    <div className="rounded-xl border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between bg-muted/40 px-5 py-4 text-left hover:bg-muted/60 transition-colors"
+      >
+        <div>
+          <div className="font-semibold">{scorecard.position_title}</div>
+          {scorecard.criteria.length > 0 ? (
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {scorecard.criteria.length} criteria · Hard {savedHard}% / Soft {savedSoft}%
+            </div>
+          ) : (
+            <div className="mt-0.5 text-xs text-muted-foreground">Not configured</div>
+          )}
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div className="p-5 space-y-5">
+          {(['hard', 'soft'] as const).map((cat) => {
+            const rows = drafts.filter((d) => d.category === cat)
+            const catTotal = rows.reduce((s, d) => s + draftWeight(d), 0)
+            return (
+              <div key={cat} className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {SCORECARD_CATEGORY_LABELS[cat]}
+                  </span>
+                  {rows.length > 0 && (
+                    <span className="text-xs tabular-nums text-muted-foreground">{catTotal}%</span>
+                  )}
+                </div>
+                {rows.map((d, i) => (
+                  <div key={d.key} className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={d.name}
+                      onChange={(e) => update(d.key, { name: e.target.value })}
+                      placeholder="Criterion name"
+                      className="h-8 w-full text-sm sm:w-48 sm:flex-none"
+                    />
+                    <Input
+                      value={d.description}
+                      onChange={(e) => update(d.key, { description: e.target.value })}
+                      placeholder="What it means (optional)"
+                      className="h-8 min-w-40 flex-1 text-sm"
+                    />
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={d.weight}
+                        onChange={(e) => update(d.key, { weight: e.target.value })}
+                        className="h-8 w-16 text-right text-sm tabular-nums"
+                      />
+                      <span className="text-xs text-muted-foreground">%</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => move(d.key, -1)}
+                        disabled={i === 0}
+                        aria-label="Move up"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => move(d.key, 1)}
+                        disabled={i === rows.length - 1}
+                        aria-label="Move down"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => remove(d.key)}
+                        aria-label="Remove criterion"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={() => add(cat)}>
+                  <Plus className="h-3.5 w-3.5" />
+                  Add {cat} skill
+                </Button>
+              </div>
+            )
+          })}
+
+          <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+            <Button size="sm" onClick={handleSave} disabled={saving || !isDirty || problem !== null}>
+              {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Scorecard'}
+            </Button>
+            {drafts.length === 0 && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => loadTemplate(EXAMPLE_SCORECARD)}>
+                  Load Example Template
+                </Button>
+                {copySources.map((s) => (
+                  <Button
+                    key={s.position_id}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => loadTemplate(s.criteria)}
+                  >
+                    Copy from {s.position_title}
+                  </Button>
+                ))}
+              </>
+            )}
+            {isDirty && (
+              <button
+                type="button"
+                onClick={discard}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Discard changes
+              </button>
+            )}
+            <span
+              className={`ml-auto text-xs font-medium tabular-nums ${
+                total === 100
+                  ? 'text-emerald-600'
+                  : drafts.length === 0
+                    ? 'text-muted-foreground'
+                    : 'text-destructive'
+              }`}
+            >
+              Total: {total}%
+            </span>
+          </div>
+
+          {problem && isDirty && <p className="text-xs text-destructive">{problem}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ScorecardsCard() {
+  const [scorecards, setScorecards] = useState<PositionScorecard[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchScorecards()
+      .then(setScorecards)
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load scorecards'))
+  }, [])
+
+  function handleSaved(positionId: number, criteria: ScorecardCriterion[]) {
+    setScorecards((prev) =>
+      prev ? prev.map((s) => (s.position_id === positionId ? { ...s, criteria } : s)) : prev
+    )
+  }
+
+  const configured = scorecards?.filter((s) => s.criteria.length > 0) ?? []
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 text-sky-500" />
+          Interview Scorecards
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Define weighted interview criteria per position — optional. Interviewers score each
+          criterion from 1 to 5 (or N/A) after an interview; scores are aggregated only at the
+          offer stage. Weights must sum to 100%.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error ? (
+          <p className="text-sm text-destructive">{error}</p>
+        ) : scorecards === null ? (
+          <div className="space-y-3">
+            {[1, 2].map((i) => (
+              <div key={i} className="h-14 rounded-xl border bg-muted/30 animate-pulse" />
+            ))}
+          </div>
+        ) : scorecards.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            No positions found. Import candidates first to create positions.
+          </p>
+        ) : (
+          <>
+            <div className="text-xs text-muted-foreground">
+              {configured.length} of {scorecards.length} position{scorecards.length !== 1 ? 's' : ''} have a
+              scorecard configured.
+            </div>
+            <div className="space-y-4">
+              {scorecards.map((s) => (
+                <ScorecardEditor
+                  key={s.position_id}
+                  scorecard={s}
+                  copySources={configured.filter((c) => c.position_id !== s.position_id)}
+                  onSaved={handleSaved}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -700,19 +1116,22 @@ function InterviewPromptCard() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <CollapsibleCard
+      title={
+        <>
           <Sparkles className="size-4" />
           Interview Notes Prompt
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
+        </>
+      }
+      description={
+        <>
           Instructions used when generating interview notes from a candidate's profile.
           The candidate's CV, the position they applied to, the scoring criteria, their
           application answers, and existing notes are added automatically. Output is in Turkish.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
+        </>
+      }
+    >
+      <div className="space-y-3">
         {loading ? (
           <div className="h-48 rounded-xl border bg-muted/30 animate-pulse" />
         ) : (
@@ -740,8 +1159,8 @@ function InterviewPromptCard() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsibleCard>
   )
 }
 
@@ -800,20 +1219,23 @@ function OutreachPromptCard() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+    <CollapsibleCard
+      title={
+        <>
           <Sparkles className="size-4" />
           Outreach Email Prompt
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
+        </>
+      }
+      description={
+        <>
           Instructions used when generating a short outreach email for a candidate.
           The candidate's name, the position they applied to, and roughly when they
           applied are added automatically. The email language follows the candidate's
           country (Turkey → Turkish, otherwise English).
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-3">
+        </>
+      }
+    >
+      <div className="space-y-3">
         {loading ? (
           <div className="h-48 rounded-xl border bg-muted/30 animate-pulse" />
         ) : (
@@ -841,8 +1263,8 @@ function OutreachPromptCard() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsibleCard>
   )
 }
 
@@ -883,28 +1305,6 @@ export default function SettingsPage() {
   function handlePromptResync(positionId: number) {
     setScoresPositionId(positionId)
     scores.start(scoresBatchSize, positionId)
-  }
-
-  // ── Danger Zone state ──────────────────────────────────────────────────
-  const [deleteConfirming, setDeleteConfirming] = useState(false)
-  const [deleteRunning, setDeleteRunning] = useState(false)
-  const [deleteResult, setDeleteResult] = useState<string | null>(null)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-
-  async function handleDeleteAll() {
-    setDeleteRunning(true)
-    setDeleteResult(null)
-    setDeleteError(null)
-    setDeleteConfirming(false)
-    try {
-      const res = await clearData('all_candidates')
-      const n = res.deleted ?? 0
-      setDeleteResult(`All data deleted — ${n} candidate${n !== 1 ? 's' : ''} removed.`)
-    } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : 'Operation failed')
-    } finally {
-      setDeleteRunning(false)
-    }
   }
 
   return (
@@ -955,6 +1355,9 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* Interview Scorecards */}
+      <ScorecardsCard />
+
       {/* Interview Notes Prompt */}
       <InterviewPromptCard />
 
@@ -962,55 +1365,57 @@ export default function SettingsPage() {
       <OutreachPromptCard />
 
       {/* Sync AI Scores */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Sync AI Scores</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <CollapsibleCard
+        title="Sync AI Scores"
+        description={
+          <>
             Run AI scoring for applications that have a configured prompt but haven't been scored yet.
             Saving a new prompt resets all scores for that position so they are re-evaluated. Pick a
             position to re-score only that one — e.g. after editing a single prompt — or leave it on
             "All positions". "Re-score All" forces a full re-sync: every application in the selected
             scope is re-scored, even if its score is already up to date.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <SyncPanel
-            accent="bg-primary"
-            phase={toPhase(scores.state, scores.starting)}
-            total={scores.state?.total ?? 0}
-            processed={scores.state?.processed ?? 0}
-            failed={scores.state?.failed ?? 0}
-            errors={scores.state?.errors ?? []}
-            fatalError={scores.state?.fatalError ?? scores.error}
-            batchSize={scoresBatchSize}
-            onBatchSizeChange={setScoresBatchSize}
-            onStart={() => scores.start(scoresBatchSize, scoresPositionId)}
-            onForceStart={() => scores.start(scoresBatchSize, scoresPositionId, true)}
-            onStop={scores.stop}
-            onReset={scores.reset}
-            disabled={promptedCount === 0}
-            disabledHint="Save at least one prompt first."
-            itemLabel="scored"
-            positionOptions={promptedPositions.map((p) => ({ id: p.id, title: p.title }))}
-            selectedPositionId={scoresPositionId}
-            onPositionChange={setScoresPositionId}
-          />
-        </CardContent>
-      </Card>
+          </>
+        }
+      >
+        <SyncPanel
+          accent="bg-primary"
+          phase={toPhase(scores.state, scores.starting)}
+          total={scores.state?.total ?? 0}
+          processed={scores.state?.processed ?? 0}
+          failed={scores.state?.failed ?? 0}
+          errors={scores.state?.errors ?? []}
+          fatalError={scores.state?.fatalError ?? scores.error}
+          batchSize={scoresBatchSize}
+          onBatchSizeChange={setScoresBatchSize}
+          onStart={() => scores.start(scoresBatchSize, scoresPositionId)}
+          onForceStart={() => scores.start(scoresBatchSize, scoresPositionId, true)}
+          onStop={scores.stop}
+          onReset={scores.reset}
+          disabled={promptedCount === 0}
+          disabledHint="Save at least one prompt first."
+          itemLabel="scored"
+          positionOptions={promptedPositions.map((p) => ({ id: p.id, title: p.title }))}
+          selectedPositionId={scoresPositionId}
+          onPositionChange={setScoresPositionId}
+        />
+      </CollapsibleCard>
 
       {/* Candidate Enhancer AI */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <CollapsibleCard
+        title={
+          <>
             <Sparkles className="h-4 w-4 text-violet-500" />
             Candidate Enhancer AI
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
+          </>
+        }
+        description={
+          <>
             Parses uploaded CVs with AI and extracts structured data. Run manually to process new or
             unprocessed CVs without re-importing.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </>
+        }
+      >
+        <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {['Summary', 'Experience (yrs)', 'Seniority', 'Location', 'University', 'Field of Study', 'GPA', 'Current Company', 'Current Title', 'Avg Tenure (mo)', 'Work History', 'Skills', 'Languages', 'Links'].map((label) => (
               <span
@@ -1037,50 +1442,9 @@ export default function SettingsPage() {
             onReset={cv.reset}
             itemLabel="parsed"
           />
-        </CardContent>
-      </Card>
+        </div>
+      </CollapsibleCard>
 
-      {/* Danger Zone */}
-      <Card className="border-destructive/40">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-destructive">
-            <TriangleAlert className="h-4 w-4" />
-            Danger Zone
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Permanently deletes all candidates, applications, answers, and notes. This cannot be undone.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {deleteConfirming ? (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Are you sure?</span>
-              <Button size="sm" variant="destructive" onClick={handleDeleteAll}>
-                Yes, delete all
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setDeleteConfirming(false)}>
-                Cancel
-              </Button>
-            </div>
-          ) : (
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={deleteRunning}
-              onClick={() => { setDeleteResult(null); setDeleteError(null); setDeleteConfirming(true) }}
-            >
-              {deleteRunning ? 'Deleting…' : 'Delete All Data'}
-            </Button>
-          )}
-
-          {deleteResult && (
-            <p className="text-sm text-emerald-600 font-medium">{deleteResult}</p>
-          )}
-          {deleteError && (
-            <p className="text-sm text-destructive">{deleteError}</p>
-          )}
-        </CardContent>
-      </Card>
     </div>
   )
 }

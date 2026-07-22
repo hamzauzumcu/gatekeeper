@@ -17,6 +17,10 @@ export type CandidateListItem = {
   fit_status: string | null
   notes_count: number
   ai_score: number | null
+  // Interview scorecard final score of the latest application (server-side
+  // cache). null = no submissions; complete 0 = partial (not all criteria assessed).
+  interview_score: number | null
+  interview_score_complete: number
   extra_answers?: Record<string, string | null>
 }
 
@@ -88,6 +92,12 @@ export type CandidateApplication = {
   resume_parse_version: number
   ai_score: number | null
   ai_score_reasoning: string | null
+  // Interview scorecard availability: active criteria on the position's
+  // template (0 = tab hidden) and submitted interviewer scorecards.
+  scorecard_criteria_count: number
+  scorecards_count: number
+  interview_score: number | null
+  interview_score_complete: number
 }
 
 export type CandidateDetail = {
@@ -182,6 +192,8 @@ export type ActiveFilters = {
   answerFilters: AnswerFilter[]
   min_score: string
   max_score: string
+  min_interview_score: string
+  max_interview_score: string
 }
 
 // Table sort state. `key` is a column identifier: a base column ('name',
@@ -227,12 +239,25 @@ export function loadSavedFilters(): ActiveFilters {
         answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
         min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
         max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
+        min_interview_score: typeof parsed.min_interview_score === 'string' ? parsed.min_interview_score : '',
+        max_interview_score: typeof parsed.max_interview_score === 'string' ? parsed.max_interview_score : '',
       }
     }
   } catch {
     // ignore
   }
-  return { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
+  return { ...EMPTY_FILTERS }
+}
+
+export const EMPTY_FILTERS: ActiveFilters = {
+  countries: [],
+  position: '',
+  fit_statuses: [],
+  answerFilters: [],
+  min_score: '',
+  max_score: '',
+  min_interview_score: '',
+  max_interview_score: '',
 }
 
 export function saveFilters(f: ActiveFilters): void {
@@ -253,26 +278,44 @@ export function saveColumns(cols: number[]): void {
 
 // Default (always-available) table columns that the user can show/hide.
 // Name and the row selector are intentionally omitted — they are always visible.
-export type BaseColumnKey = 'country' | 'position' | 'salary' | 'status' | 'score' | 'apply_date' | 'notes'
+export type BaseColumnKey =
+  | 'country' | 'position' | 'salary' | 'status' | 'score' | 'interview_score' | 'apply_date' | 'notes'
 
 export const BASE_COLUMNS: { key: BaseColumnKey; label: string }[] = [
   { key: 'country', label: 'Country' },
   { key: 'position', label: 'Position' },
   { key: 'salary', label: 'Salary Expectation' },
   { key: 'status', label: 'Status' },
-  { key: 'score', label: 'Score' },
+  { key: 'score', label: 'AI Score' },
+  { key: 'interview_score', label: 'Scorecard Score' },
   { key: 'apply_date', label: 'Apply date' },
   { key: 'notes', label: 'Notes' },
 ]
 
+// Hover explanations for the two score columns — they look alike but come from
+// different sources, so the headers/badges spell it out.
+export const AI_SCORE_TOOLTIP =
+  'AI Score (0–100): automatic CV screening by AI, based on this position’s scoring prompt. Generated before any interview.'
+export const INTERVIEW_SCORE_TOOLTIP =
+  'Scorecard Score (0–100): weighted result of human interview scorecards — criterion averages across interviewers, N/A excluded.'
+
 const HIDDEN_BASE_COLUMN_STORAGE_KEY = 'gk_candidate_hidden_base_columns'
+
+// Columns hidden by default to keep the table uncluttered — they only appear
+// when the user opts in via the column picker. Applies when no explicit
+// visibility preference has been stored yet, and when resetting columns.
+const DEFAULT_HIDDEN_BASE_COLUMNS: BaseColumnKey[] = ['interview_score']
+
+export function loadDefaultHiddenBaseColumns(): BaseColumnKey[] {
+  return [...DEFAULT_HIDDEN_BASE_COLUMNS]
+}
 
 export function loadHiddenBaseColumns(): BaseColumnKey[] {
   try {
     const raw = localStorage.getItem(HIDDEN_BASE_COLUMN_STORAGE_KEY)
     if (raw) return JSON.parse(raw) as BaseColumnKey[]
   } catch {}
-  return []
+  return [...DEFAULT_HIDDEN_BASE_COLUMNS]
 }
 
 export function saveHiddenBaseColumns(keys: BaseColumnKey[]): void {
@@ -315,6 +358,8 @@ export async function fetchCandidates(
   })
   if (filters.min_score) params.set('min_score', filters.min_score)
   if (filters.max_score) params.set('max_score', filters.max_score)
+  if (filters.min_interview_score) params.set('min_interview_score', filters.min_interview_score)
+  if (filters.max_interview_score) params.set('max_interview_score', filters.max_interview_score)
   if (sort) {
     params.set('sort', sort.key)
     params.set('dir', sort.dir)
@@ -564,6 +609,8 @@ export type CandidateEventType =
   | 'pipeline_status_changed'
   | 'note_added'
   | 'note_deleted'
+  | 'scorecard_submitted'
+  | 'scorecard_updated'
 
 export type CandidateEvent = {
   id: number
@@ -572,7 +619,7 @@ export type CandidateEvent = {
   from_value: string | null
   to_value: string | null
   application_id: number | null
-  metadata: { position_title?: string; note_id?: number; excerpt?: string; generated?: boolean } | null
+  metadata: { position_title?: string; note_id?: number; excerpt?: string; generated?: boolean; scored_criteria?: number } | null
   actor: string
   actor_name: string
   created_at: string
@@ -766,6 +813,8 @@ function normalizeFilters(parsed: Record<string, unknown>): ActiveFilters {
     answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
     min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
     max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
+    min_interview_score: typeof parsed.min_interview_score === 'string' ? parsed.min_interview_score : '',
+    max_interview_score: typeof parsed.max_interview_score === 'string' ? parsed.max_interview_score : '',
   }
 }
 
@@ -774,7 +823,7 @@ function rowToSavedFilter(row: SavedFilterRow): SavedFilter {
   try {
     filters = normalizeFilters(JSON.parse(row.filters_json) as Record<string, unknown>)
   } catch {
-    filters = { countries: [], position: '', fit_statuses: [], answerFilters: [], min_score: '', max_score: '' }
+    filters = { ...EMPTY_FILTERS }
   }
   return { id: row.id, name: row.name, filters, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at }
 }
@@ -828,6 +877,7 @@ export function shownKindsForFilters(f: ActiveFilters): string[] {
   if (f.position) kinds.push('position')
   if (f.fit_statuses.length) kinds.push('status')
   if (f.min_score || f.max_score) kinds.push('score')
+  if (f.min_interview_score || f.max_interview_score) kinds.push('interview_score')
   return kinds
 }
 

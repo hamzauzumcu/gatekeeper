@@ -8,6 +8,8 @@ import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
 import { PARSE_VERSION } from './cv-schema'
 import { getPositionsWithPrompts, upsertScoringPrompt, scoreApplication, PENDING_SCORES_FROM_WHERE } from './ai-scorer'
+import { getScorecards, saveScorecard, validateScorecard, type SaveCriterionInput } from './scorecards'
+import { getApplicationScorecard, saveInterviewScorecard, recomputeInterviewScoresForPosition } from './interview-scorecards'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
 import { listUsers, verifyLogin, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
@@ -256,11 +258,13 @@ app.get('/api/candidates', async (c) => {
     .filter((f) => Number.isInteger(f.questionId) && f.op)
   const min_score = c.req.query('min_score') ?? ''
   const max_score = c.req.query('max_score') ?? ''
+  const min_interview_score = c.req.query('min_interview_score') ?? ''
+  const max_interview_score = c.req.query('max_interview_score') ?? ''
   const sort = c.req.query('sort') ?? ''
   const dir = c.req.query('dir') ?? ''
   const sortNumeric = c.req.query('sort_numeric') === '1'
   const canViewSalary = c.get('auth')?.permissions.view_salary ?? false
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, sort, dir, sortNumeric, canViewSalary })
+  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, min_interview_score, max_interview_score, sort, dir, sortNumeric, canViewSalary })
   return c.json({ ok: true, ...data })
 })
 
@@ -629,6 +633,36 @@ app.get('/api/applications/:id/score-history', async (c) => {
     .bind(id)
     .all()
   return c.json({ ok: true, history: results })
+})
+
+// Interview scorecard for an application: active criteria, all interviewer
+// submissions, and the offer-stage aggregate.
+app.get('/api/applications/:id/scorecard', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const scorecard = await getApplicationScorecard(c.env.DB, id)
+  if (!scorecard) return c.json({ ok: false, error: 'application not found' }, 404)
+  return c.json({ ok: true, scorecard })
+})
+
+// Submit or update the caller's interview scorecard for an application.
+// Identity comes from the session — you can only write your own scorecard.
+app.put('/api/applications/:id/scorecard', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
+  const auth = c.get('auth') as Auth
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { scores: Record<string, number | null> }
+  try { body = await c.req.json() } catch { return c.json({ ok: false, error: 'invalid JSON' }, 400) }
+  if (!body.scores || typeof body.scores !== 'object' || Array.isArray(body.scores))
+    return c.json({ ok: false, error: 'scores must be an object' }, 400)
+  try {
+    const scorecard = await saveInterviewScorecard(c.env.DB, id, auth.username, body.scores)
+    return c.json({ ok: true, scorecard })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'save failed' }, 400)
+  }
 })
 
 // Candidate timeline / history — status changes and note add/delete events.
@@ -1024,6 +1058,32 @@ app.put('/api/admin/scoring-prompts/:positionId', async (c) => {
   if (!body.prompt?.trim()) return c.json({ ok: false, error: 'prompt cannot be empty' }, 400)
   await upsertScoringPrompt(c.env.DB, positionId, body.prompt.trim())
   return c.json({ ok: true })
+})
+
+// Interview scorecards — all positions with their criteria (empty = not configured)
+app.get('/api/admin/scorecards', async (c) => {
+  const scorecards = await getScorecards(c.env.DB)
+  return c.json({ ok: true, scorecards })
+})
+
+// Interview scorecards — replace a position's criteria set (empty list clears it)
+app.put('/api/admin/scorecards/:positionId', async (c) => {
+  const positionId = Number(c.req.param('positionId'))
+  if (!Number.isInteger(positionId) || positionId <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { criteria: SaveCriterionInput[] }
+  try { body = await c.req.json() } catch { return c.json({ ok: false, error: 'invalid JSON' }, 400) }
+  if (!Array.isArray(body.criteria)) return c.json({ ok: false, error: 'criteria must be an array' }, 400)
+  const invalid = validateScorecard(body.criteria)
+  if (invalid) return c.json({ ok: false, error: invalid }, 400)
+  try {
+    const criteria = await saveScorecard(c.env.DB, positionId, body.criteria)
+    // Template changes (weights, criteria set, clears) shift every derived
+    // interview score for this position — refresh the cached column.
+    await recomputeInterviewScoresForPosition(c.env.DB, positionId)
+    return c.json({ ok: true, criteria })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'save failed' }, 400)
+  }
 })
 
 // Pending scores — returns application IDs that need scoring
