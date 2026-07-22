@@ -1465,13 +1465,12 @@ export default function CandidatesPage({
   function handleScorecardSaved(sc: ApplicationScorecard) {
     const score = sc.aggregate.final_score
     const complete = sc.aggregate.complete ? 1 : 0
-    setCandidates((prev) =>
-      prev.map((c) =>
-        c.latest_application_id === sc.application_id
-          ? { ...c, interview_score: score, interview_score_complete: complete }
-          : c
-      )
-    )
+    const patch = (c: CandidateListItem) =>
+      c.latest_application_id === sc.application_id
+        ? { ...c, interview_score: score, interview_score_complete: complete }
+        : c
+    setCandidates((prev) => prev.map(patch))
+    setBoardCandidates((prev) => prev.map(patch))
     setSelected((prev) =>
       prev
         ? {
