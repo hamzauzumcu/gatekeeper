@@ -1458,6 +1458,39 @@ export default function CandidatesPage({
     setContextMenu(null)
   }
 
+  // A scorecard was saved in the detail sheet: sync the new aggregate into the
+  // list row (Scorecard Score column / board badge — shown for the latest
+  // application only) and into the open detail so the tab and application
+  // header badges update without a refetch.
+  function handleScorecardSaved(sc: ApplicationScorecard) {
+    const score = sc.aggregate.final_score
+    const complete = sc.aggregate.complete ? 1 : 0
+    setCandidates((prev) =>
+      prev.map((c) =>
+        c.latest_application_id === sc.application_id
+          ? { ...c, interview_score: score, interview_score_complete: complete }
+          : c
+      )
+    )
+    setSelected((prev) =>
+      prev
+        ? {
+            ...prev,
+            applications: prev.applications.map((a) =>
+              a.id === sc.application_id
+                ? {
+                    ...a,
+                    interview_score: score,
+                    interview_score_complete: complete,
+                    scorecards_count: sc.submissions.length,
+                  }
+                : a
+            ),
+          }
+        : prev
+    )
+  }
+
   async function submitQuickNote(candId: number) {
     if (!ctxNote.trim()) return
     setCtxNoteSubmitting(true)
@@ -2225,6 +2258,7 @@ export default function CandidatesPage({
               onStageChange={handleSheetStageChange}
               onNavigate={navigateSheet}
               onNoteAdded={refreshDailyProgress}
+              onScorecardSaved={handleScorecardSaved}
               highlightNoteId={highlightNoteId}
               onHighlightHandled={() => setHighlightNoteId(null)}
               hasPrev={openedIndex > 0}
@@ -2532,6 +2566,7 @@ function CandidateDetailView({
   onStageChange,
   onNavigate,
   onNoteAdded,
+  onScorecardSaved,
   highlightNoteId,
   onHighlightHandled,
   hasPrev,
@@ -2545,6 +2580,9 @@ function CandidateDetailView({
   onStageChange: (appId: number, newStatus: string) => void
   onNavigate: (dir: -1 | 1) => void
   onNoteAdded: () => void
+  // Propagates a saved interview scorecard up so the list row and the open
+  // detail (tab/application badges) reflect the new aggregate immediately.
+  onScorecardSaved: (scorecard: ApplicationScorecard) => void
   highlightNoteId: number | null
   onHighlightHandled: () => void
   hasPrev: boolean
@@ -2643,9 +2681,13 @@ function CandidateDetailView({
   const scorecardApps = applications.filter((a) => a.scorecard_criteria_count > 0)
   const totalScorecards = scorecardApps.reduce((s, a) => s + a.scorecards_count, 0)
   const [scorecardAppId, setScorecardAppId] = useState<number | null>(scorecardApps[0]?.id ?? null)
+  // Reset the application selector only when switching candidates — not on
+  // every applications-array identity change (e.g. the local patch after a
+  // scorecard save), which would kick the user back to the first application.
   useEffect(() => {
     setScorecardAppId(applications.find((a) => a.scorecard_criteria_count > 0)?.id ?? null)
-  }, [applicant.id, applications])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applicant.id])
   const scorecardApp = scorecardApps.find((a) => a.id === scorecardAppId) ?? scorecardApps[0] ?? null
 
   // Navigating to a candidate without a scorecard while the Scorecard tab is
@@ -2801,11 +2843,18 @@ function CandidateDetailView({
             <TabsTrigger value="scorecard">
               <ClipboardList className="size-3.5" />
               Scorecard
-              {totalScorecards > 0 && (
+              {/* Show the aggregated score right on the tab once submissions
+                  exist (asterisk = partial); fall back to the submission count. */}
+              {scorecardApp?.interview_score != null ? (
+                <Badge variant="secondary" className="ml-1 px-1.5 text-xs tabular-nums" title={INTERVIEW_SCORE_TOOLTIP}>
+                  {scorecardApp.interview_score.toFixed(2)}
+                  {scorecardApp.interview_score_complete !== 1 && '*'}
+                </Badge>
+              ) : totalScorecards > 0 ? (
                 <Badge variant="secondary" className="ml-1 px-1.5 text-xs">
                   {totalScorecards}
                 </Badge>
-              )}
+              ) : null}
             </TabsTrigger>
           )}
           <TabsTrigger value="history">
@@ -3076,7 +3125,10 @@ function CandidateDetailView({
                 key={scorecardApp.id}
                 applicationId={scorecardApp.id}
                 currentUser={currentUser}
-                onSubmitted={() => setHistoryVersion((v) => v + 1)}
+                onSubmitted={(sc) => {
+                  setHistoryVersion((v) => v + 1)
+                  onScorecardSaved(sc)
+                }}
               />
             </div>
           </TabsContent>
@@ -3342,7 +3394,9 @@ function ScorecardSection({
 }: {
   applicationId: number
   currentUser: User
-  onSubmitted: () => void
+  // Fired after a successful save with the fresh scorecard state, so the
+  // caller can sync the aggregated score into the list row / detail badges.
+  onSubmitted: (scorecard: ApplicationScorecard) => void
 }) {
   const [data, setData] = useState<ApplicationScorecard | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -3403,7 +3457,7 @@ function ScorecardSection({
       setBaseline(JSON.stringify(init))
       setSavedFlag(true)
       setTimeout(() => setSavedFlag(false), 2000)
-      onSubmitted()
+      onSubmitted(fresh)
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Save failed')
     } finally {
