@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { deepseekChat } from './deepseek'
 import { importApplications, type ImportPayload } from './import'
-import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, updateApplicationStatus, updateApplicationsStageBulk, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget } from './candidates'
+import { listCandidates, getCandidate, getCandidateFilters, getQuestionColumns, getIntakeStats, updateApplicationStatus, updateApplicationsStageBulk, updateApplicantsFitStatus, updateAnswerValue, logActivity, getDailyProgress, getDailyHistory, setDailyTarget, type CandidateFilterOpts } from './candidates'
 import { getCandidateEvents, logCandidateEvents } from './events'
 import { handleTallyWebhook } from './tally-webhook'
 import { parseAndStoreResume } from './cv-parser'
@@ -240,31 +240,48 @@ app.get('/api/candidates/question-columns', async (c) => {
   return c.json({ ok: true, questions })
 })
 
+// Shared query-param parsing for candidate filter sets (list + intake stats).
+function parseCandidateFilters(req: {
+  query: (k: string) => string | undefined
+  queries: (k: string) => string[] | undefined
+}): CandidateFilterOpts {
+  const afQ = (req.queries('af_q') ?? []).map(Number)
+  const afOp = req.queries('af_op') ?? []
+  const afV = req.queries('af_v') ?? []
+  return {
+    q: req.query('q') ?? '',
+    countries: req.queries('country') ?? [],
+    position: req.query('position') ?? '',
+    fit_statuses: req.queries('fit_status') ?? [],
+    answerFilters: afQ
+      .map((questionId, i) => ({ questionId, op: afOp[i] ?? '', value: afV[i] ?? '' }))
+      .filter((f) => Number.isInteger(f.questionId) && f.op),
+    min_score: req.query('min_score') ?? '',
+    max_score: req.query('max_score') ?? '',
+    min_interview_score: req.query('min_interview_score') ?? '',
+    max_interview_score: req.query('max_interview_score') ?? '',
+  }
+}
+
+// Intake stats for the candidates-page banner: today's new CVs, a 7-day
+// arrival series, and how many of today's arrivals match the active filters.
+app.get('/api/candidates/intake-stats', async (c) => {
+  const denied = requirePerm(c, 'view_applications'); if (denied) return denied
+  const stats = await getIntakeStats(c.env.DB, parseCandidateFilters(c.req))
+  return c.json({ ok: true, ...stats })
+})
+
 // Candidate list + search + filter
 app.get('/api/candidates', async (c) => {
   const denied = requirePerm(c, 'view_applications'); if (denied) return denied
-  const q = c.req.query('q') ?? ''
-  const countries = c.req.queries('country') ?? []
-  const position = c.req.query('position') ?? ''
-  const fit_statuses = c.req.queries('fit_status') ?? []
   const limit = Number(c.req.query('limit') ?? '50')
   const offset = Number(c.req.query('offset') ?? '0')
   const extraCols = (c.req.queries('extra_col') ?? []).map(Number).filter((n) => Number.isInteger(n) && n !== 0)
-  const afQ = (c.req.queries('af_q') ?? []).map(Number)
-  const afOp = c.req.queries('af_op') ?? []
-  const afV = c.req.queries('af_v') ?? []
-  const answerFilters = afQ
-    .map((questionId, i) => ({ questionId, op: afOp[i] ?? '', value: afV[i] ?? '' }))
-    .filter((f) => Number.isInteger(f.questionId) && f.op)
-  const min_score = c.req.query('min_score') ?? ''
-  const max_score = c.req.query('max_score') ?? ''
-  const min_interview_score = c.req.query('min_interview_score') ?? ''
-  const max_interview_score = c.req.query('max_interview_score') ?? ''
   const sort = c.req.query('sort') ?? ''
   const dir = c.req.query('dir') ?? ''
   const sortNumeric = c.req.query('sort_numeric') === '1'
   const canViewSalary = c.get('auth')?.permissions.view_salary ?? false
-  const data = await listCandidates(c.env.DB, { q, countries, position, fit_statuses, limit, offset, extraCols, answerFilters, min_score, max_score, min_interview_score, max_interview_score, sort, dir, sortNumeric, canViewSalary })
+  const data = await listCandidates(c.env.DB, { ...parseCandidateFilters(c.req), limit, offset, extraCols, sort, dir, sortNumeric, canViewSalary })
   return c.json({ ok: true, ...data })
 })
 

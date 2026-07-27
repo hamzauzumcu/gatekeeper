@@ -350,19 +350,11 @@ export async function fetchQuestionColumns(): Promise<QuestionColumn[]> {
   return data.questions
 }
 
-export async function fetchCandidates(
-  q: string,
-  filters: ActiveFilters,
-  extraCols: number[],
-  offset = 0,
-  limit = 50,
-  sort: SortState | null = null
-): Promise<{ candidates: CandidateListItem[]; total: number }> {
-  const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
+// Append the ActiveFilters params shared by the list and intake-stats endpoints.
+function appendFilterParams(params: URLSearchParams, filters: ActiveFilters): void {
   filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
   filters.fit_statuses.forEach((s) => params.append('fit_status', s))
-  extraCols.forEach((id) => params.append('extra_col', String(id)))
   filters.answerFilters.forEach((f) => {
     params.append('af_q', String(f.questionId))
     params.append('af_op', f.op)
@@ -372,6 +364,19 @@ export async function fetchCandidates(
   if (filters.max_score) params.set('max_score', filters.max_score)
   if (filters.min_interview_score) params.set('min_interview_score', filters.min_interview_score)
   if (filters.max_interview_score) params.set('max_interview_score', filters.max_interview_score)
+}
+
+export async function fetchCandidates(
+  q: string,
+  filters: ActiveFilters,
+  extraCols: number[],
+  offset = 0,
+  limit = 50,
+  sort: SortState | null = null
+): Promise<{ candidates: CandidateListItem[]; total: number }> {
+  const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
+  appendFilterParams(params, filters)
+  extraCols.forEach((id) => params.append('extra_col', String(id)))
   if (sort) {
     params.set('sort', sort.key)
     params.set('dir', sort.dir)
@@ -383,6 +388,72 @@ export async function fetchCandidates(
     | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch list')
   return { candidates: data.candidates, total: data.total }
+}
+
+// --- Intake banner (today's new CVs) ---------------------------------------
+
+export type IntakeStats = {
+  date: string // server's current UTC date — the banner's reference for "today"
+  today_total: number
+  today_matching: number
+  last7: { date: string; count: number }[]
+}
+
+// Today's arrivals + 7-day series; `today_matching` counts only the arrivals
+// that satisfy the given filters (the list's current segment).
+export async function fetchIntakeStats(filters: ActiveFilters): Promise<IntakeStats> {
+  const params = new URLSearchParams()
+  appendFilterParams(params, filters)
+  const res = await apiFetch(`/api/candidates/intake-stats?${params}`)
+  const data = (await res.json()) as ({ ok: true } & IntakeStats) | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to fetch intake stats')
+  return { date: data.date, today_total: data.today_total, today_matching: data.today_matching, last7: data.last7 }
+}
+
+// Banner dismissal state, kept per browser. `disabled` hides it permanently;
+// `hiddenOn` hides it for that one (server-UTC) date only.
+export type IntakeBannerState = { disabled: boolean; hiddenOn: string | null }
+
+const INTAKE_BANNER_STORAGE_KEY = 'gk_intake_banner'
+const INTAKE_SEEN_STORAGE_KEY = 'gk_intake_last_seen'
+
+export function loadIntakeBannerState(): IntakeBannerState {
+  try {
+    const raw = localStorage.getItem(INTAKE_BANNER_STORAGE_KEY)
+    if (raw) {
+      const p = JSON.parse(raw) as Record<string, unknown>
+      return {
+        disabled: p.disabled === true,
+        hiddenOn: typeof p.hiddenOn === 'string' ? p.hiddenOn : null,
+      }
+    }
+  } catch {}
+  return { disabled: false, hiddenOn: null }
+}
+
+export function hideIntakeBannerForDay(date: string): void {
+  localStorage.setItem(INTAKE_BANNER_STORAGE_KEY, JSON.stringify({ disabled: false, hiddenOn: date }))
+}
+
+export function disableIntakeBanner(): void {
+  localStorage.setItem(INTAKE_BANNER_STORAGE_KEY, JSON.stringify({ disabled: true, hiddenOn: null }))
+}
+
+// How many CVs arrived since this browser last saw the banner today, recording
+// the new count. First sighting of the day (or a fresh browser) returns 0.
+export function takeIntakeDelta(date: string, count: number): number {
+  let prev: { date?: unknown; count?: unknown } | null = null
+  try {
+    const raw = localStorage.getItem(INTAKE_SEEN_STORAGE_KEY)
+    prev = raw ? (JSON.parse(raw) as { date?: unknown; count?: unknown }) : null
+  } catch {}
+  try {
+    localStorage.setItem(INTAKE_SEEN_STORAGE_KEY, JSON.stringify({ date, count }))
+  } catch {}
+  if (prev && prev.date === date && typeof prev.count === 'number' && count > prev.count) {
+    return count - prev.count
+  }
+  return 0
 }
 
 export async function fetchCandidate(id: number): Promise<CandidateDetail> {

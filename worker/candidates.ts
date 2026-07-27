@@ -231,38 +231,32 @@ export async function getQuestionColumns(db: D1Database): Promise<QuestionColumn
   return [...cvVirtual, ...(res.results ?? [])]
 }
 
-export async function listCandidates(
-  db: D1Database,
-  opts: {
-    q?: string
-    countries?: string[]
-    position?: string
-    fit_statuses?: string[]
-    limit?: number
-    offset?: number
-    extraCols?: number[]
-    answerFilters?: AnswerFilter[]
-    min_score?: string
-    max_score?: string
-    min_interview_score?: string
-    max_interview_score?: string
-    sort?: string
-    dir?: string
-    sortNumeric?: boolean
-    canViewSalary?: boolean
-  }
-): Promise<{ candidates: CandidateListItem[]; total: number }> {
-  // Users without the view_salary permission never receive salary figures.
-  const canViewSalary = opts.canViewSalary !== false
+// Filter options shared by the list endpoint and intake stats. Search,
+// pagination, and sorting are list-only concerns and stay in listCandidates.
+export type CandidateFilterOpts = {
+  q?: string
+  countries?: string[]
+  position?: string
+  fit_statuses?: string[]
+  answerFilters?: AnswerFilter[]
+  min_score?: string
+  max_score?: string
+  min_interview_score?: string
+  max_interview_score?: string
+}
+
+// WHERE conditions (over `applicants ap`) + bindings for a candidate filter
+// set. Single source of truth so the intake-stats "matching" count always
+// agrees with what the filtered list would show.
+function buildCandidateConditions(
+  opts: CandidateFilterOpts
+): { conditions: string[]; bindings: (string | number)[] } {
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
   const fit_statuses_raw = opts.fit_statuses ?? []
   const includeNullStatus = fit_statuses_raw.includes('none')
   const fit_statuses = fit_statuses_raw.filter((s) => VALID_FIT_STATUSES.includes(s as typeof VALID_FIT_STATUSES[number]))
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
-  const offset = Math.max(opts.offset ?? 0, 0)
-  const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n !== 0)
   const answerFilters = (opts.answerFilters ?? []).filter(
     (f) => Number.isInteger(f.questionId) && f.questionId !== 0 && (VALID_OPS as readonly string[]).includes(f.op)
   )
@@ -350,11 +344,33 @@ export async function listCandidates(
     bindings.push(maxInterviewScore)
   }
 
+  return { conditions, bindings }
+}
+
+export async function listCandidates(
+  db: D1Database,
+  opts: CandidateFilterOpts & {
+    limit?: number
+    offset?: number
+    extraCols?: number[]
+    sort?: string
+    dir?: string
+    sortNumeric?: boolean
+    canViewSalary?: boolean
+  }
+): Promise<{ candidates: CandidateListItem[]; total: number }> {
+  // Users without the view_salary permission never receive salary figures.
+  const canViewSalary = opts.canViewSalary !== false
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+  const offset = Math.max(opts.offset ?? 0, 0)
+  const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n !== 0)
+
+  const { conditions, bindings } = buildCandidateConditions(opts)
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const extraColSelects = extraCols
     .map((qId) => {
-      // Negatif ID → CV parsed alan subquery
+      // Negative ID → CV-parsed virtual column subquery
       if (qId < 0) {
         const col = CV_COLUMNS.find((c) => c.id === qId)
         if (!col) return null
@@ -431,6 +447,65 @@ export async function listCandidates(
 
   const total = ((countRes.results ?? [])[0] as { total: number } | undefined)?.total ?? 0
   return { candidates, total }
+}
+
+export type IntakeStats = {
+  date: string // server's current UTC date, the client's reference for "today"
+  today_total: number
+  today_matching: number
+  last7: { date: string; count: number }[]
+}
+
+// Intake stats for the candidates-page banner: how many new CVs arrived today,
+// a 7-day arrival series, and how many of today's arrivals match the caller's
+// active filters. "Arrived on a day" = has an application submitted that (UTC)
+// day; dates use date('now') to stay consistent with daily_activity tracking.
+export async function getIntakeStats(
+  db: D1Database,
+  opts: CandidateFilterOpts
+): Promise<IntakeStats> {
+  const { conditions, bindings } = buildCandidateConditions(opts)
+  const arrivedToday = `EXISTS (
+    SELECT 1 FROM applications a_t
+    WHERE a_t.applicant_id = ap.id AND date(a_t.submitted_at) = date('now')
+  )`
+  const totalSql = `SELECT date('now') AS date, count(DISTINCT applicant_id) AS total
+    FROM applications WHERE date(submitted_at) = date('now')`
+  const matchingSql = `SELECT count(*) AS total FROM applicants ap
+    WHERE ${[arrivedToday, ...conditions].join(' AND ')}`
+  const seriesSql = `
+    WITH RECURSIVE series(d) AS (
+      SELECT date('now', '-6 days')
+      UNION ALL
+      SELECT date(d, '+1 day') FROM series WHERE d < date('now')
+    )
+    SELECT series.d AS date, COALESCE(x.count, 0) AS count
+    FROM series
+    LEFT JOIN (
+      SELECT date(submitted_at) AS day, count(DISTINCT applicant_id) AS count
+      FROM applications
+      WHERE date(submitted_at) >= date('now', '-6 days')
+      GROUP BY day
+    ) x ON x.day = series.d
+    ORDER BY series.d`
+
+  const [totalRes, matchingRes, seriesRes] = await db.batch<Record<string, unknown>>([
+    db.prepare(totalSql),
+    bindings.length ? db.prepare(matchingSql).bind(...bindings) : db.prepare(matchingSql),
+    db.prepare(seriesSql),
+  ])
+
+  const totalRow = (totalRes.results ?? [])[0] as { date: string; total: number } | undefined
+  const matchingRow = (matchingRes.results ?? [])[0] as { total: number } | undefined
+  return {
+    date: totalRow?.date ?? '',
+    today_total: totalRow?.total ?? 0,
+    today_matching: matchingRow?.total ?? 0,
+    last7: ((seriesRes.results ?? []) as { date: string; count: number }[]).map((r) => ({
+      date: r.date,
+      count: r.count,
+    })),
+  }
 }
 
 // Hiring-pipeline stages (kanban). Order is defined client-side in

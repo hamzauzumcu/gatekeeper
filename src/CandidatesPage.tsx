@@ -43,6 +43,13 @@ import {
   updateApplicantsFitStatus,
   fetchDailyProgress,
   type DailyProgress,
+  fetchIntakeStats,
+  type IntakeStats,
+  loadIntakeBannerState,
+  type IntakeBannerState,
+  hideIntakeBannerForDay,
+  disableIntakeBanner,
+  takeIntakeDelta,
   fetchNotes,
   addNote,
   updateNote,
@@ -908,6 +915,139 @@ const VIEW_STORAGE_KEY = 'gk_candidate_view'
 // will render across all stage columns.
 const BOARD_LIMIT = 500
 
+// Summary strip above the search row: today's new CVs, a 7-day arrival
+// sparkline, and — since arrival date isn't a filterable field — how many of
+// today's arrivals match the currently active filters. Dismissible for the day
+// or permanently (both stored in localStorage).
+function IntakeBanner({
+  filters,
+  activeFilterCount,
+}: {
+  filters: ActiveFilters
+  activeFilterCount: number
+}) {
+  const [bannerState, setBannerState] = useState<IntakeBannerState>(loadIntakeBannerState)
+  const [stats, setStats] = useState<IntakeStats | null>(null)
+  const [delta, setDelta] = useState(0)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const confirmRef = useRef<HTMLDivElement>(null)
+  // The +N badge compares against the count this browser saw last, so compute
+  // it once per mount — not on every filter-driven refetch.
+  const deltaTakenRef = useRef(false)
+
+  const disabled = bannerState.disabled
+  useEffect(() => {
+    if (disabled) return
+    const t = setTimeout(() => {
+      fetchIntakeStats(filters)
+        .then((s) => {
+          setStats(s)
+          if (!deltaTakenRef.current) {
+            deltaTakenRef.current = true
+            setDelta(takeIntakeDelta(s.date, s.today_total))
+          }
+        })
+        .catch(() => {})
+    }, 250)
+    return () => clearTimeout(t)
+  }, [filters, disabled])
+
+  useEffect(() => {
+    if (!confirmOpen) return
+    function handleClick(e: MouseEvent) {
+      if (confirmRef.current && !confirmRef.current.contains(e.target as Node)) setConfirmOpen(false)
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setConfirmOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [confirmOpen])
+
+  if (disabled || !stats || bannerState.hiddenOn === stats.date) return null
+
+  const last7Total = stats.last7.reduce((sum, d) => sum + d.count, 0)
+  const maxCount = Math.max(1, ...stats.last7.map((d) => d.count))
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+      <span className="inline-flex items-center gap-2 whitespace-nowrap">
+        <span className="size-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
+        <span className="font-medium tabular-nums">
+          {stats.today_total} new CV{stats.today_total !== 1 ? 's' : ''} today
+        </span>
+        {delta > 0 && <span className="text-xs font-semibold text-emerald-500">+{delta}</span>}
+      </span>
+      <span className="hidden h-4 w-px bg-border sm:block" aria-hidden />
+      <span className="inline-flex items-center gap-2 whitespace-nowrap text-muted-foreground">
+        Last 7 days <span className="font-medium tabular-nums text-foreground">{last7Total}</span>
+      </span>
+      <span className="flex h-5 items-end gap-0.5" aria-hidden>
+        {stats.last7.map((d, i) => (
+          <span
+            key={d.date}
+            title={`${d.date}: ${d.count}`}
+            className={[
+              'w-1.5 rounded-sm',
+              i === stats.last7.length - 1 ? 'bg-emerald-500' : 'bg-muted-foreground/30',
+            ].join(' ')}
+            style={{ height: `${Math.max(15, (d.count / maxCount) * 100)}%` }}
+          />
+        ))}
+      </span>
+      <span className="ml-auto inline-flex items-center gap-3">
+        {activeFilterCount > 0 && (
+          <span className="whitespace-nowrap text-muted-foreground">
+            <span className="font-medium tabular-nums text-foreground">{stats.today_matching}</span>{' '}
+            of today match current filters
+          </span>
+        )}
+        <span className="relative" ref={confirmRef}>
+          <button
+            type="button"
+            onClick={() => setConfirmOpen((o) => !o)}
+            aria-label="Dismiss intake summary"
+            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+          {confirmOpen && (
+            <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-md border bg-popover p-1 shadow-md">
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">Hide this summary?</p>
+              <button
+                type="button"
+                onClick={() => {
+                  hideIntakeBannerForDay(stats.date)
+                  setBannerState({ disabled: false, hiddenOn: stats.date })
+                  setConfirmOpen(false)
+                }}
+                className="block w-full rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+              >
+                Hide for today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  disableIntakeBanner()
+                  setBannerState({ disabled: true, hiddenOn: null })
+                  setConfirmOpen(false)
+                }}
+                className="block w-full rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted"
+              >
+                Don't show again
+              </button>
+            </div>
+          )}
+        </span>
+      </span>
+    </div>
+  )
+}
+
 export default function CandidatesPage({
   user,
   openNote,
@@ -1562,6 +1702,8 @@ export default function CandidatesPage({
             </Button>
           )}
         </div>
+
+        <IntakeBanner filters={filters} activeFilterCount={activeFilterCount} />
 
         {/* Search + Columns */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
