@@ -12,7 +12,7 @@ import { getScorecards, saveScorecard, validateScorecard, type SaveCriterionInpu
 import { getApplicationScorecard, saveInterviewScorecard, recomputeInterviewScoresForPosition } from './interview-scorecards'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
-import { listUsers, verifyLogin, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
+import { listUsers, verifyLogin, touchLastLogin, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
 import {
   authMiddleware,
   createSession,
@@ -206,6 +206,7 @@ app.post('/api/login', async (c) => {
   const auth = await verifyLogin(c.env.DB, username, password)
   if (!auth) return c.json({ ok: false, error: 'Invalid username or password' }, 401)
   const token = await createSession(c.env.DB, auth.username)
+  await touchLastLogin(c.env.DB, auth.username)
   return c.json({
     ok: true,
     user: {

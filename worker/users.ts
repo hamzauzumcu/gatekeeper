@@ -21,6 +21,16 @@ export type AdminUserRow = {
   is_admin: number
   permissions: Record<Permission, boolean>
   created_at: string
+  activated_at: string | null
+  last_login_at: string | null
+}
+
+// Raw DB row backing AdminUserRow.
+type AdminUserDbRow = UserAuthRow & {
+  is_active: number
+  created_at: string
+  activated_at: string | null
+  last_login_at: string | null
 }
 
 // Capability flags accepted when creating/updating a user.
@@ -67,11 +77,11 @@ export async function listAllUsers(db: D1Database): Promise<AdminUserRow[]> {
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
               perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
-              created_at
+              created_at, activated_at, last_login_at
          FROM users
         ORDER BY is_active DESC, full_name`,
     )
-    .all<UserAuthRow & { is_active: number; created_at: string }>()
+    .all<AdminUserDbRow>()
   return (results ?? []).map(shapeAdminUser)
 }
 
@@ -80,15 +90,15 @@ async function getAdminUser(db: D1Database, id: number): Promise<AdminUserRow | 
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
               perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
-              created_at
+              created_at, activated_at, last_login_at
          FROM users WHERE id = ?`,
     )
     .bind(id)
-    .first<UserAuthRow & { is_active: number; created_at: string }>()
+    .first<AdminUserDbRow>()
   return row ? shapeAdminUser(row) : null
 }
 
-function shapeAdminUser(row: UserAuthRow & { is_active: number; created_at: string }): AdminUserRow {
+function shapeAdminUser(row: AdminUserDbRow): AdminUserRow {
   return {
     id: row.id,
     username: row.username,
@@ -98,7 +108,17 @@ function shapeAdminUser(row: UserAuthRow & { is_active: number; created_at: stri
     is_admin: row.is_admin,
     permissions: resolvePermissions(row),
     created_at: row.created_at,
+    activated_at: row.activated_at,
+    last_login_at: row.last_login_at,
   }
+}
+
+// Stamp the user's last successful sign-in time. Called from the login route.
+export async function touchLastLogin(db: D1Database, username: string): Promise<void> {
+  await db
+    .prepare(`UPDATE users SET last_login_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE username = ?`)
+    .bind(username)
+    .run()
 }
 
 // Create a user. Returns the created row, or an error (e.g. duplicate username).
@@ -128,8 +148,10 @@ export async function createUser(
     .prepare(
       `INSERT INTO users
          (username, full_name, password, color, is_active, is_admin,
-          perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
+          activated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               CASE WHEN ? = 1 THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END)`,
     )
     .bind(
       username,
@@ -142,6 +164,7 @@ export async function createUser(
       p.view_salary ? 1 : 0,
       p.manage_leave ? 1 : 0,
       p.recruiting_admin ? 1 : 0,
+      input.is_active === false ? 0 : 1,
     )
     .run()
   const user = await getAdminUser(db, Number(res.meta.last_row_id))
@@ -176,7 +199,13 @@ export async function updateUser(
     sets.push('password = ?'); vals.push(input.password)
   }
   if (input.color !== undefined) { sets.push('color = ?'); vals.push(input.color) }
-  if (input.is_active !== undefined) { sets.push('is_active = ?'); vals.push(input.is_active ? 1 : 0) }
+  if (input.is_active !== undefined) {
+    sets.push('is_active = ?'); vals.push(input.is_active ? 1 : 0)
+    // Re-stamp the activation time when the account goes inactive -> active.
+    if (input.is_active && existing.is_active !== 1) {
+      sets.push(`activated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
+    }
+  }
 
   const p = input.perms
   if (p) {

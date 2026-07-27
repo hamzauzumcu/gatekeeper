@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
+import { formatDate, formatRelativeTime } from '@/lib/candidates'
 import type { User } from '@/lib/auth'
 import { PERMISSIONS, PERMISSION_META, emptyPermissions, type Permission, type PermissionMap } from '@/lib/permissions'
 import {
@@ -171,6 +172,7 @@ export default function AdminPage({ user }: { user: User }) {
   }
 
   const editingSelf = draft?.id != null && draft.username === user.username
+  const selectedUser = draft?.id != null ? users.find((u) => u.id === draft.id) ?? null : null
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
@@ -223,6 +225,14 @@ export default function AdminPage({ user }: { user: User }) {
                         </span>
                         <span className="block truncate text-xs text-muted-foreground">
                           @{u.username} · {permSummary(u)}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right" title={formatDate(u.last_login_at)}>
+                        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                          Last login
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          {u.last_login_at ? formatRelativeTime(u.last_login_at) : 'Never'}
                         </span>
                       </span>
                     </button>
@@ -332,6 +342,17 @@ export default function AdminPage({ user }: { user: User }) {
                   description="Inactive users can't sign in and are hidden from pickers."
                 />
               </div>
+
+              {selectedUser && (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border bg-muted/30 p-3 text-xs">
+                  <dt className="text-muted-foreground">Created</dt>
+                  <dd>{formatDate(selectedUser.created_at)}</dd>
+                  <dt className="text-muted-foreground">Activated</dt>
+                  <dd>{formatDate(selectedUser.activated_at)}</dd>
+                  <dt className="text-muted-foreground">Last login</dt>
+                  <dd>{selectedUser.last_login_at ? formatDate(selectedUser.last_login_at) : 'Never signed in'}</dd>
+                </dl>
+              )}
 
               {formError && (
                 <Alert variant="destructive">
