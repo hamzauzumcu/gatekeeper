@@ -915,10 +915,10 @@ const VIEW_STORAGE_KEY = 'gk_candidate_view'
 // will render across all stage columns.
 const BOARD_LIMIT = 500
 
-// Summary strip above the search row: today's new CVs, a 7-day arrival
-// sparkline, and — since arrival date isn't a filterable field — how many of
-// today's arrivals match the currently active filters. Dismissible for the day
-// or permanently (both stored in localStorage).
+// Summary strip above the search row: today's new CVs and a 7-day arrival
+// sparkline, both scoped to the currently active filters — since arrival date
+// isn't a filterable field, this is how "who arrived today in this segment?"
+// gets answered. Dismissible for the day or permanently (both in localStorage).
 function IntakeBanner({
   filters,
   activeFilterCount,
@@ -928,6 +928,7 @@ function IntakeBanner({
 }) {
   const [bannerState, setBannerState] = useState<IntakeBannerState>(loadIntakeBannerState)
   const [stats, setStats] = useState<IntakeStats | null>(null)
+  const [loading, setLoading] = useState(false)
   const [delta, setDelta] = useState(0)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const confirmRef = useRef<HTMLDivElement>(null)
@@ -938,9 +939,12 @@ function IntakeBanner({
   const disabled = bannerState.disabled
   useEffect(() => {
     if (disabled) return
+    let active = true
+    setLoading(true)
     const t = setTimeout(() => {
       fetchIntakeStats(filters)
         .then((s) => {
+          if (!active) return
           setStats(s)
           if (!deltaTakenRef.current) {
             deltaTakenRef.current = true
@@ -948,8 +952,14 @@ function IntakeBanner({
           }
         })
         .catch(() => {})
+        .finally(() => {
+          if (active) setLoading(false)
+        })
     }, 250)
-    return () => clearTimeout(t)
+    return () => {
+      active = false
+      clearTimeout(t)
+    }
   }, [filters, disabled])
 
   useEffect(() => {
@@ -970,42 +980,51 @@ function IntakeBanner({
 
   if (disabled || !stats || bannerState.hiddenOn === stats.date) return null
 
+  const filtered = activeFilterCount > 0
+  const todayCount = filtered ? stats.today_matching : stats.today_total
   const last7Total = stats.last7.reduce((sum, d) => sum + d.count, 0)
   const maxCount = Math.max(1, ...stats.last7.map((d) => d.count))
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
-      <span className="inline-flex items-center gap-2 whitespace-nowrap">
-        <span className="size-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
-        <span className="font-medium tabular-nums">
-          {stats.today_total} new CV{stats.today_total !== 1 ? 's' : ''} today
+      <span
+        className={[
+          'flex flex-wrap items-center gap-x-3 gap-y-1 transition-opacity',
+          loading ? 'animate-pulse opacity-50' : '',
+        ].join(' ')}
+      >
+        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+          <span className="size-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
+          <span className="font-medium tabular-nums">
+            {todayCount} new CV{todayCount !== 1 ? 's' : ''} today
+          </span>
+          {filtered ? (
+            <span className="text-xs text-muted-foreground">
+              in current filters · {stats.today_total} overall
+            </span>
+          ) : (
+            delta > 0 && <span className="text-xs font-semibold text-emerald-500">+{delta}</span>
+          )}
         </span>
-        {delta > 0 && <span className="text-xs font-semibold text-emerald-500">+{delta}</span>}
-      </span>
-      <span className="hidden h-4 w-px bg-border sm:block" aria-hidden />
-      <span className="inline-flex items-center gap-2 whitespace-nowrap text-muted-foreground">
-        Last 7 days <span className="font-medium tabular-nums text-foreground">{last7Total}</span>
-      </span>
-      <span className="flex h-5 items-end gap-0.5" aria-hidden>
-        {stats.last7.map((d, i) => (
-          <span
-            key={d.date}
-            title={`${d.date}: ${d.count}`}
-            className={[
-              'w-1.5 rounded-sm',
-              i === stats.last7.length - 1 ? 'bg-emerald-500' : 'bg-muted-foreground/30',
-            ].join(' ')}
-            style={{ height: `${Math.max(15, (d.count / maxCount) * 100)}%` }}
-          />
-        ))}
+        <span className="hidden h-4 w-px bg-border sm:block" aria-hidden />
+        <span className="inline-flex items-center gap-2 whitespace-nowrap text-muted-foreground">
+          Last 7 days <span className="font-medium tabular-nums text-foreground">{last7Total}</span>
+        </span>
+        <span className="flex h-5 items-end gap-0.5" aria-hidden>
+          {stats.last7.map((d, i) => (
+            <span
+              key={d.date}
+              title={`${d.date}: ${d.count}`}
+              className={[
+                'w-1.5 rounded-sm',
+                i === stats.last7.length - 1 ? 'bg-emerald-500' : 'bg-muted-foreground/30',
+              ].join(' ')}
+              style={{ height: `${Math.max(15, (d.count / maxCount) * 100)}%` }}
+            />
+          ))}
+        </span>
       </span>
       <span className="ml-auto inline-flex items-center gap-3">
-        {activeFilterCount > 0 && (
-          <span className="whitespace-nowrap text-muted-foreground">
-            <span className="font-medium tabular-nums text-foreground">{stats.today_matching}</span>{' '}
-            of today match current filters
-          </span>
-        )}
         <span className="relative" ref={confirmRef}>
           <button
             type="button"

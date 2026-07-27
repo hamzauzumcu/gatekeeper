@@ -451,15 +451,18 @@ export async function listCandidates(
 
 export type IntakeStats = {
   date: string // server's current UTC date, the client's reference for "today"
-  today_total: number
-  today_matching: number
-  last7: { date: string; count: number }[]
+  today_total: number // today's arrivals regardless of filters
+  today_matching: number // today's arrivals that satisfy the caller's filters
+  last7: { date: string; count: number }[] // per-day arrivals, filtered
 }
 
 // Intake stats for the candidates-page banner: how many new CVs arrived today,
-// a 7-day arrival series, and how many of today's arrivals match the caller's
-// active filters. "Arrived on a day" = has an application submitted that (UTC)
-// day; dates use date('now') to stay consistent with daily_activity tracking.
+// and a 7-day arrival series. `today_matching` and `last7` are restricted to
+// applicants satisfying the caller's active filters (with no filters they equal
+// the unfiltered numbers); `today_total` is always unfiltered so the client can
+// show overall volume and track new-since-last-visit deltas. "Arrived on a day"
+// = has an application submitted that (UTC) day; dates use date('now') to stay
+// consistent with daily_activity tracking.
 export async function getIntakeStats(
   db: D1Database,
   opts: CandidateFilterOpts
@@ -482,17 +485,20 @@ export async function getIntakeStats(
     SELECT series.d AS date, COALESCE(x.count, 0) AS count
     FROM series
     LEFT JOIN (
-      SELECT date(submitted_at) AS day, count(DISTINCT applicant_id) AS count
-      FROM applications
-      WHERE date(submitted_at) >= date('now', '-6 days')
+      SELECT date(a.submitted_at) AS day, count(DISTINCT a.applicant_id) AS count
+      FROM applications a
+      JOIN applicants ap ON ap.id = a.applicant_id
+      WHERE date(a.submitted_at) >= date('now', '-6 days')${conditions.length ? ` AND ${conditions.join(' AND ')}` : ''}
       GROUP BY day
     ) x ON x.day = series.d
     ORDER BY series.d`
 
+  const bind = (sql: string) =>
+    bindings.length ? db.prepare(sql).bind(...bindings) : db.prepare(sql)
   const [totalRes, matchingRes, seriesRes] = await db.batch<Record<string, unknown>>([
     db.prepare(totalSql),
-    bindings.length ? db.prepare(matchingSql).bind(...bindings) : db.prepare(matchingSql),
-    db.prepare(seriesSql),
+    bind(matchingSql),
+    bind(seriesSql),
   ])
 
   const totalRow = (totalRes.results ?? [])[0] as { date: string; total: number } | undefined

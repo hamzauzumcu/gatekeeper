@@ -394,13 +394,14 @@ export async function fetchCandidates(
 
 export type IntakeStats = {
   date: string // server's current UTC date — the banner's reference for "today"
-  today_total: number
-  today_matching: number
-  last7: { date: string; count: number }[]
+  today_total: number // today's arrivals regardless of filters
+  today_matching: number // today's arrivals that satisfy the given filters
+  last7: { date: string; count: number }[] // per-day arrivals, filtered
 }
 
-// Today's arrivals + 7-day series; `today_matching` counts only the arrivals
-// that satisfy the given filters (the list's current segment).
+// Today's arrivals + 7-day series. `today_matching` and `last7` are restricted
+// to the given filters (the list's current segment); `today_total` is always
+// the unfiltered volume.
 export async function fetchIntakeStats(filters: ActiveFilters): Promise<IntakeStats> {
   const params = new URLSearchParams()
   appendFilterParams(params, filters)
