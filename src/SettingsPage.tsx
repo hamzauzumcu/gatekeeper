@@ -717,7 +717,10 @@ function SyncPanel({
   const [forceConfirming, setForceConfirming] = useState(false)
   const running = phase === 'fetching' || phase === 'running'
   const done = phase === 'done'
-  const pct = total > 0 ? Math.round(((processed + failed) / total) * 100) : 0
+  // Clamp: total is refreshed at page boundaries server-side, but items arriving
+  // mid-run can still briefly push processed past a stale total — never show >100%.
+  const pct = total > 0 ? Math.min(100, Math.round(((processed + failed) / total) * 100)) : 0
+  const remaining = Math.max(0, total - processed - failed)
   const barColor = done && failed === 0 ? 'bg-emerald-500' : accent
 
   return (
@@ -827,7 +830,7 @@ function SyncPanel({
               {phase === 'done' && total === 0 && 'All up to date — nothing to process.'}
               {phase === 'done' && total > 0 && failed === 0 && `Done — all ${total} ${itemLabel} successfully`}
               {phase === 'done' && total > 0 && failed > 0 && `Done — ${processed} ${itemLabel}, ${failed} failed`}
-              {phase === 'stopped' && `Stopped — ${processed} ${itemLabel}, ${total - processed - failed} remaining`}
+              {phase === 'stopped' && `Stopped — ${processed} ${itemLabel}, ${remaining} remaining`}
               {phase === 'error' && 'Failed to start — see error below'}
             </span>
             {phase === 'running' && total > 0 && (
@@ -844,7 +847,7 @@ function SyncPanel({
                 <span className="text-destructive tabular-nums">{failed} failed</span>
               )}
               <span className="text-muted-foreground tabular-nums">
-                {total - processed - failed} remaining
+                {remaining} remaining
               </span>
             </div>
           )}

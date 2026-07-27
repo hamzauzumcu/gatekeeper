@@ -99,7 +99,14 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
 
   // Start (or restart) a job. No-op if one is already in flight.
   // positionId scopes a scores job to one position (null = all positions). Ignored for cv.
+  // Serialized via blockConcurrencyWhile: the idle-check and the D1 reads below are not
+  // atomic on their own (the input gate opens during external I/O), so two near-simultaneous
+  // callers (cron tick + a manual Start click) could both pass the idle-check and race.
   async start(kind: SyncKind, batchSize: number, positionId: number | null = null): Promise<SyncJobState> {
+    return this.ctx.blockConcurrencyWhile(() => this.startInner(kind, batchSize, positionId))
+  }
+
+  private async startInner(kind: SyncKind, batchSize: number, positionId: number | null): Promise<SyncJobState> {
     const current = await this.getState()
     if (current.status === 'running' || current.status === 'stopping') {
       return current
@@ -201,6 +208,13 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
       let next: number[]
       try {
         next = await this.fetchPendingPage(state.kind!, state.positionId, state.cursorId, PAGE_SIZE)
+        // Refresh the total at each page boundary: items can become pending mid-run
+        // (a CV import, a prompt save) and the watermark drain will pick them up, so
+        // the snapshot taken at start() drifts low and progress overshoots 100%.
+        // Counting above the watermark excludes already-failed rows, which are still
+        // "pending" to the query but already tallied in state.failed.
+        const remaining = await this.countPending(state.kind!, state.positionId, state.cursorId)
+        state.total = state.processed + state.failed + remaining
       } catch (e) {
         state.status = 'error'
         state.fatalError = e instanceof Error ? e.message : 'failed to load next page'
@@ -310,23 +324,25 @@ export class SyncJobDO extends DurableObject<WorkerBindings> {
     )
   }
 
-  // Total count of pending applications for this kind (no cap).
+  // Count of pending applications for this kind with id > afterId (no cap).
+  // afterId = 0 counts everything pending; passing the watermark counts only what the
+  // drain loop can still reach, excluding failed rows left below it.
   // positionId (scores only) scopes the count to a single position; null = all.
-  private async countPending(kind: SyncKind, positionId: number | null): Promise<number> {
+  private async countPending(kind: SyncKind, positionId: number | null, afterId = 0): Promise<number> {
     if (kind === 'scores') {
-      const sql = `SELECT COUNT(*) AS n ${PENDING_SCORES_FROM_WHERE}${positionId != null ? ' AND a.position_id = ?' : ''}`
+      const sql = `SELECT COUNT(*) AS n ${PENDING_SCORES_FROM_WHERE} AND a.id > ?${positionId != null ? ' AND a.position_id = ?' : ''}`
       const stmt = positionId != null
-        ? this.env.DB.prepare(sql).bind(positionId)
-        : this.env.DB.prepare(sql)
+        ? this.env.DB.prepare(sql).bind(afterId, positionId)
+        : this.env.DB.prepare(sql).bind(afterId)
       const row = await stmt.first<{ n: number }>()
       return row?.n ?? 0
     }
     const row = await this.env.DB
       .prepare(
         `SELECT COUNT(*) AS n FROM applications
-         WHERE resume_url IS NOT NULL AND resume_parse_version < ?`,
+         WHERE resume_url IS NOT NULL AND resume_parse_version < ? AND id > ?`,
       )
-      .bind(PARSE_VERSION)
+      .bind(PARSE_VERSION, afterId)
       .first<{ n: number }>()
     return row?.n ?? 0
   }
