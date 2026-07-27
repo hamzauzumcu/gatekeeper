@@ -681,6 +681,8 @@ interface SyncPanelProps {
   disabled?: boolean
   disabledHint?: string
   itemLabel: string
+  // When the last job (manual or cron-started) finished, as an ISO timestamp.
+  lastSyncedAt: string | null
   // Optional position scope selector (scores only).
   positionOptions?: { id: number; title: string }[]
   selectedPositionId?: number | null
@@ -705,6 +707,7 @@ function SyncPanel({
   disabled,
   disabledHint,
   itemLabel,
+  lastSyncedAt,
   positionOptions,
   selectedPositionId,
   onPositionChange,
@@ -778,6 +781,15 @@ function SyncPanel({
           <span className="text-xs text-muted-foreground">{disabledHint}</span>
         )}
       </div>
+
+      {/* Covers cron-started runs too: the panel loads the job's persisted state on
+          mount, so this shows the last completed run even if nobody clicked Start.
+          Rendered in the viewer's browser locale/timezone. */}
+      {!running && lastSyncedAt && (
+        <p className="text-xs text-muted-foreground">
+          Last synced: {new Date(lastSyncedAt).toLocaleString()}
+        </p>
+      )}
 
       {/* Force re-run confirmation — re-processes every item in scope, not just pending. */}
       {!running && onForceStart && forceConfirming && (
@@ -1394,6 +1406,7 @@ export default function SettingsPage() {
           disabled={promptedCount === 0}
           disabledHint="Save at least one prompt first."
           itemLabel="scored"
+          lastSyncedAt={scores.state?.finishedAt ?? null}
           positionOptions={promptedPositions.map((p) => ({ id: p.id, title: p.title }))}
           selectedPositionId={scoresPositionId}
           onPositionChange={setScoresPositionId}
@@ -1441,6 +1454,7 @@ export default function SettingsPage() {
             onStop={cv.stop}
             onReset={cv.reset}
             itemLabel="parsed"
+            lastSyncedAt={cv.state?.finishedAt ?? null}
           />
         </div>
       </CollapsibleCard>

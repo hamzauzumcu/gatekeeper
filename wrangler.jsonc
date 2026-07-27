@@ -33,6 +33,10 @@
 			"new_sqlite_classes": ["SyncJobDO"]
 		}
 	],
+	"triggers": {
+		// Auto-start the CV-parse and AI-score sync jobs (see `scheduled` in worker/index.ts).
+		"crons": ["*/15 * * * *"]
+	},
 	"vars": {
 		"R2_PUBLIC_URL": "https://pub-63b663a358ae4694826a4342acd1f84c.r2.dev"
 	},

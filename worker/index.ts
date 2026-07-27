@@ -1326,4 +1326,20 @@ app.post('/api/webhook/tally/leave', async (c) => {
   return c.json(result.body, result.status as 200 | 400 | 401 | 500)
 })
 
-export default app
+// ── Cron: auto-start sync jobs ─────────────────────────────────────────────
+// Fires on the schedule in wrangler.jsonc ("triggers.crons") and starts the same
+// server-side jobs as the Settings page's "Start Sync" buttons: CV parsing first,
+// then AI scoring, so scoring is more likely to find cached CV text instead of
+// re-running OCR. SyncJobDO.start() no-ops while a job is in flight and finishes
+// immediately when nothing is pending, so firing every tick is safe and cheap.
+const scheduled: ExportedHandlerScheduledHandler<Env['Bindings']> = async (_controller, env) => {
+  if (!env.DEEPSEEK_API_KEY) return
+  for (const kind of ['cv', 'scores'] as const) {
+    await env.SYNC_JOB.get(env.SYNC_JOB.idFromName(kind)).start(kind, 5)
+  }
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled,
+}
