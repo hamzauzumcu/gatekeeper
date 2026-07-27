@@ -13,7 +13,7 @@ export type AdminUser = {
   permissions: PermissionMap
   created_at: string
   activated_at: string | null
-  last_login_at: string | null
+  last_active_at: string | null
 }
 
 // Payload for create/update. Password blank on update = keep existing.

@@ -12,7 +12,7 @@ import { getScorecards, saveScorecard, validateScorecard, type SaveCriterionInpu
 import { getApplicationScorecard, saveInterviewScorecard, recomputeInterviewScoresForPosition } from './interview-scorecards'
 import { generateInterviewNotes, getInterviewNotesPrompt, setInterviewNotesPrompt } from './interview-notes'
 import { generateOutreachEmail, getOutreachEmailPrompt, setOutreachEmailPrompt } from './outreach-email'
-import { listUsers, verifyLogin, touchLastLogin, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
+import { listUsers, verifyLogin, touchLastActive, listAllUsers, createUser, updateUser, type UserPermsInput } from './users'
 import {
   authMiddleware,
   createSession,
@@ -71,6 +71,14 @@ const app = new Hono<Env>()
 // Resolve the caller's session (if any) for every API request. Individual routes
 // decide whether auth/permissions are required — this only populates c.get('auth').
 app.use('/api/*', authMiddleware)
+
+// Keep users' last-active time fresh without delaying the response. The touch
+// itself is throttled in SQL, so this is a cheap no-op most of the time.
+app.use('/api/*', async (c, next) => {
+  const auth = c.get('auth')
+  if (auth) c.executionCtx.waitUntil(touchLastActive(c.env.DB, auth.username))
+  await next()
+})
 
 // Prefix guards. More specific rules are registered first so admin-only user
 // management isn't reachable by a plain recruiting-admin. (adminGate implies
@@ -206,7 +214,7 @@ app.post('/api/login', async (c) => {
   const auth = await verifyLogin(c.env.DB, username, password)
   if (!auth) return c.json({ ok: false, error: 'Invalid username or password' }, 401)
   const token = await createSession(c.env.DB, auth.username)
-  await touchLastLogin(c.env.DB, auth.username)
+  await touchLastActive(c.env.DB, auth.username)
   return c.json({
     ok: true,
     user: {
@@ -356,9 +364,11 @@ app.patch('/api/applications/:id/answers/:questionId', async (c) => {
   }
 })
 
-// Bulk update candidate fit status (multi-select)
+// Bulk update candidate fit status (multi-select). Fit status lives on
+// applications; `position` scopes the write to that position's application
+// when the caller's list is position-filtered, else the latest one is used.
 app.patch('/api/applicants/fit-status', async (c) => {
-  let body: { ids: number[]; fit_status: string | null; created_by?: string }
+  let body: { ids: number[]; fit_status: string | null; created_by?: string; position?: string }
   try {
     body = await c.req.json()
   } catch {
@@ -368,7 +378,7 @@ app.patch('/api/applicants/fit-status', async (c) => {
     return c.json({ ok: false, error: 'ids cannot be empty' }, 400)
   }
   try {
-    const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null, body.created_by)
+    const updated = await updateApplicantsFitStatus(c.env.DB, body.ids, body.fit_status ?? null, body.created_by, body.position ?? null)
     // Every fit-status change counts as processing a CV — including clearing it.
     await logActivity(c.env.DB, body.created_by, body.ids, 'fit_status_set')
     return c.json({ ok: true, updated })

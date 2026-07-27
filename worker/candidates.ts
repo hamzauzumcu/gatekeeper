@@ -16,6 +16,9 @@ export type CandidateListItem = {
   salary_expectation: string | null
   latest_status: string | null
   latest_application_id: number | null
+  // Per-application value surfaced at the row level: the position-filtered
+  // application's status when a position filter is active, else the latest
+  // application's.
   fit_status: string | null
   notes_count: number
   ai_score: number | null
@@ -33,6 +36,7 @@ export type CandidateApplication = {
   position_title: string | null
   submitted_at: string | null
   status: string
+  fit_status: string | null
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
@@ -247,10 +251,12 @@ export type CandidateFilterOpts = {
 
 // WHERE conditions (over `applicants ap`) + bindings for a candidate filter
 // set. Single source of truth so the intake-stats "matching" count always
-// agrees with what the filtered list would show.
+// agrees with what the filtered list would show. `positionParamIdx` is the
+// ?N index bound to the position title (null without a position filter) so
+// listCandidates can reuse the same binding in its SELECT clause.
 function buildCandidateConditions(
   opts: CandidateFilterOpts
-): { conditions: string[]; bindings: (string | number)[] } {
+): { conditions: string[]; bindings: (string | number)[]; positionParamIdx: number | null } {
   const q = (opts.q ?? '').trim()
   const countries = (opts.countries ?? []).filter(Boolean)
   const position = (opts.position ?? '').trim()
@@ -287,11 +293,15 @@ function buildCandidateConditions(
     bindings.push(...countries)
   }
 
+  // Position and fit-status filters constrain the SAME application (fit status
+  // is per-application): someone marked not_fit for one position must still
+  // surface as unreviewed for another. Both live in a single EXISTS.
+  let positionParamIdx: number | null = null
+  const appConditions: string[] = []
   if (position) {
     idx++
-    conditions.push(
-      `EXISTS (SELECT 1 FROM applications a2 JOIN job_positions p2 ON p2.id = a2.position_id WHERE a2.applicant_id = ap.id AND p2.title = ?${idx})`
-    )
+    positionParamIdx = idx
+    appConditions.push(`p2.title = ?${idx}`)
     bindings.push(position)
   }
 
@@ -299,11 +309,17 @@ function buildCandidateConditions(
     const parts: string[] = []
     if (fit_statuses.length > 0) {
       const placeholders = fit_statuses.map(() => `?${++idx}`).join(', ')
-      parts.push(`ap.fit_status IN (${placeholders})`)
+      parts.push(`a2.fit_status IN (${placeholders})`)
       bindings.push(...fit_statuses)
     }
-    if (includeNullStatus) parts.push('ap.fit_status IS NULL')
-    conditions.push(parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`)
+    if (includeNullStatus) parts.push('a2.fit_status IS NULL')
+    appConditions.push(parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`)
+  }
+
+  if (appConditions.length > 0) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM applications a2 JOIN job_positions p2 ON p2.id = a2.position_id WHERE a2.applicant_id = ap.id AND ${appConditions.join(' AND ')})`
+    )
   }
 
   for (const f of answerFilters) {
@@ -344,7 +360,7 @@ function buildCandidateConditions(
     bindings.push(maxInterviewScore)
   }
 
-  return { conditions, bindings }
+  return { conditions, bindings, positionParamIdx }
 }
 
 export async function listCandidates(
@@ -365,8 +381,21 @@ export async function listCandidates(
   const offset = Math.max(opts.offset ?? 0, 0)
   const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n !== 0)
 
-  const { conditions, bindings } = buildCandidateConditions(opts)
+  const { conditions, bindings, positionParamIdx } = buildCandidateConditions(opts)
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+  // Row-level fit status follows the filter context: the position-filtered
+  // application's value when a position filter is active (reusing that
+  // filter's ?N binding), else the latest application's.
+  const fitStatusExpr =
+    positionParamIdx !== null
+      ? `(SELECT a_fs.fit_status FROM applications a_fs
+           JOIN job_positions p_fs ON p_fs.id = a_fs.position_id
+           WHERE a_fs.applicant_id = ap.id AND p_fs.title = ?${positionParamIdx}
+           ORDER BY a_fs.submitted_at DESC LIMIT 1)`
+      : `(SELECT a_fs.fit_status FROM applications a_fs
+           WHERE a_fs.applicant_id = ap.id
+           ORDER BY a_fs.submitted_at DESC LIMIT 1)`
 
   const extraColSelects = extraCols
     .map((qId) => {
@@ -383,7 +412,8 @@ export async function listCandidates(
     .join(',\n           ')
 
   const listSql = `
-    SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url, ap.fit_status,
+    SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
+           ${fitStatusExpr} AS fit_status,
            count(a.id)            AS applications_count,
            max(a.submitted_at)    AS latest_submitted_at,
            group_concat(DISTINCT p.title) AS positions,
@@ -598,33 +628,59 @@ export async function updateApplicationsStageBulk(
   return res.meta?.changes ?? 0
 }
 
+// Set fit status on each applicant's target application. Fit status is a
+// per-application judgment (good fit for one position, not fit for another):
+// `position` scopes the write to each applicant's latest application for that
+// position — pass it whenever the caller's list is position-filtered — while
+// without it the latest application overall is updated. Applicants with no
+// matching application are skipped.
 export async function updateApplicantsFitStatus(
   db: D1Database,
   ids: number[],
   fit_status: string | null,
-  actor?: string | null
+  actor?: string | null,
+  position?: string | null
 ): Promise<number> {
   if (ids.length === 0) return 0
   if (fit_status !== null && !(VALID_FIT_STATUSES as readonly string[]).includes(fit_status)) {
     throw new Error('invalid fit_status')
   }
   const placeholders = ids.map(() => '?').join(',')
-  // Snapshot prior fit_status per applicant so we only log real changes.
-  const before = await db
-    .prepare(`SELECT id, fit_status FROM applicants WHERE id IN (${placeholders})`)
-    .bind(...ids)
-    .all<{ id: number; fit_status: string | null }>()
+  // Resolve each applicant's target application and snapshot its current fit
+  // status so only real changes are logged.
+  const targetSubq = position
+    ? `SELECT a2.id FROM applications a2
+       JOIN job_positions p2 ON p2.id = a2.position_id
+       WHERE a2.applicant_id = ap.id AND p2.title = ?
+       ORDER BY a2.submitted_at DESC LIMIT 1`
+    : `SELECT a2.id FROM applications a2
+       WHERE a2.applicant_id = ap.id
+       ORDER BY a2.submitted_at DESC LIMIT 1`
+  const targets = await db
+    .prepare(
+      `SELECT a.id, a.applicant_id, a.fit_status, p.title AS position_title
+       FROM applications a
+       LEFT JOIN job_positions p ON p.id = a.position_id
+       WHERE a.id IN (SELECT (${targetSubq}) FROM applicants ap WHERE ap.id IN (${placeholders}))`
+    )
+    .bind(...(position ? [position, ...ids] : ids))
+    .all<{ id: number; applicant_id: number; fit_status: string | null; position_title: string | null }>()
+  const targetRows = targets.results ?? []
+  if (targetRows.length === 0) return 0
+  const appPlaceholders = targetRows.map(() => '?').join(',')
   const res = await db
-    .prepare(`UPDATE applicants SET fit_status = ? WHERE id IN (${placeholders})`)
-    .bind(fit_status, ...ids)
+    .prepare(`UPDATE applications SET fit_status = ? WHERE id IN (${appPlaceholders})`)
+    .bind(fit_status, ...targetRows.map((r) => r.id))
     .run()
-  const events = (before.results ?? [])
+  const events = targetRows
     .filter((r) => (r.fit_status ?? null) !== fit_status)
     .map((r) => ({
-      applicant_id: r.id,
+      applicant_id: r.applicant_id,
       event_type: 'fit_status_changed' as const,
       from_value: r.fit_status,
       to_value: fit_status,
+      application_id: r.id,
+      metadata: r.position_title ? { position_title: r.position_title } : null,
     }))
   await logCandidateEvents(db, actor, events)
   return res.meta?.changes ?? 0
@@ -740,7 +796,10 @@ export async function getCandidate(
 ): Promise<CandidateDetail | null> {
   const applicant = await db
     .prepare(
-      `SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url, ap.fit_status,
+      `SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
+              (SELECT a_fs.fit_status FROM applications a_fs
+                WHERE a_fs.applicant_id = ap.id
+                ORDER BY a_fs.submitted_at DESC LIMIT 1) AS fit_status,
               count(a.id) AS applications_count,
               max(a.submitted_at) AS latest_submitted_at,
               group_concat(DISTINCT p.title) AS positions,
@@ -757,7 +816,7 @@ export async function getCandidate(
 
   const apps = await db
     .prepare(
-      `SELECT a.id, a.submitted_at, a.status, a.resume_url, a.cover_letter,
+      `SELECT a.id, a.submitted_at, a.status, a.fit_status, a.resume_url, a.cover_letter,
               a.resume_parsed, a.resume_parse_version,
               a.ai_score, a.ai_score_reasoning,
               a.interview_score, a.interview_score_complete,

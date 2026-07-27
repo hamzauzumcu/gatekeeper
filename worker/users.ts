@@ -22,7 +22,7 @@ export type AdminUserRow = {
   permissions: Record<Permission, boolean>
   created_at: string
   activated_at: string | null
-  last_login_at: string | null
+  last_active_at: string | null
 }
 
 // Raw DB row backing AdminUserRow.
@@ -30,7 +30,7 @@ type AdminUserDbRow = UserAuthRow & {
   is_active: number
   created_at: string
   activated_at: string | null
-  last_login_at: string | null
+  last_active_at: string | null
 }
 
 // Capability flags accepted when creating/updating a user.
@@ -77,7 +77,7 @@ export async function listAllUsers(db: D1Database): Promise<AdminUserRow[]> {
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
               perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
-              created_at, activated_at, last_login_at
+              created_at, activated_at, last_active_at
          FROM users
         ORDER BY is_active DESC, full_name`,
     )
@@ -90,7 +90,7 @@ async function getAdminUser(db: D1Database, id: number): Promise<AdminUserRow | 
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
               perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
-              created_at, activated_at, last_login_at
+              created_at, activated_at, last_active_at
          FROM users WHERE id = ?`,
     )
     .bind(id)
@@ -109,14 +109,21 @@ function shapeAdminUser(row: AdminUserDbRow): AdminUserRow {
     permissions: resolvePermissions(row),
     created_at: row.created_at,
     activated_at: row.activated_at,
-    last_login_at: row.last_login_at,
+    last_active_at: row.last_active_at,
   }
 }
 
-// Stamp the user's last successful sign-in time. Called from the login route.
-export async function touchLastLogin(db: D1Database, username: string): Promise<void> {
+// Stamp the user's last-active time. Called on login and (via middleware) on
+// every authenticated request; the WHERE clause throttles actual writes to at
+// most one per 5 minutes per user.
+export async function touchLastActive(db: D1Database, username: string): Promise<void> {
   await db
-    .prepare(`UPDATE users SET last_login_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE username = ?`)
+    .prepare(
+      `UPDATE users SET last_active_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        WHERE username = ?
+          AND (last_active_at IS NULL
+               OR last_active_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-5 minutes'))`,
+    )
     .bind(username)
     .run()
 }

@@ -1517,7 +1517,7 @@ export default function CandidatesPage({
       }, 350)
     }
     try {
-      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username)
+      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
     } catch {
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
@@ -1556,7 +1556,7 @@ export default function CandidatesPage({
     const exitIds = willExit ? [...selectedIds] : []
     setBulkLoading(true)
     try {
-      await updateApplicantsFitStatus([...selectedIds], fitStatus, currentUser.username)
+      await updateApplicantsFitStatus([...selectedIds], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
       setCandidates((prev) =>
         prev.map((c) => (selectedIds.has(c.id) ? { ...c, fit_status: fitStatus } : c))
@@ -1601,7 +1601,7 @@ export default function CandidatesPage({
   async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
     const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     try {
-      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username)
+      await updateApplicantsFitStatus([candId], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
       setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
       if (willExit) {
@@ -2414,6 +2414,7 @@ export default function CandidatesPage({
               activeTab={sheetTab}
               onTabChange={setSheetTab}
               currentUser={currentUser}
+              positionFilter={filters.position || null}
               onFitStatus={handleSheetFitStatus}
               onStageChange={handleSheetStageChange}
               onNavigate={navigateSheet}
@@ -2722,6 +2723,7 @@ function CandidateDetailView({
   activeTab,
   onTabChange,
   currentUser,
+  positionFilter,
   onFitStatus,
   onStageChange,
   onNavigate,
@@ -2736,6 +2738,10 @@ function CandidateDetailView({
   activeTab: string
   onTabChange: (tab: string) => void
   currentUser: User
+  // Active position filter of the list behind the sheet. Fit status is
+  // per-application, so the bottom-bar buttons act on this position's
+  // application when set, else on the latest application.
+  positionFilter: string | null
   onFitStatus: (status: string | null) => void
   onStageChange: (appId: number, newStatus: string) => void
   onNavigate: (dir: -1 | 1) => void
@@ -2753,7 +2759,14 @@ function CandidateDetailView({
   const [appStatuses, setAppStatuses] = useState<Map<number, string>>(
     () => new Map(applications.map((a) => [a.id, a.status]))
   )
-  const [fitStatus, setFitStatus] = useState<string | null>(applicant.fit_status ?? null)
+  // The application the bottom-bar fit buttons act on: the position-filtered
+  // one when the list has a position filter, else the latest (applications
+  // arrive newest-first).
+  const contextApp =
+    (positionFilter ? applications.find((a) => a.position_title === positionFilter) : undefined) ??
+    applications[0] ??
+    null
+  const [fitStatus, setFitStatus] = useState<string | null>(contextApp?.fit_status ?? null)
   const [cvOpen, setCvOpen] = useState(false)
   const [fx, setFx] = useState<FxRates | null>(null)
   // Locally-applied salary corrections, keyed by `${applicationId}:${questionId}`.
@@ -2818,7 +2831,8 @@ function CandidateDetailView({
   }
 
   useEffect(() => {
-    setFitStatus(applicant.fit_status ?? null)
+    setFitStatus(contextApp?.fit_status ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applicant.id])
 
   useEffect(() => {
@@ -3031,6 +3045,11 @@ function CandidateDetailView({
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{app.position_title ?? 'Position'}</span>
+                      {/* Per-application fit badge; the context application mirrors
+                          the bottom-bar state so it updates without a refetch. */}
+                      {(app.id === contextApp?.id ? fitStatus : app.fit_status) && (
+                        <FitBadge status={(app.id === contextApp?.id ? fitStatus : app.fit_status) as string} />
+                      )}
                       {app.ai_score != null && <ScoreBadge score={app.ai_score} />}
                       {app.interview_score != null && (
                         <InterviewScoreBadge
@@ -3821,9 +3840,16 @@ function StateTransition({ from, to }: { from: string; to: string }) {
 function renderEventBody(e: CandidateEvent): ReactNode {
   switch (e.event_type) {
     case 'fit_status_changed': {
-      if (e.to_value == null) return <>Cleared fit status (was <span className="font-medium">{fitStatusLabel(e.from_value)}</span>)</>
-      if (e.from_value == null) return <>Set fit status to <span className="font-medium">{fitStatusLabel(e.to_value)}</span></>
-      return <span className="inline-flex flex-wrap items-center gap-1.5">Fit status <StateTransition from={fitStatusLabel(e.from_value)} to={fitStatusLabel(e.to_value)} /></span>
+      const pos = e.metadata?.position_title
+      const posNode = pos ? <span className="text-muted-foreground"> ({pos})</span> : null
+      if (e.to_value == null) return <>Cleared fit status{posNode} (was <span className="font-medium">{fitStatusLabel(e.from_value)}</span>)</>
+      if (e.from_value == null) return <>Set fit status{posNode} to <span className="font-medium">{fitStatusLabel(e.to_value)}</span></>
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          Fit status{pos ? <span className="text-muted-foreground">({pos})</span> : null}
+          <StateTransition from={fitStatusLabel(e.from_value)} to={fitStatusLabel(e.to_value)} />
+        </span>
+      )
     }
     case 'pipeline_status_changed': {
       const pos = e.metadata?.position_title

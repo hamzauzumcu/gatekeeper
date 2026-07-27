@@ -14,6 +14,9 @@ export type CandidateListItem = {
   salary_expectation: string | null
   latest_status: string | null
   latest_application_id: number | null
+  // Per-application value surfaced at the row level: the position-filtered
+  // application's status when a position filter is active, else the latest
+  // application's.
   fit_status: string | null
   notes_count: number
   ai_score: number | null
@@ -85,6 +88,7 @@ export type CandidateApplication = {
   position_title: string | null
   submitted_at: string | null
   status: string
+  fit_status: string | null
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
@@ -636,15 +640,19 @@ export async function updateApplicationsStageBulk(
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')
 }
 
+// Set fit status on each applicant's target application. Pass `position` when
+// the list is position-filtered so the write lands on that position's
+// application; without it the latest application is updated.
 export async function updateApplicantsFitStatus(
   ids: number[],
   fit_status: string | null,
-  createdBy?: string
+  createdBy?: string,
+  position?: string
 ): Promise<void> {
   const res = await apiFetch('/api/applicants/fit-status', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids, fit_status, created_by: createdBy }),
+    body: JSON.stringify({ ids, fit_status, created_by: createdBy, ...(position ? { position } : {}) }),
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'update failed')

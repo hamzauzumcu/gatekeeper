@@ -227,12 +227,12 @@ export default function AdminPage({ user }: { user: User }) {
                           @{u.username} · {permSummary(u)}
                         </span>
                       </span>
-                      <span className="shrink-0 text-right" title={formatDate(u.last_login_at)}>
+                      <span className="shrink-0 text-right" title={formatDate(u.last_active_at)}>
                         <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/70">
-                          Last login
+                          Last active
                         </span>
                         <span className="block text-xs text-muted-foreground">
-                          {u.last_login_at ? formatRelativeTime(u.last_login_at) : 'Never'}
+                          {u.last_active_at ? formatRelativeTime(u.last_active_at) : 'Never'}
                         </span>
                       </span>
                     </button>
@@ -349,8 +349,8 @@ export default function AdminPage({ user }: { user: User }) {
                   <dd>{formatDate(selectedUser.created_at)}</dd>
                   <dt className="text-muted-foreground">Activated</dt>
                   <dd>{formatDate(selectedUser.activated_at)}</dd>
-                  <dt className="text-muted-foreground">Last login</dt>
-                  <dd>{selectedUser.last_login_at ? formatDate(selectedUser.last_login_at) : 'Never signed in'}</dd>
+                  <dt className="text-muted-foreground">Last active</dt>
+                  <dd>{selectedUser.last_active_at ? formatDate(selectedUser.last_active_at) : 'Never used'}</dd>
                 </dl>
               )}
 
