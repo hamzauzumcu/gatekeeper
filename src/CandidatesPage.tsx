@@ -1318,19 +1318,14 @@ export default function CandidatesPage({
 
   // Would a row drop out of the active filter set once it carries `fitStatus`
   // (marked by the current user)? Both the status chip and the "Marked By" chip
-  // can push it out — marking a candidate myself takes it out of a "not marked
-  // by me" review queue.
+  // can push it out — re-marking a colleague's call makes it mine, so it leaves
+  // a list filtered to their name.
   function fitChangeExitsFilters(fitStatus: string | null): boolean {
     const statusExits =
       filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
     const by = filters.fit_status_by
-    const markedByExits =
-      by.length > 0 &&
-      (fitStatus === null
-        ? filters.fit_status_by_mode === 'any' // clearing drops the attribution too
-        : filters.fit_status_by_mode === 'none'
-          ? by.includes(currentUser.username)
-          : !by.includes(currentUser.username))
+    // Clearing the status drops the attribution with it, so any name filter fails.
+    const markedByExits = by.length > 0 && (fitStatus === null || !by.includes(currentUser.username))
     return statusExits || markedByExits
   }
 
@@ -1444,11 +1439,7 @@ export default function CandidatesPage({
     if (key === 'country') updateFilter('countries', [])
     else if (key === 'position') updateFilter('position', '')
     else if (key === 'status') updateFilter('fit_statuses', [])
-    else if (key === 'marked_by') {
-      const next = { ...filters, fit_status_by: [], fit_status_by_mode: 'any' as const }
-      setFilters(next)
-      saveFilters(next)
-    }
+    else if (key === 'marked_by') updateFilter('fit_status_by', [])
     else if (key === 'score') {
       const next = { ...filters, min_score: '', max_score: '' }
       setFilters(next)
@@ -1971,37 +1962,13 @@ export default function CandidatesPage({
               summary={
                 filters.fit_status_by.length === 0
                   ? null
-                  : `${filters.fit_status_by_mode === 'none' ? 'not ' : ''}${
-                      filters.fit_status_by.length === 1
-                        ? (teamUsers.find((u) => u.username === filters.fit_status_by[0])?.full_name ??
-                           filters.fit_status_by[0])
-                        : `${filters.fit_status_by.length} people`
-                    }`
+                  : filters.fit_status_by.length === 1
+                    ? (teamUsers.find((u) => u.username === filters.fit_status_by[0])?.full_name ??
+                       filters.fit_status_by[0])
+                    : `${filters.fit_status_by.length} people`
               }
               onRemove={() => removeFilterKind('marked_by')}
             >
-              {/* Mode switch first: "is not me" is the review workflow — surface
-                  everything someone else judged so a second pair of eyes sees it. */}
-              <div className="flex gap-1 border-b p-1.5">
-                {([
-                  { value: 'any', label: 'Marked by' },
-                  { value: 'none', label: 'Not marked by' },
-                ] as const).map((m) => (
-                  <button
-                    key={m.value}
-                    type="button"
-                    onClick={() => updateFilter('fit_status_by_mode', m.value)}
-                    className={[
-                      'flex-1 rounded px-2 py-1 text-xs font-medium',
-                      filters.fit_status_by_mode === m.value
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent',
-                    ].join(' ')}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
               <OptionCheckList
                 options={teamUsers.map((u) => ({
                   value: u.username,

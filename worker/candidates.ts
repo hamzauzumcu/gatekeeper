@@ -249,11 +249,9 @@ export type CandidateFilterOpts = {
   countries?: string[]
   position?: string
   fit_statuses?: string[]
-  // Usernames the fit status was set by. `fit_status_by_mode` picks whether the
-  // list is an allow list ('any', default) or a deny list ('none') — the deny
-  // form is what lets a reviewer pull up everything *someone else* marked.
+  // Usernames whose fit-status calls to show — pick the colleagues whose
+  // judgments you want to review.
   fit_status_by?: string[]
-  fit_status_by_mode?: string
   answerFilters?: AnswerFilter[]
   min_score?: string
   max_score?: string
@@ -330,17 +328,12 @@ function buildCandidateConditions(
 
   // "Marked by" constrains the same application as the status filter, so
   // position + status + marked-by read as one sentence: "good fits for this
-  // role that I did not mark myself". In deny mode an unmarked application
-  // qualifies — it is by definition not marked by the excluded users.
+  // role that Burak marked".
   const markedBy = (opts.fit_status_by ?? []).filter((u) => typeof u === 'string' && u.trim() !== '')
   if (markedBy.length > 0) {
     const placeholders = markedBy.map(() => `?${++idx}`).join(', ')
     bindings.push(...markedBy)
-    appConditions.push(
-      opts.fit_status_by_mode === 'none'
-        ? `(a2.fit_status_by IS NULL OR a2.fit_status_by NOT IN (${placeholders}))`
-        : `a2.fit_status_by IN (${placeholders})`
-    )
+    appConditions.push(`a2.fit_status_by IN (${placeholders})`)
   }
 
   if (appConditions.length > 0) {
