@@ -130,12 +130,17 @@ const FIT_STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   not_fit: { badge: 'bg-red-50 text-red-700 border-red-200', label: 'Not Fit' },
 }
 
-function FitBadge({ status }: { status: string | null }) {
+// `by` is the display name of whoever set the status — surfaced as a tooltip so
+// a reviewer can tell at a glance whose call they are looking at.
+function FitBadge({ status, by }: { status: string | null; by?: string | null }) {
   if (!status) return null
   const s = FIT_STATUS_STYLES[status]
   if (!s) return null
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${s.badge}`}>
+    <span
+      title={by ? `${s.label} — marked by ${by}` : undefined}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${s.badge}`}
+    >
       {s.label}
     </span>
   )
@@ -328,6 +333,7 @@ const FIXED_FILTER_KINDS = [
   { key: 'country', label: 'Country' },
   { key: 'position', label: 'Position' },
   { key: 'status', label: 'Status' },
+  { key: 'marked_by', label: 'Marked By' },
   { key: 'score', label: 'AI Score' },
   { key: 'interview_score', label: 'Scorecard Score' },
 ] as const
@@ -1100,6 +1106,7 @@ export default function CandidatesPage({
     if (f.countries.length) s.add('country')
     if (f.position) s.add('position')
     if (f.fit_statuses.length) s.add('status')
+    if (f.fit_status_by.length) s.add('marked_by')
     if (f.min_score || f.max_score) s.add('score')
     if (f.min_interview_score || f.max_interview_score) s.add('interview_score')
     return s
@@ -1176,10 +1183,14 @@ export default function CandidatesPage({
     new Set([...visibleQuestionIds, ...filters.answerFilters.map((f) => f.questionId).filter(Boolean)])
   )
 
+  // Team roster for the "Marked by" filter (cached in the lib helper).
+  const [teamUsers, setTeamUsers] = useState<AppUser[]>([])
+
   useEffect(() => {
     fetchFilterOptions().then(setFilterOptions).catch(() => {})
     fetchQuestionColumns().then(setQuestionColumns).catch(() => {})
     fetchSavedFilters().then(setSavedFilters).catch(() => {})
+    fetchUsers().then(setTeamUsers).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -1295,6 +1306,34 @@ export default function CandidatesPage({
     saveFilters(next)
   }
 
+  // Local row patch mirroring what the server writes on a fit-status change:
+  // the verdict plus its author, cleared together when the status is cleared.
+  function fitPatch(fitStatus: string | null): Pick<CandidateListItem, 'fit_status' | 'fit_status_by' | 'fit_status_by_name'> {
+    return {
+      fit_status: fitStatus,
+      fit_status_by: fitStatus === null ? null : currentUser.username,
+      fit_status_by_name: fitStatus === null ? null : currentUser.fullName,
+    }
+  }
+
+  // Would a row drop out of the active filter set once it carries `fitStatus`
+  // (marked by the current user)? Both the status chip and the "Marked By" chip
+  // can push it out — marking a candidate myself takes it out of a "not marked
+  // by me" review queue.
+  function fitChangeExitsFilters(fitStatus: string | null): boolean {
+    const statusExits =
+      filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
+    const by = filters.fit_status_by
+    const markedByExits =
+      by.length > 0 &&
+      (fitStatus === null
+        ? filters.fit_status_by_mode === 'any' // clearing drops the attribution too
+        : filters.fit_status_by_mode === 'none'
+          ? by.includes(currentUser.username)
+          : !by.includes(currentUser.username))
+    return statusExits || markedByExits
+  }
+
   function clearFilters() {
     const cleared: ActiveFilters = { ...EMPTY_FILTERS }
     setFilters(cleared)
@@ -1405,6 +1444,11 @@ export default function CandidatesPage({
     if (key === 'country') updateFilter('countries', [])
     else if (key === 'position') updateFilter('position', '')
     else if (key === 'status') updateFilter('fit_statuses', [])
+    else if (key === 'marked_by') {
+      const next = { ...filters, fit_status_by: [], fit_status_by_mode: 'any' as const }
+      setFilters(next)
+      saveFilters(next)
+    }
     else if (key === 'score') {
       const next = { ...filters, min_score: '', max_score: '' }
       setFilters(next)
@@ -1495,11 +1539,10 @@ export default function CandidatesPage({
   async function handleSheetFitStatus(fitStatus: string | null) {
     if (!selected) return
     const candId = selected.applicant.id
-    const willExit =
-      filters.fit_statuses.length > 0 &&
-      (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
-    setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
-    setBoardCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+    const willExit = fitChangeExitsFilters(fitStatus)
+    const patch = (c: CandidateListItem) => (c.id === candId ? { ...c, ...fitPatch(fitStatus) } : c)
+    setCandidates((prev) => prev.map(patch))
+    setBoardCandidates((prev) => prev.map(patch))
     if (willExit && openedIndex >= 0) {
       const nextCand = openedIndex + 1 < candidates.length ? candidates[openedIndex + 1] : null
       const prevCand = openedIndex > 0 ? candidates[openedIndex - 1] : null
@@ -1520,8 +1563,9 @@ export default function CandidatesPage({
       await updateApplicantsFitStatus([candId], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
     } catch {
-      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
-      setBoardCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: null } : c)))
+      const revert = (c: CandidateListItem) => (c.id === candId ? { ...c, ...fitPatch(null) } : c)
+      setCandidates((prev) => prev.map(revert))
+      setBoardCandidates((prev) => prev.map(revert))
     }
   }
 
@@ -1552,14 +1596,14 @@ export default function CandidatesPage({
 
   async function assignFitStatus(fitStatus: string | null) {
     if (selectedIds.size === 0) return
-    const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
+    const willExit = fitChangeExitsFilters(fitStatus)
     const exitIds = willExit ? [...selectedIds] : []
     setBulkLoading(true)
     try {
       await updateApplicantsFitStatus([...selectedIds], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
       setCandidates((prev) =>
-        prev.map((c) => (selectedIds.has(c.id) ? { ...c, fit_status: fitStatus } : c))
+        prev.map((c) => (selectedIds.has(c.id) ? { ...c, ...fitPatch(fitStatus) } : c))
       )
       setSelectedIds(new Set())
       if (willExit && exitIds.length > 0) {
@@ -1599,11 +1643,11 @@ export default function CandidatesPage({
   }
 
   async function assignSingleFitStatus(candId: number, fitStatus: string | null) {
-    const willExit = filters.fit_statuses.length > 0 && (fitStatus === null || !filters.fit_statuses.includes(fitStatus))
+    const willExit = fitChangeExitsFilters(fitStatus)
     try {
       await updateApplicantsFitStatus([candId], fitStatus, currentUser.username, filters.position || undefined)
       refreshDailyProgress()
-      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, fit_status: fitStatus } : c)))
+      setCandidates((prev) => prev.map((c) => (c.id === candId ? { ...c, ...fitPatch(fitStatus) } : c)))
       if (willExit) {
         setExitingIds((prev) => new Set([...prev, candId]))
         setTimeout(() => {
@@ -1918,6 +1962,64 @@ export default function CandidatesPage({
             </FilterChip>
           )}
 
+          {shownKinds.has('marked_by') && (
+            <FilterChip
+              id="marked_by"
+              openChip={openChip}
+              setOpenChip={setOpenChip}
+              label="Marked By"
+              summary={
+                filters.fit_status_by.length === 0
+                  ? null
+                  : `${filters.fit_status_by_mode === 'none' ? 'not ' : ''}${
+                      filters.fit_status_by.length === 1
+                        ? (teamUsers.find((u) => u.username === filters.fit_status_by[0])?.full_name ??
+                           filters.fit_status_by[0])
+                        : `${filters.fit_status_by.length} people`
+                    }`
+              }
+              onRemove={() => removeFilterKind('marked_by')}
+            >
+              {/* Mode switch first: "is not me" is the review workflow — surface
+                  everything someone else judged so a second pair of eyes sees it. */}
+              <div className="flex gap-1 border-b p-1.5">
+                {([
+                  { value: 'any', label: 'Marked by' },
+                  { value: 'none', label: 'Not marked by' },
+                ] as const).map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => updateFilter('fit_status_by_mode', m.value)}
+                    className={[
+                      'flex-1 rounded px-2 py-1 text-xs font-medium',
+                      filters.fit_status_by_mode === m.value
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-accent',
+                    ].join(' ')}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <OptionCheckList
+                options={teamUsers.map((u) => ({
+                  value: u.username,
+                  label: u.username === currentUser.username ? `${u.full_name} (me)` : u.full_name,
+                }))}
+                values={filters.fit_status_by}
+                onToggle={(v) =>
+                  updateFilter(
+                    'fit_status_by',
+                    filters.fit_status_by.includes(v)
+                      ? filters.fit_status_by.filter((x) => x !== v)
+                      : [...filters.fit_status_by, v]
+                  )
+                }
+              />
+            </FilterChip>
+          )}
+
           {shownKinds.has('score') && (
             <FilterChip
               id="score"
@@ -2183,7 +2285,7 @@ export default function CandidatesPage({
                       )}
                       {isBaseVisible('status') && (
                       <TableCell>
-                        <FitBadge status={cand.fit_status} />
+                        <FitBadge status={cand.fit_status} by={cand.fit_status_by_name} />
                       </TableCell>
                       )}
                       {isBaseVisible('score') && (
@@ -2678,7 +2780,7 @@ function PipelineBoard({
                           </div>
                         )}
                         <div className="mt-1.5 flex items-center gap-2">
-                          {c.fit_status && <FitBadge status={c.fit_status} />}
+                          {c.fit_status && <FitBadge status={c.fit_status} by={c.fit_status_by_name} />}
                           {c.country && <span className="truncate text-xs text-muted-foreground">{c.country}</span>}
                         </div>
                       </div>
@@ -2767,6 +2869,9 @@ function CandidateDetailView({
     applications[0] ??
     null
   const [fitStatus, setFitStatus] = useState<string | null>(contextApp?.fit_status ?? null)
+  // Display name of whoever set that status — tracked alongside so the header
+  // badge stays truthful after the bottom bar changes it, without a refetch.
+  const [fitBy, setFitBy] = useState<string | null>(contextApp?.fit_status_by_name ?? null)
   const [cvOpen, setCvOpen] = useState(false)
   const [fx, setFx] = useState<FxRates | null>(null)
   // Locally-applied salary corrections, keyed by `${applicationId}:${questionId}`.
@@ -2832,6 +2937,7 @@ function CandidateDetailView({
 
   useEffect(() => {
     setFitStatus(contextApp?.fit_status ?? null)
+    setFitBy(contextApp?.fit_status_by_name ?? null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applicant.id])
 
@@ -2874,6 +2980,7 @@ function CandidateDetailView({
   function handleFitClick(status: string) {
     const next = fitStatus === status ? null : status
     setFitStatus(next)
+    setFitBy(next === null ? null : currentUser.fullName)
     onFitStatus(next)
     setHistoryVersion((v) => v + 1)
   }
@@ -2933,7 +3040,7 @@ function CandidateDetailView({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <SheetTitle className="text-xl">{applicant.full_name ?? 'Candidate'}</SheetTitle>
-                {fitStatus && <FitBadge status={fitStatus} />}
+                {fitStatus && <FitBadge status={fitStatus} by={fitBy} />}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                 {applicant.email && (
@@ -3048,7 +3155,10 @@ function CandidateDetailView({
                       {/* Per-application fit badge; the context application mirrors
                           the bottom-bar state so it updates without a refetch. */}
                       {(app.id === contextApp?.id ? fitStatus : app.fit_status) && (
-                        <FitBadge status={(app.id === contextApp?.id ? fitStatus : app.fit_status) as string} />
+                        <FitBadge
+                          status={(app.id === contextApp?.id ? fitStatus : app.fit_status) as string}
+                          by={app.id === contextApp?.id ? fitBy : app.fit_status_by_name}
+                        />
                       )}
                       {app.ai_score != null && <ScoreBadge score={app.ai_score} />}
                       {app.interview_score != null && (
@@ -3063,6 +3173,14 @@ function CandidateDetailView({
                       {applications.length > 1 && (
                         <span className="ml-2 font-medium text-foreground/50">#{idx + 1}</span>
                       )}
+                      {/* Attribution spelled out here (not just as a badge
+                          tooltip) so a reviewer checking someone else's call
+                          sees whose it is without hovering. */}
+                      {(() => {
+                        const by = app.id === contextApp?.id ? fitBy : app.fit_status_by_name
+                        const status = app.id === contextApp?.id ? fitStatus : app.fit_status
+                        return status && by ? <span className="ml-2">marked by {by}</span> : null
+                      })()}
                     </div>
                     {app.ai_score_reasoning && <ScoreReasoning raw={app.ai_score_reasoning} />}
                     {app.ai_score != null && <ScoreHistorySection applicationId={app.id} />}

@@ -41,7 +41,7 @@ export type CandidateEvent = {
 
 // Resolve a username to its display name. Unknown users (e.g. legacy handles not
 // in the users table) fall back to the raw username so an event is never blank.
-async function resolveActorName(db: D1Database, username: string): Promise<string> {
+export async function resolveActorName(db: D1Database, username: string): Promise<string> {
   const row = await db
     .prepare(`SELECT full_name FROM users WHERE username = ?`)
     .bind(username)

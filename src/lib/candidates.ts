@@ -18,6 +18,10 @@ export type CandidateListItem = {
   // application's status when a position filter is active, else the latest
   // application's.
   fit_status: string | null
+  // Who last set that fit status — username and display name, scoped to the
+  // same application as fit_status. null when nobody has marked it.
+  fit_status_by: string | null
+  fit_status_by_name: string | null
   notes_count: number
   ai_score: number | null
   // Interview scorecard final score of the latest application (server-side
@@ -89,6 +93,9 @@ export type CandidateApplication = {
   submitted_at: string | null
   status: string
   fit_status: string | null
+  fit_status_by: string | null
+  fit_status_by_name: string | null
+  fit_status_at: string | null
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
@@ -189,10 +196,16 @@ export function defaultOpForType(type: QuestionColumn['type']): AnswerFilterOp {
   }
 }
 
+export type FitStatusByMode = 'any' | 'none'
+
 export type ActiveFilters = {
   countries: string[]
   position: string
   fit_statuses: string[]
+  // Usernames whose fit-status calls to show ('any') or hide ('none'). The
+  // 'none' mode is the review case: everything marked by someone other than me.
+  fit_status_by: string[]
+  fit_status_by_mode: FitStatusByMode
   answerFilters: AnswerFilter[]
   min_score: string
   max_score: string
@@ -240,6 +253,8 @@ export function loadSavedFilters(): ActiveFilters {
             : [],
         position: typeof parsed.position === 'string' ? parsed.position : '',
         fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
+        fit_status_by: Array.isArray(parsed.fit_status_by) ? (parsed.fit_status_by as string[]) : [],
+        fit_status_by_mode: parsed.fit_status_by_mode === 'none' ? 'none' : 'any',
         answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
         min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
         max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
@@ -257,6 +272,8 @@ export const EMPTY_FILTERS: ActiveFilters = {
   countries: [],
   position: '',
   fit_statuses: [],
+  fit_status_by: [],
+  fit_status_by_mode: 'any',
   answerFilters: [],
   min_score: '',
   max_score: '',
@@ -359,6 +376,10 @@ function appendFilterParams(params: URLSearchParams, filters: ActiveFilters): vo
   filters.countries.forEach((c) => params.append('country', c))
   if (filters.position) params.set('position', filters.position)
   filters.fit_statuses.forEach((s) => params.append('fit_status', s))
+  filters.fit_status_by.forEach((u) => params.append('fit_status_by', u))
+  if (filters.fit_status_by.length > 0 && filters.fit_status_by_mode === 'none') {
+    params.set('fit_status_by_mode', 'none')
+  }
   filters.answerFilters.forEach((f) => {
     params.append('af_q', String(f.questionId))
     params.append('af_op', f.op)
@@ -902,6 +923,8 @@ function normalizeFilters(parsed: Record<string, unknown>): ActiveFilters {
     countries: Array.isArray(parsed.countries) ? (parsed.countries as string[]) : [],
     position: typeof parsed.position === 'string' ? parsed.position : '',
     fit_statuses: Array.isArray(parsed.fit_statuses) ? (parsed.fit_statuses as string[]) : [],
+    fit_status_by: Array.isArray(parsed.fit_status_by) ? (parsed.fit_status_by as string[]) : [],
+    fit_status_by_mode: parsed.fit_status_by_mode === 'none' ? 'none' : 'any',
     answerFilters: Array.isArray(parsed.answerFilters) ? (parsed.answerFilters as AnswerFilter[]) : [],
     min_score: typeof parsed.min_score === 'string' ? parsed.min_score : '',
     max_score: typeof parsed.max_score === 'string' ? parsed.max_score : '',
@@ -968,6 +991,7 @@ export function shownKindsForFilters(f: ActiveFilters): string[] {
   if (f.countries.length) kinds.push('country')
   if (f.position) kinds.push('position')
   if (f.fit_statuses.length) kinds.push('status')
+  if (f.fit_status_by.length) kinds.push('marked_by')
   if (f.min_score || f.max_score) kinds.push('score')
   if (f.min_interview_score || f.max_interview_score) kinds.push('interview_score')
   return kinds

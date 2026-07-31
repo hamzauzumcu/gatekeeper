@@ -1,7 +1,7 @@
 // Candidate list and detail queries (read-only).
 
 import { CV_COLUMNS } from './cv-schema'
-import { logCandidateEvents } from './events'
+import { logCandidateEvents, resolveActorName } from './events'
 
 export type CandidateListItem = {
   id: number
@@ -20,6 +20,10 @@ export type CandidateListItem = {
   // application's status when a position filter is active, else the latest
   // application's.
   fit_status: string | null
+  // Who last set that fit status (username + display-name snapshot), scoped to
+  // the same application as fit_status. NULL when nobody has marked it.
+  fit_status_by: string | null
+  fit_status_by_name: string | null
   notes_count: number
   ai_score: number | null
   // Interview scorecard final score of the latest application (denormalized
@@ -37,6 +41,9 @@ export type CandidateApplication = {
   submitted_at: string | null
   status: string
   fit_status: string | null
+  fit_status_by: string | null
+  fit_status_by_name: string | null
+  fit_status_at: string | null
   resume_url: string | null
   cover_letter: string | null
   answers: CandidateAnswer[]
@@ -242,6 +249,11 @@ export type CandidateFilterOpts = {
   countries?: string[]
   position?: string
   fit_statuses?: string[]
+  // Usernames the fit status was set by. `fit_status_by_mode` picks whether the
+  // list is an allow list ('any', default) or a deny list ('none') — the deny
+  // form is what lets a reviewer pull up everything *someone else* marked.
+  fit_status_by?: string[]
+  fit_status_by_mode?: string
   answerFilters?: AnswerFilter[]
   min_score?: string
   max_score?: string
@@ -316,6 +328,21 @@ function buildCandidateConditions(
     appConditions.push(parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`)
   }
 
+  // "Marked by" constrains the same application as the status filter, so
+  // position + status + marked-by read as one sentence: "good fits for this
+  // role that I did not mark myself". In deny mode an unmarked application
+  // qualifies — it is by definition not marked by the excluded users.
+  const markedBy = (opts.fit_status_by ?? []).filter((u) => typeof u === 'string' && u.trim() !== '')
+  if (markedBy.length > 0) {
+    const placeholders = markedBy.map(() => `?${++idx}`).join(', ')
+    bindings.push(...markedBy)
+    appConditions.push(
+      opts.fit_status_by_mode === 'none'
+        ? `(a2.fit_status_by IS NULL OR a2.fit_status_by NOT IN (${placeholders}))`
+        : `a2.fit_status_by IN (${placeholders})`
+    )
+  }
+
   if (appConditions.length > 0) {
     conditions.push(
       `EXISTS (SELECT 1 FROM applications a2 JOIN job_positions p2 ON p2.id = a2.position_id WHERE a2.applicant_id = ap.id AND ${appConditions.join(' AND ')})`
@@ -384,18 +411,19 @@ export async function listCandidates(
   const { conditions, bindings, positionParamIdx } = buildCandidateConditions(opts)
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  // Row-level fit status follows the filter context: the position-filtered
-  // application's value when a position filter is active (reusing that
-  // filter's ?N binding), else the latest application's.
-  const fitStatusExpr =
+  // Row-level fit status (and who set it) follows the filter context: the
+  // position-filtered application's value when a position filter is active
+  // (reusing that filter's ?N binding), else the latest application's.
+  const fitColExpr = (col: string, alias: string) =>
     positionParamIdx !== null
-      ? `(SELECT a_fs.fit_status FROM applications a_fs
-           JOIN job_positions p_fs ON p_fs.id = a_fs.position_id
-           WHERE a_fs.applicant_id = ap.id AND p_fs.title = ?${positionParamIdx}
-           ORDER BY a_fs.submitted_at DESC LIMIT 1)`
-      : `(SELECT a_fs.fit_status FROM applications a_fs
-           WHERE a_fs.applicant_id = ap.id
-           ORDER BY a_fs.submitted_at DESC LIMIT 1)`
+      ? `(SELECT ${alias}.${col} FROM applications ${alias}
+           JOIN job_positions p_${alias} ON p_${alias}.id = ${alias}.position_id
+           WHERE ${alias}.applicant_id = ap.id AND p_${alias}.title = ?${positionParamIdx}
+           ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
+      : `(SELECT ${alias}.${col} FROM applications ${alias}
+           WHERE ${alias}.applicant_id = ap.id
+           ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
+  const fitStatusExpr = fitColExpr('fit_status', 'a_fs')
 
   const extraColSelects = extraCols
     .map((qId) => {
@@ -414,6 +442,8 @@ export async function listCandidates(
   const listSql = `
     SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
            ${fitStatusExpr} AS fit_status,
+           ${fitColExpr('fit_status_by', 'a_fb')} AS fit_status_by,
+           ${fitColExpr('fit_status_by_name', 'a_fn')} AS fit_status_by_name,
            count(a.id)            AS applications_count,
            max(a.submitted_at)    AS latest_submitted_at,
            group_concat(DISTINCT p.title) AS positions,
@@ -668,9 +698,18 @@ export async function updateApplicantsFitStatus(
   const targetRows = targets.results ?? []
   if (targetRows.length === 0) return 0
   const appPlaceholders = targetRows.map(() => '?').join(',')
+  // Attribution rides along with the verdict: set it to the acting user, and
+  // clear it when the status itself is cleared so no stale name lingers.
+  const actorName = fit_status !== null && actor ? await resolveActorName(db, actor) : null
+  const byUser = fit_status !== null ? (actor ?? null) : null
+  const setAt = fit_status !== null ? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') : null
   const res = await db
-    .prepare(`UPDATE applications SET fit_status = ? WHERE id IN (${appPlaceholders})`)
-    .bind(fit_status, ...targetRows.map((r) => r.id))
+    .prepare(
+      `UPDATE applications
+          SET fit_status = ?, fit_status_by = ?, fit_status_by_name = ?, fit_status_at = ?
+        WHERE id IN (${appPlaceholders})`
+    )
+    .bind(fit_status, byUser, actorName, setAt, ...targetRows.map((r) => r.id))
     .run()
   const events = targetRows
     .filter((r) => (r.fit_status ?? null) !== fit_status)
@@ -800,6 +839,12 @@ export async function getCandidate(
               (SELECT a_fs.fit_status FROM applications a_fs
                 WHERE a_fs.applicant_id = ap.id
                 ORDER BY a_fs.submitted_at DESC LIMIT 1) AS fit_status,
+              (SELECT a_fb.fit_status_by FROM applications a_fb
+                WHERE a_fb.applicant_id = ap.id
+                ORDER BY a_fb.submitted_at DESC LIMIT 1) AS fit_status_by,
+              (SELECT a_fn.fit_status_by_name FROM applications a_fn
+                WHERE a_fn.applicant_id = ap.id
+                ORDER BY a_fn.submitted_at DESC LIMIT 1) AS fit_status_by_name,
               count(a.id) AS applications_count,
               max(a.submitted_at) AS latest_submitted_at,
               group_concat(DISTINCT p.title) AS positions,
@@ -816,7 +861,9 @@ export async function getCandidate(
 
   const apps = await db
     .prepare(
-      `SELECT a.id, a.submitted_at, a.status, a.fit_status, a.resume_url, a.cover_letter,
+      `SELECT a.id, a.submitted_at, a.status, a.fit_status,
+              a.fit_status_by, a.fit_status_by_name, a.fit_status_at,
+              a.resume_url, a.cover_letter,
               a.resume_parsed, a.resume_parse_version,
               a.ai_score, a.ai_score_reasoning,
               a.interview_score, a.interview_score_complete,

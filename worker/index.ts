@@ -262,6 +262,8 @@ function parseCandidateFilters(req: {
     countries: req.queries('country') ?? [],
     position: req.query('position') ?? '',
     fit_statuses: req.queries('fit_status') ?? [],
+    fit_status_by: req.queries('fit_status_by') ?? [],
+    fit_status_by_mode: req.query('fit_status_by_mode') === 'none' ? 'none' : 'any',
     answerFilters: afQ
       .map((questionId, i) => ({ questionId, op: afOp[i] ?? '', value: afV[i] ?? '' }))
       .filter((f) => Number.isInteger(f.questionId) && f.op),
