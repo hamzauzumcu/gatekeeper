@@ -383,17 +383,22 @@ function appendFilterParams(params: URLSearchParams, filters: ActiveFilters): vo
   if (filters.max_interview_score) params.set('max_interview_score', filters.max_interview_score)
 }
 
+// `onBoard` restricts the result to candidates sitting in a pipeline stage —
+// the board's fetch is unpaginated, so it must not spend its budget on
+// off-board applicants that never become cards.
 export async function fetchCandidates(
   q: string,
   filters: ActiveFilters,
   extraCols: number[],
   offset = 0,
   limit = 50,
-  sort: SortState | null = null
+  sort: SortState | null = null,
+  onBoard = false
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   const params = new URLSearchParams({ q, limit: String(limit), offset: String(offset) })
   appendFilterParams(params, filters)
   extraCols.forEach((id) => params.append('extra_col', String(id)))
+  if (onBoard) params.set('on_board', '1')
   if (sort) {
     params.set('sort', sort.key)
     params.set('dir', sort.dir)

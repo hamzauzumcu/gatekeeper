@@ -290,8 +290,11 @@ app.get('/api/candidates', async (c) => {
   const sort = c.req.query('sort') ?? ''
   const dir = c.req.query('dir') ?? ''
   const sortNumeric = c.req.query('sort_numeric') === '1'
+  // Board view asks for pipeline candidates only, so its one unpaginated fetch
+  // isn't spent on off-board applicants it would just discard.
+  const onBoard = c.req.query('on_board') === '1'
   const canViewSalary = c.get('auth')?.permissions.view_salary ?? false
-  const data = await listCandidates(c.env.DB, { ...parseCandidateFilters(c.req), limit, offset, extraCols, sort, dir, sortNumeric, canViewSalary })
+  const data = await listCandidates(c.env.DB, { ...parseCandidateFilters(c.req), limit, offset, extraCols, sort, dir, sortNumeric, onBoard, canViewSalary })
   return c.json({ ok: true, ...data })
 })
 

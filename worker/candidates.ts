@@ -14,6 +14,10 @@ export type CandidateListItem = {
   latest_submitted_at: string | null
   positions: string | null // group_concat
   salary_expectation: string | null
+  // Pipeline stage + id of the application this row stands for: the
+  // position-filtered one when a position filter is active, else the latest.
+  // The board groups cards by latest_status and drags move latest_application_id,
+  // so both must point at the same application the rest of the row describes.
   latest_status: string | null
   latest_application_id: number | null
   // Per-application value surfaced at the row level: the position-filtered
@@ -257,6 +261,27 @@ export type CandidateFilterOpts = {
   max_score?: string
   min_interview_score?: string
   max_interview_score?: string
+  // Board view: keep only candidates actually sitting in a pipeline stage.
+  // Without it the board's single fetch is dominated by off-board applicants
+  // (status 'none' is the default), which it then discards client-side — so
+  // anyone in a stage but outside the newest N arrivals never got a card.
+  onBoard?: boolean
+}
+
+// Per-application column read at the applicant-row level. With a position
+// filter active it reads that position's application (reusing the filter's ?N
+// binding); otherwise the latest one. Shared by the WHERE builder and the
+// SELECT list so a row's stage, fit status, and the application a drag moves
+// all describe the same application.
+function appColExpr(col: string, alias: string, positionParamIdx: number | null): string {
+  return positionParamIdx !== null
+    ? `(SELECT ${alias}.${col} FROM applications ${alias}
+         JOIN job_positions p_${alias} ON p_${alias}.id = ${alias}.position_id
+         WHERE ${alias}.applicant_id = ap.id AND p_${alias}.title = ?${positionParamIdx}
+         ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
+    : `(SELECT ${alias}.${col} FROM applications ${alias}
+         WHERE ${alias}.applicant_id = ap.id
+         ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
 }
 
 // WHERE conditions (over `applicants ap`) + bindings for a candidate filter
@@ -366,6 +391,16 @@ function buildCandidateConditions(
     bindings.push(maxScore)
   }
 
+  // Board view: only rows whose scoped application sits in a real stage. Same
+  // stage set the client renders columns for, so the fetched slice and the
+  // rendered board agree.
+  if (opts.onBoard) {
+    const stages = VALID_STATUSES.filter((s) => s !== OFF_BOARD_STATUS)
+    conditions.push(
+      `${appColExpr('status', 'a_ob', positionParamIdx)} IN (${stages.map((s) => `'${s}'`).join(', ')})`
+    )
+  }
+
   const interviewScoreSubq = `(SELECT a_is.interview_score FROM applications a_is WHERE a_is.applicant_id = ap.id ORDER BY a_is.submitted_at DESC LIMIT 1)`
   const minInterviewScore =
     opts.min_interview_score !== undefined && opts.min_interview_score !== '' ? Number(opts.min_interview_score) : null
@@ -397,26 +432,18 @@ export async function listCandidates(
 ): Promise<{ candidates: CandidateListItem[]; total: number }> {
   // Users without the view_salary permission never receive salary figures.
   const canViewSalary = opts.canViewSalary !== false
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+  // The board asks for its whole filtered set in one shot (no infinite scroll),
+  // so the ceiling has to clear BOARD_LIMIT — at 200 it silently dropped cards
+  // whose applications fell outside the newest 200 of the filtered set.
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500)
   const offset = Math.max(opts.offset ?? 0, 0)
   const extraCols = (opts.extraCols ?? []).filter((n) => Number.isInteger(n) && n !== 0)
 
   const { conditions, bindings, positionParamIdx } = buildCandidateConditions(opts)
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  // Row-level fit status (and who set it) follows the filter context: the
-  // position-filtered application's value when a position filter is active
-  // (reusing that filter's ?N binding), else the latest application's.
-  const fitColExpr = (col: string, alias: string) =>
-    positionParamIdx !== null
-      ? `(SELECT ${alias}.${col} FROM applications ${alias}
-           JOIN job_positions p_${alias} ON p_${alias}.id = ${alias}.position_id
-           WHERE ${alias}.applicant_id = ap.id AND p_${alias}.title = ?${positionParamIdx}
-           ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
-      : `(SELECT ${alias}.${col} FROM applications ${alias}
-           WHERE ${alias}.applicant_id = ap.id
-           ORDER BY ${alias}.submitted_at DESC LIMIT 1)`
-  const fitStatusExpr = fitColExpr('fit_status', 'a_fs')
+  const rowCol = (col: string, alias: string) => appColExpr(col, alias, positionParamIdx)
+  const fitStatusExpr = rowCol('fit_status', 'a_fs')
 
   const extraColSelects = extraCols
     .map((qId) => {
@@ -435,8 +462,8 @@ export async function listCandidates(
   const listSql = `
     SELECT ap.id, ap.full_name, ap.email, ap.phone, ap.country, ap.linkedin_url,
            ${fitStatusExpr} AS fit_status,
-           ${fitColExpr('fit_status_by', 'a_fb')} AS fit_status_by,
-           ${fitColExpr('fit_status_by_name', 'a_fn')} AS fit_status_by_name,
+           ${rowCol('fit_status_by', 'a_fb')} AS fit_status_by,
+           ${rowCol('fit_status_by_name', 'a_fn')} AS fit_status_by_name,
            count(a.id)            AS applications_count,
            max(a.submitted_at)    AS latest_submitted_at,
            group_concat(DISTINCT p.title) AS positions,
@@ -454,12 +481,8 @@ export async function listCandidates(
             ORDER BY a_sal.submitted_at DESC
             LIMIT 1)`
              : `NULL`} AS salary_expectation,
-           (SELECT a_ls.status FROM applications a_ls
-            WHERE a_ls.applicant_id = ap.id
-            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_status,
-           (SELECT a_ls.id FROM applications a_ls
-            WHERE a_ls.applicant_id = ap.id
-            ORDER BY a_ls.submitted_at DESC LIMIT 1) AS latest_application_id,
+           ${rowCol('status', 'a_ls')} AS latest_status,
+           ${rowCol('id', 'a_lid')} AS latest_application_id,
            (SELECT a_sc.ai_score FROM applications a_sc
             WHERE a_sc.applicant_id = ap.id
             ORDER BY a_sc.submitted_at DESC LIMIT 1) AS ai_score,
@@ -572,6 +595,8 @@ export async function getIntakeStats(
 // 'none' = off the board (not in the pipeline). The rest are kanban stages,
 // ordered client-side in lib/candidates.ts PIPELINE_STAGES.
 const VALID_STATUSES = ['none', 'shortlisted', 'outreach', 'interviewing', 'interviewed', 'offer_sent', 'hired', 'rejected'] as const
+// Mirrors OFF_BOARD in lib/candidates.ts — the one status that is not a lane.
+const OFF_BOARD_STATUS = 'none'
 export const VALID_FIT_STATUSES = ['not_fit', 'good_fit', 'maybe'] as const
 export type FitStatus = typeof VALID_FIT_STATUSES[number]
 

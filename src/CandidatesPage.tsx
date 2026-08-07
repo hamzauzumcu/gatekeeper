@@ -1140,6 +1140,10 @@ export default function CandidatesPage({
   })
   const [boardCandidates, setBoardCandidates] = useState<CandidateListItem[]>([])
   const [boardLoading, setBoardLoading] = useState(false)
+  // Size of the filtered set behind the board. Larger than the fetched slice
+  // means BOARD_LIMIT clipped it — say so rather than render a silently
+  // incomplete pipeline.
+  const [boardTotal, setBoardTotal] = useState(0)
 
   function changeView(next: 'table' | 'board') {
     setView(next)
@@ -1267,12 +1271,16 @@ export default function CandidatesPage({
     let active = true
     setBoardLoading(true)
     const t = setTimeout(() => {
-      fetchCandidates(q, filters, extraColIds, 0, BOARD_LIMIT, sort)
-        .then(({ candidates: page }) => {
-          if (active) setBoardCandidates(page)
+      fetchCandidates(q, filters, extraColIds, 0, BOARD_LIMIT, sort, true)
+        .then(({ candidates: page, total }) => {
+          if (!active) return
+          setBoardCandidates(page)
+          setBoardTotal(total)
         })
         .catch(() => {
-          if (active) setBoardCandidates([])
+          if (!active) return
+          setBoardCandidates([])
+          setBoardTotal(0)
         })
         .finally(() => {
           if (active) setBoardLoading(false)
@@ -2104,6 +2112,8 @@ export default function CandidatesPage({
           <PipelineBoard
             candidates={boardCandidates}
             loading={boardLoading}
+            truncated={!boardLoading && boardTotal > boardCandidates.length}
+            total={boardTotal}
             onOpen={(id) => openCandidate(id)}
             onMove={moveStage}
           />
@@ -2573,11 +2583,15 @@ const BOARD_COLLAPSE_KEY = 'gk_board_collapsed'
 function PipelineBoard({
   candidates,
   loading,
+  truncated,
+  total,
   onOpen,
   onMove,
 }: {
   candidates: CandidateListItem[]
   loading: boolean
+  truncated: boolean
+  total: number
   onOpen: (id: number) => void
   onMove: (cand: CandidateListItem, stage: string) => void
 }) {
@@ -2616,6 +2630,13 @@ function PipelineBoard({
 
   return (
     <div>
+      {truncated && (
+        <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          Showing {candidates.length} of {total} candidates in the pipeline — narrow your filters
+          to see the rest.
+        </div>
+      )}
+
       {/* Collapse controls */}
       <div className="mb-2 flex items-center justify-end gap-3 text-xs">
         {collapsibleEmpties.length > 0 && (
