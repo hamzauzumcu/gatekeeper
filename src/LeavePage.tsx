@@ -174,7 +174,9 @@ function entitlementOf(emp: Employee | undefined, year: string): Entitlement | n
 function entitlementNote(ent: Entitlement): string | null {
   if (!ent.known) return 'no start date on file'
   if (!ent.employed) return 'not employed yet'
-  if (ent.prorated) return `pro-rated from ${fmtNum(ent.base)} d`
+  // A 1 January hire works the whole year, so the share is the full figure —
+  // calling that "pro-rated" would only puzzle the reader.
+  if (ent.prorated && ent.days !== ent.base) return `pro-rated from ${fmtNum(ent.base)} d`
   return null
 }
 
