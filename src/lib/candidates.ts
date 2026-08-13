@@ -42,8 +42,8 @@ export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'
 
 // ── Pipeline stages (application.status) ────────────────────────────────────
 // The hiring funnel, ordered left→right as the kanban board renders them. This
-// array is the single source of truth for stage order; the DB CHECK in
-// migration 0010 and worker VALID_STATUSES only gate which values are valid.
+// array is the single source of truth for stage order; migration 0031 removed
+// the DB CHECK, so worker VALID_STATUSES is the only gate on writable values.
 // `terminal` marks end states (won/lost) shown as the rightmost lanes.
 export type PipelineStage = {
   value: string
@@ -54,12 +54,31 @@ export type PipelineStage = {
 export const PIPELINE_STAGES: PipelineStage[] = [
   { value: 'shortlisted', label: 'Shortlisted' },
   { value: 'outreach', label: 'Outreach' },
-  { value: 'interviewing', label: 'Interviewing' },
-  { value: 'interviewed', label: 'Interviewed' },
-  { value: 'offer_sent', label: 'Offer Sent' },
-  { value: 'hired', label: 'Hired', terminal: true },
-  { value: 'rejected', label: 'Rejected', terminal: true },
+  { value: 'hm_interview', label: 'HM Interview' },
+  { value: 'assignment', label: 'Assignment' },
+  { value: 'assignment_review', label: 'Assignment Review' },
+  { value: 'tech_deep_dive', label: 'Tech Deep Dive' },
+  { value: 'final_interview', label: 'Final Interview' },
+  { value: 'reference_check', label: 'Reference Check' },
+  { value: 'final_evaluation', label: 'Final Evaluation' },
+  // Offer is the won end state (a sent offer is the end of the funnel — the
+  // old separate 'hired' lane folded into it), Closed the lost/parked one
+  // (rejected, withdrawn, or on hold).
+  { value: 'offer', label: 'Offer', terminal: true },
+  { value: 'closed', label: 'Closed', terminal: true },
 ]
+
+// Stage values retired by migration 0031, mapped onto their successor.
+// Applications were migrated, but candidate_events rows store the stage value
+// that was current when the move happened, so an old timeline entry still
+// needs a label and a colour.
+const LEGACY_STAGES: Record<string, string> = {
+  interviewing: 'hm_interview',
+  interviewed: 'tech_deep_dive',
+  offer_sent: 'offer',
+  hired: 'offer',
+  rejected: 'closed',
+}
 
 // Applications start OFF the board with this status (DB default, migration
 // 0011). The board never renders an 'none' column — these candidates only
@@ -74,15 +93,18 @@ export function isOnBoard(value: string | null | undefined): boolean {
   return PIPELINE_STAGES.some((s) => s.value === value)
 }
 
-// Normalize an arbitrary/legacy status into a known stage value (off-board /
-// unknown values fall back to the entry stage). Use isOnBoard when you need to
-// distinguish "not in pipeline" from a real stage.
+// Normalize an arbitrary/legacy status into a known stage value (retired stages
+// resolve to their successor; off-board / unknown values fall back to the entry
+// stage). Use isOnBoard when you need to distinguish "not in pipeline" from a
+// real stage.
 export function normalizeStage(value: string | null | undefined): string {
-  return isOnBoard(value) ? (value as string) : DEFAULT_STAGE
+  const current = LEGACY_STAGES[value ?? ''] ?? value
+  return isOnBoard(current) ? (current as string) : DEFAULT_STAGE
 }
 
 export function stageLabel(value: string | null | undefined): string {
-  return PIPELINE_STAGES.find((s) => s.value === value)?.label ?? 'Shortlisted'
+  const current = LEGACY_STAGES[value ?? ''] ?? value
+  return PIPELINE_STAGES.find((s) => s.value === current)?.label ?? 'Shortlisted'
 }
 
 export type CandidateAnswer = { question_id: number; label: string; type: string; value: string | null }

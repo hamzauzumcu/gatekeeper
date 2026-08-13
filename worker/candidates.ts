@@ -591,10 +591,25 @@ export async function getIntakeStats(
 }
 
 // Hiring-pipeline stages (kanban). Order is defined client-side in
-// lib/candidates.ts PIPELINE_STAGES; here we only gate which values are writable.
+// lib/candidates.ts PIPELINE_STAGES; here we gate which values are writable.
 // 'none' = off the board (not in the pipeline). The rest are kanban stages,
-// ordered client-side in lib/candidates.ts PIPELINE_STAGES.
-const VALID_STATUSES = ['none', 'shortlisted', 'outreach', 'interviewing', 'interviewed', 'offer_sent', 'hired', 'rejected'] as const
+// ordered client-side in lib/candidates.ts PIPELINE_STAGES. Migration 0031
+// dropped the CHECK on applications.status, so this list is the only gate —
+// keep it in sync with PIPELINE_STAGES.
+const VALID_STATUSES = [
+  'none',
+  'shortlisted',
+  'outreach',
+  'hm_interview',
+  'assignment',
+  'assignment_review',
+  'tech_deep_dive',
+  'final_interview',
+  'reference_check',
+  'final_evaluation',
+  'offer',
+  'closed',
+] as const
 // Mirrors OFF_BOARD in lib/candidates.ts — the one status that is not a lane.
 const OFF_BOARD_STATUS = 'none'
 export const VALID_FIT_STATUSES = ['not_fit', 'good_fit', 'maybe'] as const
