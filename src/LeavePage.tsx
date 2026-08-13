@@ -31,8 +31,10 @@ import {
   createEmployee,
   updateEmployee,
   entitlementFor,
+  accruedEntitlement,
   type Employee,
   type Entitlement,
+  type AccruedEntitlement,
 } from '@/lib/employees'
 import {
   fetchLeaveRequests,
@@ -160,13 +162,24 @@ type Balance = {
   remaining: number
 }
 
-// An employee's entitlement for the selected year, derived from their start date
-// (see shared/entitlement.ts) — recomputed on every render, so an edited start
-// date changes the balances as soon as the row reloads. Null when no single year
-// is selected: the entitlement is annual, so "all years" has no one figure.
-function entitlementOf(emp: Employee | undefined, year: string): Entitlement | null {
-  if (!emp || year === 'all') return null
-  return entitlementFor(emp, Number(year))
+// An employee's entitlement for whatever period the year picker selects, derived
+// from their start date (see shared/entitlement.ts) — recomputed on every render,
+// so an edited start date changes the balances as soon as the row reloads.
+//
+// "All years" is not blank: unused leave carries over, so it is everything
+// accrued since the employee joined, up to and including the current calendar
+// year. Both sides of the balance then span the same period, and Remaining is
+// the days the employee can still take today.
+type PeriodEntitlement = { days: number; note: string | null }
+
+function entitlementOf(emp: Employee | undefined, year: string): PeriodEntitlement | null {
+  if (!emp) return null
+  if (year === 'all') {
+    const acc = accruedEntitlement(emp, new Date().getFullYear())
+    return { days: acc.days, note: accruedNote(acc) }
+  }
+  const ent = entitlementFor(emp, Number(year))
+  return { days: ent.days, note: entitlementNote(ent) }
 }
 
 // "14 d", plus why it isn't the plain tier figure: a hire-year part-share, an
@@ -178,6 +191,15 @@ function entitlementNote(ent: Entitlement): string | null {
   // calling that "pro-rated" would only puzzle the reader.
   if (ent.prorated && ent.days !== ent.base) return `pro-rated from ${fmtNum(ent.base)} d`
   return null
+}
+
+// Which years the carried-over total actually covers — without it the figure is
+// just a bigger number with no explanation.
+function accruedNote(acc: AccruedEntitlement): string | null {
+  if (!acc.known) return 'no start date on file — one year only'
+  if (acc.years === 0) return 'not employed yet'
+  if (acc.fromYear === acc.throughYear) return `${acc.throughYear} only`
+  return `accrued ${acc.fromYear}–${acc.throughYear}`
 }
 
 function balanceOf(reqs: LeaveRequest[], quota: number): Balance {
@@ -858,7 +880,6 @@ export default function LeavePage({ user }: { user: User }) {
               const mine = requests.filter((r) => r.employee_id === selectedEmp && inYear(r))
               const ent = entitlementOf(emp, year)
               const bal = balanceOf(mine, ent?.days ?? 0)
-              const note = ent && entitlementNote(ent)
               return (
                 <div className="flex flex-col gap-4">
                   <div>
@@ -925,7 +946,7 @@ export default function LeavePage({ user }: { user: User }) {
                           <div className="text-2xl font-semibold">
                             {ent ? `${fmtNum(ent.days)} d` : '—'}
                           </div>
-                          {note && <div className="text-xs text-muted-foreground">{note}</div>}
+                          {ent?.note && <div className="text-xs text-muted-foreground">{ent.note}</div>}
                         </div>
                         <div>
                           <div className="text-xs uppercase text-muted-foreground">Used</div>
@@ -934,7 +955,7 @@ export default function LeavePage({ user }: { user: User }) {
                         <div>
                           <div className="text-xs uppercase text-muted-foreground">Remaining</div>
                           <div className="text-2xl font-semibold">
-                            {year === 'all' ? '—' : `${fmtNum(bal.remaining)} d`}
+                            {ent ? `${fmtNum(bal.remaining)} d` : '—'}
                           </div>
                         </div>
                         <div>
@@ -949,9 +970,9 @@ export default function LeavePage({ user }: { user: User }) {
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {year === 'all'
-                          ? 'Pick a year to see the entitlement and what is left of it.'
-                          : `Approved sick leave is granted but never comes off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
+                        {`Approved sick leave is granted but never comes off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
+                        {year === 'all' &&
+                          ' Unused days carry over, so this is everything accrued since the start date less everything taken.'}
                       </p>
                     </CardContent>
                   </Card>
@@ -1072,9 +1093,10 @@ export default function LeavePage({ user }: { user: User }) {
                     </span>
                   </CardTitle>
                   <CardDescription>
-                    Click an employee to see their leave for the year. Used counts only the
+                    Click an employee to see their leave for the period. Used counts only the
                     deductible types — approved sick leave is shown separately and never comes off
-                    the entitlement.
+                    the entitlement. Unused days carry over, so "All years" totals everything
+                    accrued since the start date against everything taken.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1100,7 +1122,6 @@ export default function LeavePage({ user }: { user: User }) {
                           const mine = requests.filter((r) => r.employee_id === emp.id && inYear(r))
                           const ent = entitlementOf(emp, year)
                           const bal = balanceOf(mine, ent?.days ?? 0)
-                          const note = ent && entitlementNote(ent)
                           return (
                             <TableRow
                               key={emp.id}
@@ -1166,9 +1187,9 @@ export default function LeavePage({ user }: { user: User }) {
                                 {ent ? (
                                   <>
                                     {fmtNum(ent.days)} d
-                                    {note && (
+                                    {ent.note && (
                                       <span className="ml-1 text-xs text-muted-foreground">
-                                        ({note})
+                                        ({ent.note})
                                       </span>
                                     )}
                                   </>
@@ -1178,12 +1199,12 @@ export default function LeavePage({ user }: { user: User }) {
                               </TableCell>
                               <TableCell>{fmtTotals(bal.used)}</TableCell>
                               <TableCell>
-                                {year === 'all' ? (
-                                  <span className="text-muted-foreground">—</span>
-                                ) : (
+                                {ent ? (
                                   <span className={bal.remaining < 0 ? 'text-destructive' : ''}>
                                     {fmtNum(bal.remaining)} d
                                   </span>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
                                 )}
                               </TableCell>
                               <TableCell className="text-muted-foreground">

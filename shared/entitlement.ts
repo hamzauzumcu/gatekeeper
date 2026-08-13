@@ -107,6 +107,45 @@ export function entitlementFor(emp: EntitlementSource, year: number): Entitlemen
   }
 }
 
+// Everything an employee has accrued from their hire year through `throughYear`,
+// inclusive. Unused leave carries over rather than expiring at year end, so the
+// all-time balance is the sum of every year's entitlement less everything taken
+// — each year computed on its own, since the hire year is pro-rated and later
+// years may sit in a higher seniority tier.
+//
+// Without a start date there is no first year to count from; that case falls
+// back to a single year's entitlement and says so via `known: false`.
+export type AccruedEntitlement = {
+  days: number // total accrued over the counted years
+  fromYear: number | null // hire year, or null when the start date is unknown
+  throughYear: number
+  years: number // how many calendar years contributed
+  known: boolean
+}
+
+export function accruedEntitlement(
+  emp: EntitlementSource,
+  throughYear: number,
+): AccruedEntitlement {
+  const start = parseDay(emp.start_date)
+  if (!start) {
+    const one = entitlementFor(emp, throughYear)
+    return { days: one.days, fromYear: null, throughYear, years: 1, known: false }
+  }
+  if (start.y > throughYear) {
+    return { days: 0, fromYear: start.y, throughYear, years: 0, known: true }
+  }
+  let days = 0
+  for (let y = start.y; y <= throughYear; y++) days += entitlementFor(emp, y).days
+  return {
+    days: roundHalf(days),
+    fromYear: start.y,
+    throughYear,
+    years: throughYear - start.y + 1,
+    known: true,
+  }
+}
+
 // Completed years of service as of `asOf` (a YYYY-MM-DD day), or null when the
 // start date is missing or unparseable.
 export function yearsOfServiceAt(startDate: string | null | undefined, asOf: string): number | null {

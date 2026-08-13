@@ -10,11 +10,13 @@ import { apiFetch } from './api'
 // has one import.
 export {
   entitlementFor,
+  accruedEntitlement,
   tierDays,
   yearsOfServiceAt,
   SENIORITY_TIERS,
   DEFAULT_ANNUAL_QUOTA_DAYS,
   type Entitlement,
+  type AccruedEntitlement,
 } from '../../shared/entitlement'
 
 export type Employee = {
