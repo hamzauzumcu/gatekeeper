@@ -45,27 +45,75 @@ export type FitStatusValue = 'good_fit' | 'maybe' | 'not_fit'
 // array is the single source of truth for stage order; migration 0031 removed
 // the DB CHECK, so worker VALID_STATUSES is the only gate on writable values.
 // `terminal` marks end states (won/lost) shown as the rightmost lanes.
+// `description` is the "what does this lane mean" copy behind the info icon on
+// the board column header and in the stage dropdown.
 export type PipelineStage = {
   value: string
   label: string
+  description: string
   terminal?: boolean
 }
 
 export const PIPELINE_STAGES: PipelineStage[] = [
-  { value: 'shortlisted', label: 'Shortlisted' },
-  { value: 'outreach', label: 'Outreach' },
-  { value: 'hm_interview', label: 'HM Interview' },
-  { value: 'assignment', label: 'Assignment' },
-  { value: 'assignment_review', label: 'Assignment Review' },
-  { value: 'tech_deep_dive', label: 'Tech Deep Dive' },
-  { value: 'final_interview', label: 'Final Interview' },
-  { value: 'reference_check', label: 'Reference Check' },
-  { value: 'final_evaluation', label: 'Final Evaluation' },
+  {
+    value: 'shortlisted',
+    label: 'Shortlisted',
+    description: 'Candidates selected for potential progression after application review.',
+  },
+  {
+    value: 'outreach',
+    label: 'Outreach',
+    description: 'Candidates being contacted for HM interview via email or WhatsApp.',
+  },
+  {
+    value: 'hm_interview',
+    label: 'HM Interview',
+    description: 'Candidates currently in the Hiring Manager interview stage.',
+  },
+  {
+    value: 'assignment',
+    label: 'Assignment',
+    description: 'Candidates who have been sent the take-home mini project.',
+  },
+  {
+    value: 'assignment_review',
+    label: 'Assignment Review',
+    description: 'Submitted assignments awaiting review and decision.',
+  },
+  {
+    value: 'tech_deep_dive',
+    label: 'Tech Deep Dive',
+    description: 'Candidates progressing to the technical and execution-focused interview.',
+  },
+  {
+    value: 'final_interview',
+    label: 'Final Interview',
+    description: 'Candidates in the final behavioural and operating-fit interview.',
+  },
+  {
+    value: 'reference_check',
+    label: 'Reference Check',
+    description: 'Finalists undergoing structured reference validation.',
+  },
+  {
+    value: 'final_evaluation',
+    label: 'Final Evaluation',
+    description: "Candidates awaiting the panel's overall evidence and scorecard review.",
+  },
   // Offer is the won end state (a sent offer is the end of the funnel — the
-  // old separate 'hired' lane folded into it), Closed the lost/parked one
-  // (rejected, withdrawn, or on hold).
-  { value: 'offer', label: 'Offer', terminal: true },
-  { value: 'closed', label: 'Closed', terminal: true },
+  // old separate 'hired' lane folded into it), Closed the lost/parked one.
+  {
+    value: 'offer',
+    label: 'Offer',
+    description: 'Successful candidates who have received a formal offer.',
+    terminal: true,
+  },
+  {
+    value: 'closed',
+    label: 'Closed',
+    description: 'Candidates no longer actively progressing: rejected, withdrawn, or on hold.',
+    terminal: true,
+  },
 ]
 
 // Stage values retired by migration 0031, mapped onto their successor.
@@ -105,6 +153,12 @@ export function normalizeStage(value: string | null | undefined): string {
 export function stageLabel(value: string | null | undefined): string {
   const current = LEGACY_STAGES[value ?? ''] ?? value
   return PIPELINE_STAGES.find((s) => s.value === current)?.label ?? 'Shortlisted'
+}
+
+// What the stage means, for tooltips/hints. Empty for unknown or off-board.
+export function stageDescription(value: string | null | undefined): string {
+  const current = LEGACY_STAGES[value ?? ''] ?? value
+  return PIPELINE_STAGES.find((s) => s.value === current)?.description ?? ''
 }
 
 export type CandidateAnswer = { question_id: number; label: string; type: string; value: string | null }

@@ -3,7 +3,7 @@ import {
   Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
-  Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList,
+  Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList, Info,
 } from 'lucide-react'
 import {
   fetchApplicationScorecard,
@@ -64,6 +64,7 @@ import {
   normalizeStage,
   isOnBoard,
   stageLabel,
+  stageDescription,
   fitStatusLabel,
   fetchCandidateEvents,
   type CandidateEvent,
@@ -108,6 +109,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DropdownMenu, Dialog } from 'radix-ui'
 import {
   Table,
@@ -2564,17 +2566,40 @@ function StageSelect({
       <select
         value={current}
         onChange={(e) => onChange(e.target.value)}
+        // Hovering the control explains the stage the application sits in.
+        title={stageDescription(current)}
         className="h-7 cursor-pointer appearance-none rounded-md border bg-background pl-6 pr-7 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <option value={OFF_BOARD}>Not in pipeline</option>
         {PIPELINE_STAGES.map((s) => (
-          <option key={s.value} value={s.value}>
+          <option key={s.value} value={s.value} title={s.description}>
             {s.label}
           </option>
         ))}
       </select>
       <ChevronDown className="pointer-events-none absolute right-2 size-3 text-muted-foreground" />
     </div>
+  )
+}
+
+// The "what belongs in this lane" hint on a board column header. Hover or
+// focus the icon to read the stage definition.
+function StageInfo({ stage }: { stage: PipelineStage }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`What "${stage.label}" means`}
+          className="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-56 font-normal">
+        {stage.description}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -2712,9 +2737,10 @@ function PipelineBoard({
               ].join(' ')}
             >
               <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-                <span className="inline-flex items-center gap-1.5 text-sm font-medium">
-                  <span className={`size-2 rounded-full ${stageStyle(stage.value).dot}`} />
-                  {stage.label}
+                <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium">
+                  <span className={`size-2 shrink-0 rounded-full ${stageStyle(stage.value).dot}`} />
+                  <span className="truncate">{stage.label}</span>
+                  <StageInfo stage={stage} />
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <span className="rounded-full bg-background px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
