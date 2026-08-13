@@ -1,28 +1,29 @@
 // Annual leave entitlement, derived from an employee's employment start date.
 //
-// Nothing is stored: the entitlement for a calendar year is recomputed from the
-// start date every time it is displayed, so editing the start date immediately
-// re-calculates that employee's balance for every year.
+// Nothing is stored: the entitlement is recomputed from the start date every
+// time it is displayed, so editing the start date immediately re-calculates
+// that employee's balance.
 //
-// Two rules produce the number:
+// Leave is earned on work anniversaries, never part-way through a year of
+// service. An employee earns nothing in their first year; on each anniversary
+// of the start date they earn that whole year's days at once. Someone who
+// joined on 2025-05-01 earns 14 days on 2026-05-01 and the next 14 on
+// 2027-05-01 — the service year in progress counts for nothing until it is
+// completed.
 //
-//  1. Seniority tiers — days grow with completed years of service (see
-//     SENIORITY_TIERS below).
-//  2. Hire year proration — someone who joined in July gets the part of the
-//     year they actually worked, not a full year's entitlement.
-//
-// An employee row may carry an explicit annual_quota; that overrides the tier
-// (proration still applies in the hire year). With no start date recorded we
-// keep the previous behaviour: the quota, else the default.
+// How many days an anniversary grants comes from the seniority tiers below,
+// keyed on the years of service that anniversary completes. An employee row may
+// carry an explicit annual_quota; that overrides the tier. With no start date
+// recorded we keep the previous behaviour: the quota, else the default.
 
 import { DEFAULT_ANNUAL_QUOTA_DAYS } from './leave-types'
 
 export { DEFAULT_ANNUAL_QUOTA_DAYS }
 
-// Working days granted for a full year, by completed years of service. Ordered
-// longest-tenure first; the first tier whose threshold is met wins. The values
-// mirror the statutory minimums (14 days from year 1, 20 from year 5, 26 from
-// year 15) — raise them here if the company grants more.
+// Working days granted by one anniversary, by the years of service it completes.
+// Ordered longest-tenure first; the first tier whose threshold is met wins. The
+// values mirror the statutory minimums (14 days from year 1, 20 from year 5, 26
+// from year 15) — raise them here if the company grants more.
 export const SENIORITY_TIERS: { afterYears: number; days: number }[] = [
   { afterYears: 15, days: 26 },
   { afterYears: 5, days: 20 },
@@ -35,15 +36,16 @@ export type EntitlementSource = {
 }
 
 export type Entitlement = {
-  days: number // entitlement for that calendar year, in working days
-  base: number // a full year's entitlement at that seniority
-  yearsOfService: number // completed years by the end of the year (0 in the hire year)
-  prorated: boolean // hire year: only the worked part of the year is granted
+  days: number // days earned in that calendar year — 0 until the anniversary lands
+  base: number // what that year's anniversary grants
+  yearsOfService: number // years of service that anniversary completes
+  earnedOn: string | null // the anniversary, YYYY-MM-DD; in the hire year it falls next year
+  earned: boolean // false while that anniversary is still ahead of us
   employed: boolean // false when the employee had not joined yet that year
   known: boolean // false when no start date is recorded (fallback figure)
 }
 
-// A full year's entitlement after `years` completed years of service.
+// A full year's entitlement for an anniversary completing `years` of service.
 export function tierDays(years: number): number {
   for (const tier of SENIORITY_TIERS) if (years >= tier.afterYears) return tier.days
   return DEFAULT_ANNUAL_QUOTA_DAYS
@@ -58,90 +60,142 @@ function isLeapYear(year: number): boolean {
   return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
 }
 
+function daysInMonth(year: number, month: number): number {
+  return [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+}
+
+type Day = { y: number; m: number; d: number }
+
 // Parse a YYYY-MM-DD date into its parts, or null if it isn't one.
-function parseDay(raw: string | null | undefined): { y: number; m: number; d: number } | null {
+function parseDay(raw: string | null | undefined): Day | null {
   const m = (raw ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (!m) return null
   return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) }
 }
 
-// Day-of-year (1 = 1 January) for a parsed date.
-function dayOfYear(day: { y: number; m: number; d: number }): number {
-  const start = Date.UTC(day.y, 0, 1)
-  const at = Date.UTC(day.y, day.m - 1, day.d)
-  return Math.round((at - start) / 86400000) + 1
+function pad(n: number): string {
+  return String(n).padStart(2, '0')
 }
 
-// The entitlement an employee has for one calendar year.
-export function entitlementFor(emp: EntitlementSource, year: number): Entitlement {
+// The start date moved to `year`, as YYYY-MM-DD. A 29 February hire lands on
+// 28 February in a common year rather than sliding into March. Dates in this
+// format compare correctly as plain strings, which is how they are compared.
+function anniversaryIn(start: Day, year: number): string {
+  return `${year}-${pad(start.m)}-${pad(Math.min(start.d, daysInMonth(year, start.m)))}`
+}
+
+// The quota on the row, when it is a usable override.
+function quotaOf(emp: EntitlementSource): number | null {
+  return typeof emp.annual_quota === 'number' && emp.annual_quota > 0 ? emp.annual_quota : null
+}
+
+// What an employee earned during one calendar year, as of the day `asOf`
+// (YYYY-MM-DD). That is the anniversary falling in that year, and nothing else:
+// no anniversary, no days.
+export function entitlementFor(emp: EntitlementSource, year: number, asOf: string): Entitlement {
   const start = parseDay(emp.start_date)
-  const quota = typeof emp.annual_quota === 'number' && emp.annual_quota > 0 ? emp.annual_quota : null
+  const quota = quotaOf(emp)
 
   // No start date on file: the old flat figure, and say so via `known: false`.
   if (!start) {
     const base = quota ?? DEFAULT_ANNUAL_QUOTA_DAYS
-    return { days: base, base, yearsOfService: 0, prorated: false, employed: true, known: false }
+    return {
+      days: base,
+      base,
+      yearsOfService: 0,
+      earnedOn: null,
+      earned: true,
+      employed: true,
+      known: false,
+    }
   }
 
   // Hired after that year ended — nothing accrued.
   if (start.y > year) {
-    return { days: 0, base: 0, yearsOfService: 0, prorated: false, employed: false, known: true }
+    return {
+      days: 0,
+      base: 0,
+      yearsOfService: 0,
+      earnedOn: null,
+      earned: false,
+      employed: false,
+      known: true,
+    }
   }
 
-  const yearsOfService = year - start.y
+  // The anniversary this calendar year turns on. In the hire year the first year
+  // of service is still being worked, so the anniversary that would pay it out
+  // falls in the following year — reported, so the UI can say when it lands.
+  const yearsOfService = Math.max(1, year - start.y)
+  const earnedOn = anniversaryIn(start, start.y + yearsOfService)
   const base = quota ?? tierDays(yearsOfService)
-  if (yearsOfService > 0) {
-    return { days: base, base, yearsOfService, prorated: false, employed: true, known: true }
-  }
-
-  // Hire year: grant the share of the year actually worked, start day included.
-  const total = isLeapYear(year) ? 366 : 365
-  const worked = total - dayOfYear(start) + 1
+  const earned = year > start.y && earnedOn <= asOf
   return {
-    days: Math.max(0, roundHalf((base * worked) / total)),
+    days: earned ? base : 0,
     base,
-    yearsOfService: 0,
-    prorated: true,
+    yearsOfService,
+    earnedOn,
+    earned,
     employed: true,
     known: true,
   }
 }
 
-// Everything an employee has accrued from their hire year through `throughYear`,
-// inclusive. Unused leave carries over rather than expiring at year end, so the
-// all-time balance is the sum of every year's entitlement less everything taken
-// — each year computed on its own, since the hire year is pro-rated and later
-// years may sit in a higher seniority tier.
+// Everything an employee has earned since they joined, up to the day `asOf`.
+// Unused leave carries over rather than expiring at year end, so the all-time
+// balance is the sum of every anniversary reached so far less everything taken.
 //
-// Without a start date there is no first year to count from; that case falls
-// back to a single year's entitlement and says so via `known: false`.
+// Without a start date there are no anniversaries to count; that case falls back
+// to a single year's entitlement and says so via `known: false`.
 export type AccruedEntitlement = {
-  days: number // total accrued over the counted years
-  fromYear: number | null // hire year, or null when the start date is unknown
-  throughYear: number
-  years: number // how many calendar years contributed
+  days: number // total earned so far
+  grants: number // anniversaries reached (0 before the first one)
+  firstEarnedOn: string | null // the first anniversary, once it has been reached
+  lastEarnedOn: string | null // the most recent anniversary
+  nextEarnOn: string | null // the anniversary still to come
+  nextDays: number // what that one will grant
   known: boolean
 }
 
-export function accruedEntitlement(
-  emp: EntitlementSource,
-  throughYear: number,
-): AccruedEntitlement {
+export function accruedEntitlement(emp: EntitlementSource, asOf: string): AccruedEntitlement {
   const start = parseDay(emp.start_date)
-  if (!start) {
-    const one = entitlementFor(emp, throughYear)
-    return { days: one.days, fromYear: null, throughYear, years: 1, known: false }
+  const quota = quotaOf(emp)
+
+  if (!start || !parseDay(asOf)) {
+    const base = quota ?? DEFAULT_ANNUAL_QUOTA_DAYS
+    return {
+      days: base,
+      grants: 0,
+      firstEarnedOn: null,
+      lastEarnedOn: null,
+      nextEarnOn: null,
+      nextDays: base,
+      known: false,
+    }
   }
-  if (start.y > throughYear) {
-    return { days: 0, fromYear: start.y, throughYear, years: 0, known: true }
-  }
+
+  // Walk the anniversaries in order until one lands in the future; that one is
+  // what the employee is working towards now.
   let days = 0
-  for (let y = start.y; y <= throughYear; y++) days += entitlementFor(emp, y).days
+  let grants = 0
+  let lastEarnedOn: string | null = null
+  let nextEarnOn = anniversaryIn(start, start.y + 1)
+  let nextDays = quota ?? tierDays(1)
+  while (nextEarnOn <= asOf) {
+    days += nextDays
+    grants++
+    lastEarnedOn = nextEarnOn
+    nextEarnOn = anniversaryIn(start, start.y + grants + 1)
+    nextDays = quota ?? tierDays(grants + 1)
+  }
+
   return {
     days: roundHalf(days),
-    fromYear: start.y,
-    throughYear,
-    years: throughYear - start.y + 1,
+    grants,
+    firstEarnedOn: grants > 0 ? anniversaryIn(start, start.y + 1) : null,
+    lastEarnedOn,
+    nextEarnOn,
+    nextDays,
     known: true,
   }
 }

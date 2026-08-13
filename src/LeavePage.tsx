@@ -109,6 +109,14 @@ function formatDate(raw: string): string {
   return `${m[3]}.${m[2]}.${m[1]}`
 }
 
+// Today as YYYY-MM-DD in the viewer's own timezone — the entitlement rules
+// compare it against anniversary dates, which are calendar days, not instants.
+function todayISO(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
 function formatDates(start: string | null, end: string | null): string {
   if (!start && !end) return '—'
   if (start && end && start !== end) return `${formatDate(start)} → ${formatDate(end)}`
@@ -166,40 +174,47 @@ type Balance = {
 // from their start date (see shared/entitlement.ts) — recomputed on every render,
 // so an edited start date changes the balances as soon as the row reloads.
 //
-// "All years" is not blank: unused leave carries over, so it is everything
-// accrued since the employee joined, up to and including the current calendar
-// year. Both sides of the balance then span the same period, and Remaining is
-// the days the employee can still take today.
+// Leave lands on work anniversaries, so a single year shows what that year's
+// anniversary granted — nothing at all in the hire year, and nothing yet when
+// the anniversary is still ahead of us.
+//
+// "All years" is not blank: unused leave carries over, so it is every
+// anniversary reached so far. Both sides of the balance then span the same
+// period, and Remaining is the days the employee can still take today.
 type PeriodEntitlement = { days: number; note: string | null }
 
 function entitlementOf(emp: Employee | undefined, year: string): PeriodEntitlement | null {
   if (!emp) return null
+  const today = todayISO()
   if (year === 'all') {
-    const acc = accruedEntitlement(emp, new Date().getFullYear())
+    const acc = accruedEntitlement(emp, today)
     return { days: acc.days, note: accruedNote(acc) }
   }
-  const ent = entitlementFor(emp, Number(year))
+  const ent = entitlementFor(emp, Number(year), today)
   return { days: ent.days, note: entitlementNote(ent) }
 }
 
-// "14 d", plus why it isn't the plain tier figure: a hire-year part-share, an
-// employee who had not joined yet, or a missing start date.
+// "14 d", plus where that year's days came from: the anniversary that granted
+// them, one still to come, an employee who had not joined yet, or a missing
+// start date.
 function entitlementNote(ent: Entitlement): string | null {
   if (!ent.known) return 'no start date on file'
   if (!ent.employed) return 'not employed yet'
-  // A 1 January hire works the whole year, so the share is the full figure —
-  // calling that "pro-rated" would only puzzle the reader.
-  if (ent.prorated && ent.days !== ent.base) return `pro-rated from ${fmtNum(ent.base)} d`
-  return null
+  if (!ent.earnedOn) return null
+  if (!ent.earned) return `${fmtNum(ent.base)} d on ${formatDate(ent.earnedOn)}`
+  return `earned ${formatDate(ent.earnedOn)}`
 }
 
-// Which years the carried-over total actually covers — without it the figure is
-// just a bigger number with no explanation.
+// What the carried-over total is made of, and when it next grows — without it
+// the figure is just a bigger number with no explanation.
 function accruedNote(acc: AccruedEntitlement): string | null {
   if (!acc.known) return 'no start date on file — one year only'
-  if (acc.years === 0) return 'not employed yet'
-  if (acc.fromYear === acc.throughYear) return `${acc.throughYear} only`
-  return `accrued ${acc.fromYear}–${acc.throughYear}`
+  const next = acc.nextEarnOn
+    ? `next ${fmtNum(acc.nextDays)} d on ${formatDate(acc.nextEarnOn)}`
+    : null
+  if (acc.grants === 0) return next ? `nothing earned yet — ${next}` : 'nothing earned yet'
+  const earned = `${acc.grants} anniversar${acc.grants === 1 ? 'y' : 'ies'} earned`
+  return next ? `${earned} · ${next}` : earned
 }
 
 function balanceOf(reqs: LeaveRequest[], quota: number): Balance {
@@ -246,8 +261,9 @@ export default function LeavePage({ user }: { user: User }) {
   // Inline status editing (to correct a decision or revert it to pending).
   const [editStatusId, setEditStatusId] = useState<number | null>(null)
 
-  // Employees tab: year filter + drill-down. The entitlement is annual, so the
-  // balance only means anything for a single year — default to the current one.
+  // Employees tab: year filter + drill-down. A single year shows what that
+  // year's anniversary granted against what was taken in it; "All years" is the
+  // running balance. Default to the current year.
   const [year, setYear] = useState<string>(() => String(new Date().getFullYear()))
   const [selectedEmp, setSelectedEmp] = useState<number | null>(null)
 
@@ -971,8 +987,9 @@ export default function LeavePage({ user }: { user: User }) {
                       </div>
                       <p className="text-xs text-muted-foreground">
                         {`Approved sick leave is granted but never comes off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
-                        {year === 'all' &&
-                          ' Unused days carry over, so this is everything accrued since the start date less everything taken.'}
+                        {year === 'all'
+                          ? ' Days are earned in full on each work anniversary and carry over, so this is every anniversary reached so far less everything taken.'
+                          : ' Days are earned in full on the work anniversary falling in this year — a year of service in progress grants nothing yet.'}
                       </p>
                     </CardContent>
                   </Card>
@@ -1095,8 +1112,8 @@ export default function LeavePage({ user }: { user: User }) {
                   <CardDescription>
                     Click an employee to see their leave for the period. Used counts only the
                     deductible types — approved sick leave is shown separately and never comes off
-                    the entitlement. Unused days carry over, so "All years" totals everything
-                    accrued since the start date against everything taken.
+                    the entitlement. Days are earned in full on each work anniversary and carry
+                    over, so "All years" totals every anniversary reached against everything taken.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
