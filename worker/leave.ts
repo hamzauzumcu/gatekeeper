@@ -3,6 +3,7 @@
 // employee, then approves or rejects it. Reviewer is an app user (users.username).
 
 import { findEmployeeIdByName } from './employees'
+import { isLeaveTypeKey, type LeaveTypeKey } from '../shared/leave-types'
 
 export type LeaveStatus = 'pending' | 'approved' | 'rejected'
 
@@ -13,7 +14,8 @@ export type LeaveRequestRow = {
   employee_id: number | null
   employee_name: string | null // joined from employees (NULL until mapped)
   raw_name: string
-  leave_type: string | null
+  leave_type: string | null // raw, exactly as submitted
+  leave_kind: string | null // canonical type; NULL = infer from leave_type
   start_date: string | null
   end_date: string | null
   hours_requested: string | null
@@ -54,7 +56,7 @@ export async function listLeaveRequests(db: D1Database): Promise<LeaveRequestRow
   const { results } = await db
     .prepare(
       `SELECT lr.id, lr.submission_id, lr.respondent_id, lr.employee_id,
-              e.name AS employee_name, lr.raw_name, lr.leave_type,
+              e.name AS employee_name, lr.raw_name, lr.leave_type, lr.leave_kind,
               lr.start_date, lr.end_date, lr.hours_requested, lr.working_days,
               lr.reason, lr.document_url, lr.submitted_at, lr.status,
               lr.reviewer, lr.reviewer_name, lr.reviewed_at, lr.created_at
@@ -136,6 +138,24 @@ export async function assignEmployee(
   return { ok: true }
 }
 
+// Book a request as a canonical leave type, overriding whatever the form said.
+// Sick leave that the company treats as personal leave is re-typed here, and the
+// booked type is what decides whether the days come off the annual entitlement.
+// Pass null to drop the override and fall back to the raw submitted type.
+export async function updateLeaveKind(
+  db: D1Database,
+  id: number,
+  kind: LeaveTypeKey | null,
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
+  if (kind !== null && !isLeaveTypeKey(kind)) return { ok: false, error: 'invalid leave type' }
+  const res = await db
+    .prepare(`UPDATE leave_requests SET leave_kind = ? WHERE id = ?`)
+    .bind(kind, id)
+    .run()
+  if ((res.meta?.changes ?? 0) === 0) return { ok: false, error: 'request not found', status: 404 }
+  return { ok: true }
+}
+
 // Manually correct the raw duration fields of a request (for messy legacy rows;
 // new Tally submissions arrive with clean numeric day/hour fields). Either value
 // may be null/empty to clear it. Stored raw, like every other duration value.
@@ -178,7 +198,7 @@ async function getLeaveRequest(db: D1Database, id: number): Promise<LeaveRequest
   const row = await db
     .prepare(
       `SELECT lr.id, lr.submission_id, lr.respondent_id, lr.employee_id,
-              e.name AS employee_name, lr.raw_name, lr.leave_type,
+              e.name AS employee_name, lr.raw_name, lr.leave_type, lr.leave_kind,
               lr.start_date, lr.end_date, lr.hours_requested, lr.working_days,
               lr.reason, lr.document_url, lr.submitted_at, lr.status,
               lr.reviewer, lr.reviewer_name, lr.reviewed_at, lr.created_at

@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { addDays, daysBetween, isoDay, leaveSpan, weekdayMon, type LeaveRequest, type LeaveStatus } from '@/lib/leave'
+import {
+  addDays,
+  daysBetween,
+  isoDay,
+  leaveSpan,
+  leaveTypeLabel,
+  leaveTypeOf,
+  weekdayMon,
+  type LeaveRequest,
+  type LeaveStatus,
+} from '@/lib/leave'
 
 // Bar colors per status — same palette as the request badges, tuned for a solid
 // pill that reads on the calendar in both light and dark mode.
@@ -184,7 +194,7 @@ export default function LeaveCalendar({ requests }: { requests: LeaveRequest[] }
             {/* Leave bars, one per lane */}
             {week.segments.map((seg, si) => {
               const name = seg.placed.req.employee_name || seg.placed.req.raw_name || '—'
-              const type = seg.placed.req.leave_type ? ` · ${seg.placed.req.leave_type}` : ''
+              const type = ` · ${leaveTypeLabel(leaveTypeOf(seg.placed.req))}`
               return (
                 <div
                   key={`${seg.placed.req.id}-${si}`}

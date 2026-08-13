@@ -26,7 +26,14 @@ import {
 } from '@/components/ui/table'
 import { can, type User } from '@/lib/auth'
 import LeaveCalendar from './LeaveCalendar'
-import { fetchEmployees, createEmployee, type Employee } from '@/lib/employees'
+import {
+  fetchEmployees,
+  createEmployee,
+  updateEmployee,
+  entitlementFor,
+  type Employee,
+  type Entitlement,
+} from '@/lib/employees'
 import {
   fetchLeaveRequests,
   importLeaveRequests,
@@ -36,13 +43,20 @@ import {
   updateLeaveDates,
   setLeaveStatus,
   deleteLeaveRequest,
+  updateLeaveType,
   csvRowsToImportRows,
   parseAmount,
   fmtNum,
   leaveYear,
   isoDay,
+  leaveTypeOf,
+  leaveTypeLabel,
+  countsTowardBalance,
+  LEAVE_TYPES,
+  DEFAULT_ANNUAL_QUOTA_DAYS,
   type LeaveRequest,
   type LeaveStatus,
+  type LeaveTypeKey,
 } from '@/lib/leave'
 
 // Soft, tinted status colors: light background + colored text for each status
@@ -134,6 +148,44 @@ function fmtTotals(t: Totals): string {
   return parts.join(' · ') || '—'
 }
 
+// An employee's leave for the selected period, split by whether it comes off
+// the annual entitlement. Sick leave is approved like any other request but is
+// never deducted — it is reported on its own so the exemption stays visible.
+// Only whole days are deducted; hours are reported but not netted off the quota.
+type Balance = {
+  quota: number
+  used: Totals // approved, deductible types
+  exempt: Totals // approved, non-deductible types (sick leave)
+  pending: Totals
+  remaining: number
+}
+
+// An employee's entitlement for the selected year, derived from their start date
+// (see shared/entitlement.ts) — recomputed on every render, so an edited start
+// date changes the balances as soon as the row reloads. Null when no single year
+// is selected: the entitlement is annual, so "all years" has no one figure.
+function entitlementOf(emp: Employee | undefined, year: string): Entitlement | null {
+  if (!emp || year === 'all') return null
+  return entitlementFor(emp, Number(year))
+}
+
+// "14 d", plus why it isn't the plain tier figure: a hire-year part-share, an
+// employee who had not joined yet, or a missing start date.
+function entitlementNote(ent: Entitlement): string | null {
+  if (!ent.known) return 'no start date on file'
+  if (!ent.employed) return 'not employed yet'
+  if (ent.prorated) return `pro-rated from ${fmtNum(ent.base)} d`
+  return null
+}
+
+function balanceOf(reqs: LeaveRequest[], quota: number): Balance {
+  const approved = reqs.filter((r) => r.status === 'approved')
+  const used = sumTotals(approved.filter((r) => countsTowardBalance(r)))
+  const exempt = sumTotals(approved.filter((r) => !countsTowardBalance(r)))
+  const pending = sumTotals(reqs.filter((r) => r.status === 'pending'))
+  return { quota, used, exempt, pending, remaining: quota - used.days }
+}
+
 export default function LeavePage({ user }: { user: User }) {
   // Only leave managers can review requests and manage employees; everyone else
   // sees the data read-only. The server enforces this too.
@@ -148,8 +200,14 @@ export default function LeavePage({ user }: { user: User }) {
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [newEmp, setNewEmp] = useState({ name: '', email: '', department: '' })
+  const [newEmp, setNewEmp] = useState({ name: '', email: '', department: '', startDate: '' })
   const [addingEmp, setAddingEmp] = useState(false)
+
+  // Inline editing of an employee's start date — the constant every entitlement
+  // is derived from. Saving reloads, which re-derives every year's balance.
+  const [editStartEmp, setEditStartEmp] = useState<number | null>(null)
+  const [empStartValue, setEmpStartValue] = useState('')
+  const [savingEmp, setSavingEmp] = useState<number | null>(null)
 
   // Inline duration editing (for messy legacy rows).
   const [editDurId, setEditDurId] = useState<number | null>(null)
@@ -164,15 +222,17 @@ export default function LeavePage({ user }: { user: User }) {
   // Inline status editing (to correct a decision or revert it to pending).
   const [editStatusId, setEditStatusId] = useState<number | null>(null)
 
-  // Employees tab: year filter + drill-down.
-  const [year, setYear] = useState<string>('all')
+  // Employees tab: year filter + drill-down. The entitlement is annual, so the
+  // balance only means anything for a single year — default to the current one.
+  const [year, setYear] = useState<string>(() => String(new Date().getFullYear()))
   const [selectedEmp, setSelectedEmp] = useState<number | null>(null)
 
   const employeesById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees])
 
-  // Years present in the data, newest first, for the year picker.
+  // Years present in the data, newest first, for the year picker. The current
+  // year is always offered — it is the default even before any request lands.
   const years = useMemo(() => {
-    const set = new Set<string>()
+    const set = new Set<string>([String(new Date().getFullYear())])
     for (const r of requests) {
       const y = leaveYear(r)
       if (y) set.add(y)
@@ -252,6 +312,20 @@ export default function LeavePage({ user }: { user: User }) {
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to map employee')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // Re-type a request. The form's answer is only a starting point: what the
+  // company books it as decides whether the days come off the entitlement.
+  async function onChangeType(id: number, kind: LeaveTypeKey) {
+    setBusyId(id)
+    try {
+      await updateLeaveType(id, kind)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update leave type')
     } finally {
       setBusyId(null)
     }
@@ -348,13 +422,34 @@ export default function LeavePage({ user }: { user: User }) {
         name: newEmp.name,
         email: newEmp.email.trim() || undefined,
         department: newEmp.department.trim() || undefined,
+        startDate: newEmp.startDate || null,
       })
-      setNewEmp({ name: '', email: '', department: '' })
+      setNewEmp({ name: '', email: '', department: '', startDate: '' })
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add employee')
     } finally {
       setAddingEmp(false)
+    }
+  }
+
+  function startEditEmpStart(emp: Employee) {
+    setEditStartEmp(emp.id)
+    setEmpStartValue(emp.start_date ?? '')
+  }
+
+  // Store a new start date. Only the date is written — the entitlement is not
+  // stored anywhere, so reloading is what re-calculates the balances.
+  async function saveEmpStart(id: number) {
+    setSavingEmp(id)
+    try {
+      await updateEmployee(id, { startDate: empStartValue || null })
+      setEditStartEmp(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update start date')
+    } finally {
+      setSavingEmp(null)
     }
   }
 
@@ -462,7 +557,34 @@ export default function LeavePage({ user }: { user: User }) {
                         <div className="mt-1 text-xs text-muted-foreground">form: {r.raw_name}</div>
                       )}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{r.leave_type || '—'}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {canManage ? (
+                        <Select
+                          value={leaveTypeOf(r)}
+                          disabled={busyId === r.id}
+                          onValueChange={(value) => onChangeType(r.id, value as LeaveTypeKey)}
+                        >
+                          <SelectTrigger size="sm" className="w-52">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {LEAVE_TYPES.map((t) => (
+                              <SelectItem key={t.key} value={t.key}>
+                                {t.label}
+                                {!t.counts && (
+                                  <span className="text-muted-foreground"> · not deducted</span>
+                                )}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-sm">{leaveTypeLabel(leaveTypeOf(r))}</span>
+                      )}
+                      {r.leave_type && r.leave_type !== leaveTypeLabel(leaveTypeOf(r)) && (
+                        <div className="mt-1 text-xs text-muted-foreground">form: {r.leave_type}</div>
+                      )}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {editDatesId === r.id ? (
                         <div className="flex items-center gap-1.5">
@@ -732,8 +854,9 @@ export default function LeavePage({ user }: { user: User }) {
           ? (() => {
               const emp = employeesById.get(selectedEmp)
               const mine = requests.filter((r) => r.employee_id === selectedEmp && inYear(r))
-              const approved = sumTotals(mine.filter((r) => r.status === 'approved'))
-              const pending = sumTotals(mine.filter((r) => r.status === 'pending'))
+              const ent = entitlementOf(emp, year)
+              const bal = balanceOf(mine, ent?.days ?? 0)
+              const note = ent && entitlementNote(ent)
               return (
                 <div className="flex flex-col gap-4">
                   <div>
@@ -745,19 +868,89 @@ export default function LeavePage({ user }: { user: User }) {
                   <Card>
                     <CardHeader>
                       <CardTitle>{emp?.name ?? 'Employee'}</CardTitle>
-                      <CardDescription>
-                        {year === 'all' ? 'All years' : year} · {mine.length} request(s)
+                      <CardDescription className="flex flex-wrap items-center gap-2">
+                        <span>
+                          {year === 'all' ? 'All years' : year} · {mine.length} request(s) ·
+                        </span>
+                        {emp && editStartEmp === emp.id ? (
+                          <span className="flex items-center gap-1.5">
+                            <Input
+                              type="date"
+                              value={empStartValue}
+                              onChange={(e) => setEmpStartValue(e.target.value)}
+                              className="h-8 w-36"
+                            />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              disabled={savingEmp === emp.id}
+                              onClick={() => saveEmpStart(emp.id)}
+                              title="Save start date"
+                            >
+                              <Check className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              onClick={() => setEditStartEmp(null)}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </span>
+                        ) : emp && canManage ? (
+                          <button
+                            type="button"
+                            className="group inline-flex items-center gap-1"
+                            onClick={() => startEditEmpStart(emp)}
+                            title="Edit start date"
+                          >
+                            {emp.start_date ? `started ${formatDate(emp.start_date)}` : 'set start date'}
+                            <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                          </button>
+                        ) : (
+                          <span>
+                            {emp?.start_date ? `started ${formatDate(emp.start_date)}` : 'start date unknown'}
+                          </span>
+                        )}
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="flex flex-wrap gap-8">
-                      <div>
-                        <div className="text-xs uppercase text-muted-foreground">Approved (taken)</div>
-                        <div className="text-2xl font-semibold">{fmtTotals(approved)}</div>
+                    <CardContent className="flex flex-col gap-3">
+                      <div className="flex flex-wrap gap-8">
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Entitlement</div>
+                          <div className="text-2xl font-semibold">
+                            {ent ? `${fmtNum(ent.days)} d` : '—'}
+                          </div>
+                          {note && <div className="text-xs text-muted-foreground">{note}</div>}
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Used</div>
+                          <div className="text-2xl font-semibold">{fmtTotals(bal.used)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Remaining</div>
+                          <div className="text-2xl font-semibold">
+                            {year === 'all' ? '—' : `${fmtNum(bal.remaining)} d`}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">
+                            Sick leave (not deducted)
+                          </div>
+                          <div className="text-2xl font-semibold">{fmtTotals(bal.exempt)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Pending</div>
+                          <div className="text-2xl font-semibold">{fmtTotals(bal.pending)}</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="text-xs uppercase text-muted-foreground">Pending</div>
-                        <div className="text-2xl font-semibold">{fmtTotals(pending)}</div>
-                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {year === 'all'
+                          ? 'Pick a year to see the entitlement and what is left of it.'
+                          : `Approved sick leave is granted but never comes off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
+                      </p>
                     </CardContent>
                   </Card>
 
@@ -781,7 +974,12 @@ export default function LeavePage({ user }: { user: User }) {
                           <TableBody>
                             {mine.map((r) => (
                               <TableRow key={r.id}>
-                                <TableCell className="whitespace-nowrap">{r.leave_type || '—'}</TableCell>
+                                <TableCell className="whitespace-nowrap">
+                                  {leaveTypeLabel(leaveTypeOf(r))}
+                                  {!countsTowardBalance(r) && (
+                                    <span className="text-xs text-muted-foreground"> · not deducted</span>
+                                  )}
+                                </TableCell>
                                 <TableCell className="whitespace-nowrap">
                                   {formatDates(r.start_date, r.end_date)}
                                 </TableCell>
@@ -813,7 +1011,8 @@ export default function LeavePage({ user }: { user: User }) {
                   </CardTitle>
                   <CardDescription>
                     Employees are the people whose leave you track. Map incoming requests to them on
-                    the Requests tab.
+                    the Requests tab. The start date is what the annual entitlement is calculated
+                    from — days grow with seniority, and a hire year counts only the part worked.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -845,6 +1044,16 @@ export default function LeavePage({ user }: { user: User }) {
                         onChange={(e) => setNewEmp((s) => ({ ...s, department: e.target.value }))}
                       />
                     </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="emp-start">Start date</Label>
+                      <Input
+                        id="emp-start"
+                        type="date"
+                        className="w-40"
+                        value={newEmp.startDate}
+                        onChange={(e) => setNewEmp((s) => ({ ...s, startDate: e.target.value }))}
+                      />
+                    </div>
                     <Button type="submit" disabled={addingEmp}>
                       {addingEmp ? 'Adding…' : 'Add'}
                     </Button>
@@ -860,7 +1069,11 @@ export default function LeavePage({ user }: { user: User }) {
                       {year === 'all' ? 'all years' : year}
                     </span>
                   </CardTitle>
-                  <CardDescription>Click an employee to see their leave for the year.</CardDescription>
+                  <CardDescription>
+                    Click an employee to see their leave for the year. Used counts only the
+                    deductible types — approved sick leave is shown separately and never comes off
+                    the entitlement.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   {employees.length === 0 ? (
@@ -871,7 +1084,11 @@ export default function LeavePage({ user }: { user: User }) {
                         <TableRow>
                           <TableHead>Name</TableHead>
                           <TableHead>Department</TableHead>
-                          <TableHead>Approved (taken)</TableHead>
+                          <TableHead>Started</TableHead>
+                          <TableHead>Entitlement</TableHead>
+                          <TableHead>Used</TableHead>
+                          <TableHead>Remaining</TableHead>
+                          <TableHead>Sick (not deducted)</TableHead>
                           <TableHead>Pending</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
                         </TableRow>
@@ -879,8 +1096,9 @@ export default function LeavePage({ user }: { user: User }) {
                       <TableBody>
                         {employees.map((emp) => {
                           const mine = requests.filter((r) => r.employee_id === emp.id && inYear(r))
-                          const approved = sumTotals(mine.filter((r) => r.status === 'approved'))
-                          const pending = sumTotals(mine.filter((r) => r.status === 'pending'))
+                          const ent = entitlementOf(emp, year)
+                          const bal = balanceOf(mine, ent?.days ?? 0)
+                          const note = ent && entitlementNote(ent)
                           return (
                             <TableRow
                               key={emp.id}
@@ -891,9 +1109,86 @@ export default function LeavePage({ user }: { user: User }) {
                               <TableCell className="text-muted-foreground">
                                 {emp.department || '—'}
                               </TableCell>
-                              <TableCell>{fmtTotals(approved)}</TableCell>
+                              {/* The start date is edited in place; the click must not also
+                                  drill into the employee. */}
+                              <TableCell
+                                className="whitespace-nowrap"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {editStartEmp === emp.id ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <Input
+                                      type="date"
+                                      value={empStartValue}
+                                      onChange={(e) => setEmpStartValue(e.target.value)}
+                                      className="h-8 w-36"
+                                    />
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-8 w-8"
+                                      disabled={savingEmp === emp.id}
+                                      onClick={() => saveEmpStart(emp.id)}
+                                      title="Save start date"
+                                    >
+                                      <Check className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-8 w-8"
+                                      onClick={() => setEditStartEmp(null)}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                ) : canManage ? (
+                                  <button
+                                    type="button"
+                                    className="group inline-flex items-center gap-1"
+                                    onClick={() => startEditEmpStart(emp)}
+                                    title="Edit start date"
+                                  >
+                                    {emp.start_date ? (
+                                      formatDate(emp.start_date)
+                                    ) : (
+                                      <span className="text-muted-foreground">Set date</span>
+                                    )}
+                                    <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                                  </button>
+                                ) : (
+                                  <span>{emp.start_date ? formatDate(emp.start_date) : '—'}</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                {ent ? (
+                                  <>
+                                    {fmtNum(ent.days)} d
+                                    {note && (
+                                      <span className="ml-1 text-xs text-muted-foreground">
+                                        ({note})
+                                      </span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell>{fmtTotals(bal.used)}</TableCell>
+                              <TableCell>
+                                {year === 'all' ? (
+                                  <span className="text-muted-foreground">—</span>
+                                ) : (
+                                  <span className={bal.remaining < 0 ? 'text-destructive' : ''}>
+                                    {fmtNum(bal.remaining)} d
+                                  </span>
+                                )}
+                              </TableCell>
                               <TableCell className="text-muted-foreground">
-                                {fmtTotals(pending)}
+                                {fmtTotals(bal.exempt)}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {fmtTotals(bal.pending)}
                               </TableCell>
                               <TableCell className="text-right">{mine.length}</TableCell>
                             </TableRow>

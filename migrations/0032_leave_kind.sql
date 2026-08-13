@@ -1,0 +1,14 @@
+-- Canonical leave type per request.
+--
+-- leave_type stays exactly as submitted (raw form text). leave_kind is the type
+-- a reviewer books the request as — one of the keys in shared/leave-types.ts
+-- ('general', 'emergency', 'annual', 'sick', 'personal', 'parental', 'other').
+-- What someone files is not always what the company books it as: a request sent
+-- in as sick leave may be approved as personal leave, and only the booked type
+-- decides whether the days come off the annual entitlement (sick leave never
+-- does).
+--
+-- NULL means "not overridden": the type is inferred from the raw leave_type at
+-- read time, so existing rows need no backfill and the inference can improve
+-- later without rewriting data.
+ALTER TABLE leave_requests ADD COLUMN leave_kind TEXT;

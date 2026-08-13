@@ -1,6 +1,17 @@
 import { apiFetch } from './api'
+import { leaveTypeDef, resolveLeaveType, type LeaveTypeKey } from '../../shared/leave-types'
 // Client API for leave requests. Requests arrive via a Tally form / CSV export
 // and are stored raw; an admin maps each to an employee, then approves/rejects.
+
+// The canonical type catalogue lives in shared/leave-types.ts (the worker
+// validates against the same list); re-exported here so UI code has one import.
+export {
+  LEAVE_TYPES,
+  DEFAULT_ANNUAL_QUOTA_DAYS,
+  leaveTypeLabel,
+  resolveLeaveType,
+  type LeaveTypeKey,
+} from '../../shared/leave-types'
 
 export type LeaveStatus = 'pending' | 'approved' | 'rejected'
 
@@ -11,7 +22,8 @@ export type LeaveRequest = {
   employee_id: number | null
   employee_name: string | null
   raw_name: string
-  leave_type: string | null
+  leave_type: string | null // raw, exactly as submitted
+  leave_kind: string | null // canonical type; null = infer from leave_type
   start_date: string | null
   end_date: string | null
   hours_requested: string | null
@@ -71,6 +83,29 @@ export async function assignEmployee(id: number, employeeId: number | null): Pro
   })
   const data = (await res.json()) as { ok: boolean; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to assign employee')
+}
+
+// The type a request is booked as: the reviewer's pick, else inferred from the
+// raw form text.
+export function leaveTypeOf(r: Pick<LeaveRequest, 'leave_kind' | 'leave_type'>): LeaveTypeKey {
+  return resolveLeaveType(r.leave_kind, r.leave_type)
+}
+
+// Whether an approved request is deducted from the annual entitlement. Sick
+// leave is not — it is tracked and shown separately.
+export function countsTowardBalance(r: Pick<LeaveRequest, 'leave_kind' | 'leave_type'>): boolean {
+  return leaveTypeDef(leaveTypeOf(r)).counts
+}
+
+// Re-type a request (null drops the override, falling back to the raw type).
+export async function updateLeaveType(id: number, kind: LeaveTypeKey | null): Promise<void> {
+  const res = await apiFetch(`/api/leave/${id}/type`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to update leave type')
 }
 
 export async function updateLeaveDuration(

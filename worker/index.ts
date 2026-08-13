@@ -25,7 +25,7 @@ import {
   type Auth,
   type Permission,
 } from './permissions'
-import { listEmployees, createEmployee } from './employees'
+import { listEmployees, createEmployee, updateEmployee, type EmployeePatch } from './employees'
 import {
   importLeaveRequests,
   listLeaveRequests,
@@ -33,11 +33,13 @@ import {
   assignEmployee,
   updateLeaveDuration,
   updateLeaveDates,
+  updateLeaveKind,
   setLeaveStatus,
   deleteLeaveRequest,
   type LeaveImportRow,
 } from './leave'
 import { handleLeaveTallyWebhook } from './leave-tally'
+import { isLeaveTypeKey } from '../shared/leave-types'
 import {
   createMentionNotifications,
   existingRecipients,
@@ -759,17 +761,54 @@ app.get('/api/employees', async (c) => {
 // Add an employee (idempotent on name).
 app.post('/api/employees', async (c) => {
   const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
-  const body: { name?: unknown; email?: unknown; department?: unknown; annualQuota?: unknown } =
-    await c.req.json().catch(() => ({}))
+  const body: {
+    name?: unknown
+    email?: unknown
+    department?: unknown
+    startDate?: unknown
+    annualQuota?: unknown
+  } = await c.req.json().catch(() => ({}))
   const name = typeof body.name === 'string' ? body.name : ''
   if (!name.trim()) return c.json({ ok: false, error: 'name required' }, 400)
   const result = await createEmployee(c.env.DB, {
     name,
     email: typeof body.email === 'string' ? body.email : null,
     department: typeof body.department === 'string' ? body.department : null,
+    startDate: typeof body.startDate === 'string' ? body.startDate : null,
     annualQuota: typeof body.annualQuota === 'number' ? body.annualQuota : null,
   })
   if (!result.ok) return c.json({ ok: false, error: result.error }, 400)
+  return c.json({ ok: true, employee: result.employee })
+})
+
+// Edit an employee. Only the keys present in the body are changed; an explicit
+// null clears a field. Editing the start date changes nothing else in the
+// database — the leave entitlement is derived from it on read, so the corrected
+// balance shows up as soon as the client reloads the row.
+app.patch('/api/employees/:id', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: Record<string, unknown> = await c.req.json().catch(() => ({}))
+
+  const patch: EmployeePatch = {}
+  if (typeof body.name === 'string') patch.name = body.name
+  if ('email' in body) patch.email = typeof body.email === 'string' ? body.email : null
+  if ('department' in body) {
+    patch.department = typeof body.department === 'string' ? body.department : null
+  }
+  if ('startDate' in body) {
+    patch.startDate = typeof body.startDate === 'string' && body.startDate ? body.startDate : null
+  }
+  if ('annualQuota' in body) {
+    patch.annualQuota = typeof body.annualQuota === 'number' ? body.annualQuota : null
+  }
+  if (typeof body.isActive === 'boolean') patch.isActive = body.isActive
+
+  const result = await updateEmployee(c.env.DB, id, patch)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
   return c.json({ ok: true, employee: result.employee })
 })
 
@@ -823,6 +862,24 @@ app.post('/api/leave/:id/assign-employee', async (c) => {
     return c.json({ ok: false, error: 'invalid employeeId' }, 400)
   }
   const result = await assignEmployee(c.env.DB, id, employeeId)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
+})
+
+// Book a request as a canonical leave type, overriding the form's free-text
+// value. Body: { kind: LeaveTypeKey | null } — null falls back to the raw type.
+app.post('/api/leave/:id/type', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { kind?: unknown } = await c.req.json().catch(() => ({}))
+  const kind = body.kind === null || body.kind === undefined ? null : body.kind
+  if (kind !== null && !isLeaveTypeKey(kind)) {
+    return c.json({ ok: false, error: 'invalid leave type' }, 400)
+  }
+  const result = await updateLeaveKind(c.env.DB, id, kind)
   if (!result.ok) {
     return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
   }
