@@ -522,9 +522,11 @@ app.post('/api/candidates/:id/outreach-email', async (c) => {
   }
 })
 
-// Upload an image attachment for a candidate's notes. Stored in R2 under
-// note-images/{applicantId}/{uuid}.{ext}; returns the public URL to embed in a
-// note via POST /api/candidates/:id/notes.
+// Upload an image or PDF attachment for a candidate's notes. Stored in R2
+// under note-images/{applicantId}/{uuid}-{name}.{ext} — the sanitized
+// original filename is kept in the key so the UI can label PDF attachments
+// (which can't render a visual thumbnail like images can); returns the
+// public URL to embed in a note via POST /api/candidates/:id/notes.
 app.post('/api/candidates/:id/note-images', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
@@ -540,7 +542,8 @@ app.post('/api/candidates/:id/note-images', async (c) => {
   const ext = NOTE_IMAGE_TYPES[file.type]
   if (!ext) return c.json({ ok: false, error: 'unsupported file type' }, 400)
   if (file.size > MAX_NOTE_IMAGE_BYTES) return c.json({ ok: false, error: 'file too large (max 10MB)' }, 400)
-  const key = `note-images/${id}/${crypto.randomUUID()}.${ext}`
+  const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+  const key = `note-images/${id}/${crypto.randomUUID()}${baseName ? `-${baseName}` : ''}.${ext}`
   await c.env.RESUMES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } })
   return c.json({ ok: true, url: `${c.env.R2_PUBLIC_URL}/${key}` })
 })

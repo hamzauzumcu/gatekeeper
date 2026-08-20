@@ -4047,6 +4047,15 @@ function isPdfAttachment(url: string): boolean {
   return /\.pdf($|\?)/i.test(url)
 }
 
+// Derive a short display name from a note attachment URL of the form
+// `.../{uuid}-{originalName}.{ext}`. Falls back to "PDF" when the key has
+// no embedded name (older uploads made before names were kept).
+function attachmentDisplayName(url: string): string {
+  const file = decodeURIComponent(url.split('/').pop() ?? '')
+  const match = file.match(/^[0-9a-f-]{36}-(.+)\.[^.]+$/i)
+  return match ? match[1] : 'PDF'
+}
+
 function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded, highlightNoteId, onHighlightHandled }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void; highlightNoteId: number | null; onHighlightHandled: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
@@ -4430,7 +4439,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               return (
                 <div key={i} className="relative size-16 overflow-hidden rounded-md border">
                   {isPdf ? (
-                    <div className="flex size-full flex-col items-center justify-center gap-1 bg-muted px-1 text-center">
+                    <div title={file.name} className="flex size-full flex-col items-center justify-center gap-1 bg-muted px-1 text-center">
                       <FileText className="size-5 text-muted-foreground" />
                       <span className="w-full truncate text-[9px] text-muted-foreground">{file.name}</span>
                     </div>
@@ -4617,11 +4626,11 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                             href={src}
                             target="_blank"
                             rel="noreferrer"
-                            title="Open PDF"
+                            title={attachmentDisplayName(src)}
                             className="flex size-20 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted px-1 text-center transition-opacity hover:opacity-80"
                           >
                             <FileText className="size-5 text-muted-foreground" />
-                            <span className="w-full truncate text-[9px] text-muted-foreground">PDF</span>
+                            <span className="w-full truncate text-[9px] text-muted-foreground">{attachmentDisplayName(src)}</span>
                           </a>
                         ) : (
                           <button
