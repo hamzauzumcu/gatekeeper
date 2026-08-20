@@ -109,13 +109,15 @@ function isValidFiltersJson(raw: unknown): raw is string {
   }
 }
 
-// Note image attachments are stored in R2 under `note-images/{applicantId}/...`
-// and referenced from candidate_notes.images as a JSON array of public URLs.
+// Note attachments (images and PDFs) are stored in R2 under
+// `note-images/{applicantId}/...` and referenced from candidate_notes.images
+// as a JSON array of public URLs.
 const NOTE_IMAGE_TYPES: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
+  'application/pdf': 'pdf',
 }
 const MAX_NOTE_IMAGE_BYTES = 10 * 1024 * 1024 // 10 MB
 
@@ -536,8 +538,8 @@ app.post('/api/candidates/:id/note-images', async (c) => {
   const file = form.get('file')
   if (!(file instanceof File)) return c.json({ ok: false, error: 'file is required' }, 400)
   const ext = NOTE_IMAGE_TYPES[file.type]
-  if (!ext) return c.json({ ok: false, error: 'unsupported image type' }, 400)
-  if (file.size > MAX_NOTE_IMAGE_BYTES) return c.json({ ok: false, error: 'image too large (max 10MB)' }, 400)
+  if (!ext) return c.json({ ok: false, error: 'unsupported file type' }, 400)
+  if (file.size > MAX_NOTE_IMAGE_BYTES) return c.json({ ok: false, error: 'file too large (max 10MB)' }, 400)
   const key = `note-images/${id}/${crypto.randomUUID()}.${ext}`
   await c.env.RESUMES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } })
   return c.json({ ok: true, url: `${c.env.R2_PUBLIC_URL}/${key}` })

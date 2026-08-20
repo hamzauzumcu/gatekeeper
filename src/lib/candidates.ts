@@ -833,13 +833,13 @@ export type CandidateNote = {
   images: string[]
 }
 
-// Upload an image attachment for a candidate's notes and return its public URL.
+// Upload an image or PDF attachment for a candidate's notes and return its public URL.
 export async function uploadNoteImage(applicantId: number, file: File): Promise<string> {
   const form = new FormData()
   form.append('file', file)
   const res = await apiFetch(`/api/candidates/${applicantId}/note-images`, { method: 'POST', body: form })
   const data = (await res.json()) as { ok: true; url: string } | { ok: false; error: string }
-  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to upload image')
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to upload file')
   return data.url
 }
 

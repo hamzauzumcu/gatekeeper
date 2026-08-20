@@ -4043,6 +4043,10 @@ function linkifyMentions(content: string, known: Set<string>): string {
   )
 }
 
+function isPdfAttachment(url: string): boolean {
+  return /\.pdf($|\?)/i.test(url)
+}
+
 function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded, highlightNoteId, onHighlightHandled }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void; highlightNoteId: number | null; onHighlightHandled: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [loading, setLoading] = useState(true)
@@ -4209,8 +4213,8 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
 
   function addFiles(selected: FileList | null) {
     if (!selected) return
-    const imgs = Array.from(selected).filter((f) => f.type.startsWith('image/'))
-    if (imgs.length) setFiles((prev) => [...prev, ...imgs])
+    const attachments = Array.from(selected).filter((f) => f.type.startsWith('image/') || f.type === 'application/pdf')
+    if (attachments.length) setFiles((prev) => [...prev, ...attachments])
   }
 
   function removeFile(idx: number) {
@@ -4223,10 +4227,10 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     if (!submitting) addFiles(e.dataTransfer.files)
   }
 
-  // Allow pasting an image straight from the clipboard into the note.
+  // Allow pasting an image or PDF straight from the clipboard into the note.
   function handlePaste(e: React.ClipboardEvent) {
-    const imgs = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
-    if (imgs.length) {
+    const attachments = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/') || f.type === 'application/pdf')
+    if (attachments.length) {
       e.preventDefault()
       addFiles(e.clipboardData.files)
     }
@@ -4410,7 +4414,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               e.currentTarget.form?.requestSubmit()
             }
           }}
-          placeholder="Add a note… (@ to mention, ⌘↵ to save, drag/paste/attach images)"
+          placeholder="Add a note… (@ to mention, ⌘↵ to save, drag/paste/attach images or PDFs)"
           rows={3}
           className={[
             'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
@@ -4421,19 +4425,27 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {files.map((file, i) => {
-              const url = URL.createObjectURL(file)
+              const isPdf = file.type === 'application/pdf'
+              const url = isPdf ? null : URL.createObjectURL(file)
               return (
                 <div key={i} className="relative size-16 overflow-hidden rounded-md border">
-                  <img
-                    src={url}
-                    alt={file.name}
-                    className="size-full object-cover"
-                    onLoad={() => URL.revokeObjectURL(url)}
-                  />
+                  {isPdf ? (
+                    <div className="flex size-full flex-col items-center justify-center gap-1 bg-muted px-1 text-center">
+                      <FileText className="size-5 text-muted-foreground" />
+                      <span className="w-full truncate text-[9px] text-muted-foreground">{file.name}</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={url ?? undefined}
+                      alt={file.name}
+                      className="size-full object-cover"
+                      onLoad={() => url && URL.revokeObjectURL(url)}
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => removeFile(i)}
-                    title="Remove image"
+                    title="Remove attachment"
                     className="absolute right-0.5 top-0.5 inline-flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground shadow-sm hover:bg-background"
                   >
                     <X className="size-3" />
@@ -4451,7 +4463,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
+            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
             multiple
             className="hidden"
             onChange={(e) => addFiles(e.target.files)}
@@ -4465,7 +4477,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             className="gap-1.5"
           >
             <ImageIcon className="size-3.5" />
-            Add Image
+            Attach File
           </Button>
           {draftSaved && text.trim() && !submitting && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
@@ -4487,21 +4499,32 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
         <p className="py-6 text-center text-sm text-muted-foreground">No notes yet.</p>
       ) : (
         <div className="space-y-3">
-          {notes.map((note) => (
+          {notes.map((note) => {
+            const authorColor = users.find((u) => u.username === note.created_by)?.color ?? '#64748b'
+            const authorInitials = getInitials(note.created_by_name)
+            return (
             <div
               key={note.id}
               ref={(el) => {
                 if (el) noteRefs.current.set(note.id, el)
                 else noteRefs.current.delete(note.id)
               }}
+              style={{ borderLeftColor: authorColor }}
               className={[
-                'rounded-lg border p-3 transition-colors duration-700',
+                'rounded-lg border border-l-[3px] p-3 transition-colors duration-700',
                 selectedNoteId === note.id ? 'note-linked' : '',
               ].join(' ')}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span className="font-medium">{note.created_by_name}</span>
+                  <span
+                    className="flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
+                    style={{ color: authorColor, backgroundColor: `${authorColor}26` }}
+                    title={note.created_by_name}
+                  >
+                    {authorInitials}
+                  </span>
+                  <span className="font-medium" style={{ color: authorColor }}>{note.created_by_name}</span>
                   <span className="text-muted-foreground">·</span>
                   <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
                 </div>
@@ -4587,22 +4610,37 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   )}
                   {note.images.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {note.images.map((src) => (
-                        <button
-                          key={src}
-                          type="button"
-                          onClick={() => setLightbox(src)}
-                          className="size-20 overflow-hidden rounded-md border transition-opacity hover:opacity-80"
-                        >
-                          <img src={src} alt="Note attachment" className="size-full object-cover" />
-                        </button>
-                      ))}
+                      {note.images.map((src) =>
+                        isPdfAttachment(src) ? (
+                          <a
+                            key={src}
+                            href={src}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Open PDF"
+                            className="flex size-20 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted px-1 text-center transition-opacity hover:opacity-80"
+                          >
+                            <FileText className="size-5 text-muted-foreground" />
+                            <span className="w-full truncate text-[9px] text-muted-foreground">PDF</span>
+                          </a>
+                        ) : (
+                          <button
+                            key={src}
+                            type="button"
+                            onClick={() => setLightbox(src)}
+                            className="size-20 overflow-hidden rounded-md border transition-opacity hover:opacity-80"
+                          >
+                            <img src={src} alt="Note attachment" className="size-full object-cover" />
+                          </button>
+                        )
+                      )}
                     </div>
                   )}
                 </>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
