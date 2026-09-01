@@ -233,7 +233,7 @@ export async function getQuestionColumns(db: D1Database): Promise<QuestionColumn
     )
     .all<QuestionColumn>()
 
-  // CV parsed alanları virtual sütun olarak başa ekle (negatif ID)
+  // Add CV parsed fields as virtual columns at the start (negative ID)
   const cvVirtual: QuestionColumn[] = CV_COLUMNS.map((c) => ({
     id: c.id,
     label: c.label,

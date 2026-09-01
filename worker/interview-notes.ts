@@ -2,7 +2,7 @@
 // generateInterviewNotes pulls together everything we know about a candidate —
 // their CV, the position they applied for, the scoring criteria ("what we are
 // looking for"), their application-form answers, and any existing team notes
-// (which often say what to ask) — and asks the model for focused, Turkish
+// (which often say what to ask) — and asks the model for focused, English
 // interview notes as a bullet list. The prompt template is a single global
 // setting (app_settings), editable in Settings; a missing row falls back to
 // DEFAULT_INTERVIEW_NOTES_PROMPT below.
@@ -22,8 +22,8 @@ export type InterviewNotesEnv = {
   R2_PUBLIC_URL?: string
 }
 
-// The instruction half of the prompt is in English (per repo policy), but it
-// explicitly forces the candidate-facing output to be Turkish. The input blocks
+// The instruction half of the prompt is in English (per repo policy), and it
+// forces the candidate-facing output to be English too. The input blocks
 // referenced here (<cv>, <position>, …) are produced verbatim by the user-content
 // builder in generateInterviewNotes — keep the two in sync.
 export const DEFAULT_INTERVIEW_NOTES_PROMPT = `You are an experienced hiring manager preparing for a candidate interview.
@@ -49,13 +49,13 @@ Question quality:
 - Each question must reference a specific claim, project, number, gap, or team note from the inputs. No generic competency questions (e.g. avoid "Tell me about your experience").
 
 Rules:
-- Write the ENTIRE output in Turkish. Proper nouns and technical terms may stay in their original form; all explanations and questions must be in Turkish.
+- Write the ENTIRE output in English. Proper nouns and technical terms may stay in their original form; all explanations and questions must be in English.
 - Output ONLY a flat list of bullet points, each line starting with "- ".
 - Produce 4-7 bullets. Fewer is better; only include a point if skipping it would meaningfully weaken the interview. If the inputs genuinely warrant fewer than 4 substantive points, write fewer. (team_notes items are exempt and may push you higher.)
 - Each bullet: one sentence, max ~25 words. No sub-bullets, no nested explanations.
 - Be specific to THIS candidate and THIS position. No generic filler.
 - Do not include any heading, preamble, or closing text. The first character of your output must be "-".
-- After the list, if you considered but deliberately left out 1-2 relevant topics to keep it short, add ONE final line starting with "(Atlandı: ...)". If you left nothing out, omit this line entirely.`
+- After the list, if you considered but deliberately left out 1-2 relevant topics to keep it short, add ONE final line starting with "(Omitted: ...)". If you left nothing out, omit this line entirely.`
 
 export async function getInterviewNotesPrompt(db: D1Database): Promise<{ prompt: string; is_custom: boolean }> {
   const row = await db

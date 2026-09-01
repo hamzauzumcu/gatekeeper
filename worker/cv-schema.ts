@@ -3,9 +3,9 @@
 
 export const PARSE_VERSION = 3
 
-// Üniversite adı normalleştirme — farklı yazımları tek isime çeker.
-// Pattern küçük harfle aranır, alt string eşleşmesi yeterli.
-// Yeni üniversite eklemek için buraya satır ekle.
+// University name normalization — maps different spellings to one canonical name.
+// Patterns are searched in lowercase; substring match is sufficient.
+// Add a new university by adding a row here.
 export const UNIVERSITY_MAP: [pattern: string, canonical: string][] = [
   ['bogazici', 'Boğaziçi Üniversitesi'],
   ['boğaziçi', 'Boğaziçi Üniversitesi'],

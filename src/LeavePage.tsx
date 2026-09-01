@@ -159,13 +159,14 @@ function fmtTotals(t: Totals): string {
 }
 
 // An employee's leave for the selected period, split by whether it comes off
-// the annual entitlement. Sick leave is approved like any other request but is
-// never deducted — it is reported on its own so the exemption stays visible.
+// the annual entitlement. Sick leave and public holidays are approved like any
+// other request but are never deducted — they are reported on their own so the
+// exemption stays visible.
 // Only whole days are deducted; hours are reported but not netted off the quota.
 type Balance = {
   quota: number
   used: Totals // approved, deductible types
-  exempt: Totals // approved, non-deductible types (sick leave)
+  exempt: Totals // approved, non-deductible types (sick leave, public holidays)
   pending: Totals
   remaining: number
 }
@@ -976,7 +977,7 @@ export default function LeavePage({ user }: { user: User }) {
                         </div>
                         <div>
                           <div className="text-xs uppercase text-muted-foreground">
-                            Sick leave (not deducted)
+                            Not deducted
                           </div>
                           <div className="text-2xl font-semibold">{fmtTotals(bal.exempt)}</div>
                         </div>
@@ -986,7 +987,7 @@ export default function LeavePage({ user }: { user: User }) {
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {`Approved sick leave is granted but never comes off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
+                        {`Approved sick leave and public holidays are granted but never come off the ${fmtNum(bal.quota)}-day entitlement; only the types marked as deducted do.`}
                         {year === 'all'
                           ? ' Days are earned in full on each work anniversary and carry over, so this is every anniversary reached so far less everything taken.'
                           : ' Days are earned in full on the work anniversary falling in this year — a year of service in progress grants nothing yet.'}
@@ -1111,8 +1112,8 @@ export default function LeavePage({ user }: { user: User }) {
                   </CardTitle>
                   <CardDescription>
                     Click an employee to see their leave for the period. Used counts only the
-                    deductible types — approved sick leave is shown separately and never comes off
-                    the entitlement. Days are earned in full on each work anniversary and carry
+                    deductible types — approved sick leave and public holidays are shown
+                    separately and never come off the entitlement. Days are earned in full on each work anniversary and carry
                     over, so "All years" totals every anniversary reached against everything taken.
                   </CardDescription>
                 </CardHeader>
@@ -1129,7 +1130,7 @@ export default function LeavePage({ user }: { user: User }) {
                           <TableHead>Entitlement</TableHead>
                           <TableHead>Used</TableHead>
                           <TableHead>Remaining</TableHead>
-                          <TableHead>Sick (not deducted)</TableHead>
+                          <TableHead>Not deducted</TableHead>
                           <TableHead>Pending</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
                         </TableRow>

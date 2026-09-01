@@ -66,8 +66,8 @@ Rules:
 - Always include the company link in the email, written in parentheses exactly as (https://beta.limited). Never omit, alter, or translate this URL.
 - The subject line must be short and specific to the position.
 - Use a warm, friendly, conversational tone — write like a real person reaching out personally, not a formal corporate template. Keep it relaxed and sincere while staying respectful.
-- Open with a friendly greeting and a natural line that you saw their application for the position and wanted to get in touch (e.g. in Turkish: "Merhaba Gülşah, bu pozisyona başvurunuzu gördüm, bu sebeple sizinle iletişime geçmek istedim.").
-- End the email with a sign-off line — "İyi çalışmalar" for a Turkish email, "Best regards" for an English one — followed on the next line by the sender's name from <sender_name>. Do not invent any other sender name.
+- Open with a friendly greeting and a natural line that you saw their application for the position and wanted to get in touch (e.g. in Turkish: "Merhaba Gülşah, bu pozisyona başvurunuzu gördüm, bu sebeple sizinle iletişime geçmek istedim" - which means "Hello Gülşah, I saw your application for this position, and that's why I wanted to reach out.").
+- End the email with a sign-off line — "İyi çalışmalar" (literally: "Good work"; a common Turkish closing) for a Turkish email, "Best regards" for an English one — followed on the next line by the sender's name from <sender_name>. Do not invent any other sender name.
 
 Output ONLY a JSON object with exactly these keys:
 {"subject": "<email subject>", "body": "<email body with line breaks as \\n>", "language": "<the language you actually wrote in: Turkish or English>"}

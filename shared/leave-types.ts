@@ -8,12 +8,15 @@
 // request submitted as sick leave may be approved as personal leave.
 //
 // `counts` decides whether an APPROVED request is deducted from the employee's
-// annual entitlement. Sick leave is tracked and shown, but never deducted.
+// annual entitlement. Sick leave and public holidays are tracked and shown, but
+// never deducted — a public holiday is time off the company grants everyone, so
+// booking it must not eat into someone's annual days.
 
 export type LeaveTypeKey =
   | 'general'
   | 'emergency'
   | 'annual'
+  | 'public_holiday'
   | 'sick'
   | 'personal'
   | 'parental'
@@ -31,6 +34,13 @@ export type LeaveTypeDef = {
 export const LEAVE_TYPES: LeaveTypeDef[] = [
   { key: 'general', label: 'General', counts: true, match: /general/i },
   { key: 'emergency', label: 'Emergency', counts: true, match: /emergen|urgent/i },
+  // Before 'annual', whose pattern also matches the bare word "holiday".
+  {
+    key: 'public_holiday',
+    label: 'Public Holiday',
+    counts: false,
+    match: /public holiday|bank holiday|national holiday|official holiday/i,
+  },
   { key: 'annual', label: 'Annual Leave', counts: true, match: /annual|yearly|vacation|holiday/i },
   { key: 'sick', label: 'Sick Leave', counts: false, match: /sick|illness|medical/i },
   { key: 'personal', label: 'Personal Leave', counts: true, match: /personal/i },

@@ -1,5 +1,5 @@
-// Tally webhook → ImportPayload dönüştürücü + HMAC doğrulama.
-// Tally imzası: "tally-signature: t=<unix>,v1=<hex>" → HMAC-SHA256(secret, t + "." + rawBody)
+// Tally webhook → ImportPayload converter + HMAC verification.
+// Tally signature: "tally-signature: t=<unix>,v1=<hex>" → HMAC-SHA256(secret, t + "." + rawBody)
 
 import { importApplications, type ImportPayload } from './import'
 

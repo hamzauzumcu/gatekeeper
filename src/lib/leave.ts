@@ -92,7 +92,7 @@ export function leaveTypeOf(r: Pick<LeaveRequest, 'leave_kind' | 'leave_type'>):
 }
 
 // Whether an approved request is deducted from the annual entitlement. Sick
-// leave is not — it is tracked and shown separately.
+// leave and public holidays are not — they are tracked and shown separately.
 export function countsTowardBalance(r: Pick<LeaveRequest, 'leave_kind' | 'leave_type'>): boolean {
   return leaveTypeDef(leaveTypeOf(r)).counts
 }
