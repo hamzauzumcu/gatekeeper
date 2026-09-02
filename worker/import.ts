@@ -1,8 +1,14 @@
 // CSV import — idempotent writes to D1.
 // Browser sends a normalized ImportPayload; we upsert it.
-// Dedup: applicants by normalized email (Tally may assign a returning applicant
-//   a NEW respondent_id), falling back to respondent_id when no email is present;
-//   applications by tally_submission_id (application).
+// Identity: applicants are resolved by normalized email only. Tally's
+//   respondentId identifies a browser, not a person — a recruiter submitting the
+//   public form for several candidates sends them all with one respondentId — so
+//   it never merges two records (see migration 0034). It is stored per
+//   submission as applications.tally_respondent_id, and used to match ONLY when
+//   a row carries no email at all, and then only against equally email-less
+//   applicants. Anything unresolved becomes a NEW applicant: a false split costs
+//   a merge, a false merge destroys a candidate.
+// Applications are deduped by tally_submission_id.
 
 type QuestionType = 'text' | 'number' | 'boolean' | 'file'
 
@@ -103,11 +109,13 @@ export async function importApplications(
     }
   }
 
-  // 3) Resolve applicant identity. Prefer normalized email so a returning
-  //    applicant Tally assigned a NEW respondent_id still maps to one person;
-  //    fall back to respondent_id when no email is present.
+  // 3) Resolve applicant identity — email first, never respondentId.
   const normEmail = (e: string | null): string | null => {
     const t = (e ?? '').trim().toLowerCase()
+    return t.length ? t : null
+  }
+  const normRid = (r: ImportRow): string | null => {
+    const t = (r.respondent_id ?? '').trim()
     return t.length ? t : null
   }
   const personKey = (r: ImportRow): string => normEmail(r.email) ?? `rid:${r.respondent_id}`
@@ -137,25 +145,56 @@ export async function importApplications(
     for (const row of existing.results ?? []) emailToId.set(row.ne, row.id)
   }
 
-  // Returning applicants → merge into the existing record (keep its id).
-  // New applicants → insert keyed on respondent_id.
+  // Fallback for rows with no email at all: match the respondentId against
+  // earlier submissions, but only when the applicant behind them is itself
+  // email-less. Without this guard an anonymous row would attach to a named
+  // person just because a recruiter reused their browser.
+  const chunkRids = [
+    ...new Set(
+      [...uniquePeople.values()]
+        .filter((r) => normEmail(r.email) === null)
+        .map(normRid)
+        .filter((v): v is string => v !== null)
+    ),
+  ]
+  const ridToId = new Map<string, number>()
+  if (chunkRids.length) {
+    const placeholders = chunkRids.map(() => '?').join(',')
+    const existing = await db
+      .prepare(
+        `SELECT a.tally_respondent_id AS rid, MIN(ap.id) AS id
+         FROM applications a
+         JOIN applicants ap ON ap.id = a.applicant_id
+         WHERE a.tally_respondent_id IN (${placeholders})
+           AND (ap.email IS NULL OR TRIM(ap.email) = '')
+         GROUP BY a.tally_respondent_id`
+      )
+      .bind(...chunkRids)
+      .all<{ rid: string; id: number }>()
+    for (const row of existing.results ?? []) ridToId.set(row.rid, row.id)
+  }
+
+  // Known applicants → keep their record and fill only its blanks. Identity
+  // fields are never overwritten: a new submission may add a missing phone, but
+  // it must not rename an existing candidate.
   const applicantIdByPerson = new Map<string, number>()
   const insertRows: ImportRow[] = []
   const updateStmts: D1PreparedStatement[] = []
   for (const [key, r] of uniquePeople) {
     const email = normEmail(r.email)
-    const existingId = email ? emailToId.get(email) : undefined
+    const rid = normRid(r)
+    const existingId = email ? emailToId.get(email) : rid ? ridToId.get(rid) : undefined
     if (existingId !== undefined) {
       applicantIdByPerson.set(key, existingId)
       updateStmts.push(
         db
           .prepare(
             `UPDATE applicants SET
-               full_name    = COALESCE(?, full_name),
-               email        = COALESCE(?, email),
-               phone        = COALESCE(?, phone),
-               country      = COALESCE(?, country),
-               linkedin_url = COALESCE(?, linkedin_url)
+               full_name    = COALESCE(full_name, ?),
+               email        = COALESCE(email, ?),
+               phone        = COALESCE(phone, ?),
+               country      = COALESCE(country, ?),
+               linkedin_url = COALESCE(linkedin_url, ?)
              WHERE id = ?`
           )
           .bind(r.full_name, r.email, r.phone, r.country, r.linkedin_url, existingId)
@@ -166,23 +205,20 @@ export async function importApplications(
   }
   if (updateStmts.length) await db.batch(updateStmts)
 
+  // Unresolved → a new applicant, always. respondent_id is deliberately left
+  // NULL: the column is dead (migration 0034) and writing it would resurrect the
+  // UNIQUE collision that overwrote candidates.
   if (insertRows.length) {
     const stmts = insertRows.map((r) =>
       db
         .prepare(
-          `INSERT INTO applicants (respondent_id, full_name, email, phone, country, linkedin_url)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(respondent_id) DO UPDATE SET
-             full_name    = COALESCE(excluded.full_name, applicants.full_name),
-             email        = COALESCE(excluded.email, applicants.email),
-             phone        = COALESCE(excluded.phone, applicants.phone),
-             country      = COALESCE(excluded.country, applicants.country),
-             linkedin_url = COALESCE(excluded.linkedin_url, applicants.linkedin_url)
-           RETURNING id, respondent_id`
+          `INSERT INTO applicants (full_name, email, phone, country, linkedin_url)
+           VALUES (?, ?, ?, ?, ?)
+           RETURNING id`
         )
-        .bind(r.respondent_id, r.full_name, r.email, r.phone, r.country, r.linkedin_url)
+        .bind(r.full_name, r.email, r.phone, r.country, r.linkedin_url)
     )
-    const res = await db.batch<{ id: number; respondent_id: string }>(stmts)
+    const res = await db.batch<{ id: number }>(stmts)
     res.forEach((r, i) => {
       const row = r.results?.[0]
       if (row) applicantIdByPerson.set(personKey(insertRows[i]), row.id)
@@ -196,19 +232,22 @@ export async function importApplications(
       db
         .prepare(
           `INSERT INTO applications
-             (applicant_id, position_id, tally_submission_id, resume_url, cover_letter, submitted_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+             (applicant_id, position_id, tally_submission_id, tally_respondent_id,
+              resume_url, cover_letter, submitted_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(tally_submission_id) DO UPDATE SET
-             applicant_id = excluded.applicant_id,
-             resume_url   = excluded.resume_url,
-             cover_letter = excluded.cover_letter,
-             submitted_at = excluded.submitted_at
+             applicant_id        = excluded.applicant_id,
+             tally_respondent_id = excluded.tally_respondent_id,
+             resume_url          = excluded.resume_url,
+             cover_letter        = excluded.cover_letter,
+             submitted_at        = excluded.submitted_at
            RETURNING id, tally_submission_id`
         )
         .bind(
           applicantIdByPerson.get(personKey(r)) ?? null,
           positionId,
           r.submission_id,
+          normRid(r),
           r.resume_url,
           r.cover_letter,
           r.submitted_at
