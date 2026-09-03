@@ -4,7 +4,7 @@ import {
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
   Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList, Info,
-  Reply, SmilePlus, CornerDownRight,
+  Reply, SmilePlus, CornerDownRight, ThumbsUp,
 } from 'lucide-react'
 import {
   fetchApplicationScorecard,
@@ -4007,6 +4007,13 @@ function renderEventBody(e: CandidateEvent): ReactNode {
           {e.metadata?.excerpt ? <span className="mt-0.5 block text-xs text-muted-foreground">“{e.metadata.excerpt}”</span> : null}
         </>
       )
+    case 'note_replied':
+      return (
+        <>
+          Replied to a note
+          {e.metadata?.excerpt ? <span className="mt-0.5 block text-xs text-muted-foreground">“{e.metadata.excerpt}”</span> : null}
+        </>
+      )
     case 'note_deleted':
       return (
         <>
@@ -4059,6 +4066,11 @@ function attachmentDisplayName(url: string): string {
   const match = file.match(/^[0-9a-f-]{36}-(.+)\.[^.]+$/i)
   return match ? match[1] : 'PDF'
 }
+
+// Emoji offered by the note reaction picker, plus the one behind the one-click
+// thumbs-up button next to it.
+const REACTION_EMOJIS = ['👍', '👎', '🎉', '❤️', '😄', '🤔', '👀', '🚀', '✅', '❌', '🔥', '💡'] as const
+const QUICK_REACTION = '👍'
 
 function NotesSection({ applicantId, candidateName, candidateEmail, currentUser, onNoteAdded, highlightNoteId, onHighlightHandled }: { applicantId: number; candidateName: string | null; candidateEmail: string | null; currentUser: User; onNoteAdded: () => void; highlightNoteId: number | null; onHighlightHandled: () => void }) {
   const [notes, setNotes] = useState<CandidateNote[]>([])
@@ -4430,6 +4442,296 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     }
   }
 
+  // One note plus its thread, rendered recursively so replies nest under the
+  // note they answer. `depth` only drives indentation, which stops growing after
+  // a few levels so deep threads stay readable in the panel.
+  function renderNote(note: CandidateNote, depth: number): ReactNode {
+    const authorColor = users.find((u) => u.username === note.created_by)?.color ?? '#64748b'
+    const authorInitials = getInitials(note.created_by_name)
+    const replies = repliesByParent.get(note.id) ?? []
+    const isCollapsed = collapsed.has(note.id)
+    return (
+      <div key={note.id} className="space-y-2">
+        <div
+          ref={(el) => {
+            if (el) noteRefs.current.set(note.id, el)
+            else noteRefs.current.delete(note.id)
+          }}
+          style={{ borderLeftColor: authorColor }}
+          className={[
+            'rounded-lg border border-l-[3px] p-3 transition-colors duration-700',
+            selectedNoteId === note.id ? 'note-linked' : '',
+          ].join(' ')}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span
+                className="flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
+                style={{ color: authorColor, backgroundColor: `${authorColor}26` }}
+                title={note.created_by_name}
+              >
+                {authorInitials}
+              </span>
+              <span className="font-medium" style={{ color: authorColor }}>{note.created_by_name}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => copyNoteLink(note.id)}
+                title="Copy link to note"
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {copiedNoteId === note.id ? (
+                  <Check className="size-3.5 text-primary" />
+                ) : (
+                  <Link2 className="size-3.5" />
+                )}
+              </button>
+              {note.created_by === currentUser.username && editingId !== note.id && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => startEdit(note)}
+                    title="Edit note"
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(note.id)}
+                    title="Delete note"
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {editingId === note.id ? (
+            <div className="mt-2 space-y-2">
+              <MentionTextarea
+                value={editText}
+                onChange={setEditText}
+                users={users}
+                rows={3}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) closeEdit()
+                  if (e.key === 'Escape') closeEdit()
+                }}
+                className={[
+                  'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
+                  'ring-offset-background placeholder:text-muted-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                ].join(' ')}
+              />
+              <div className="flex items-center gap-2">
+                <Button type="button" size="sm" onClick={() => closeEdit()}>
+                  Done
+                </Button>
+                <span className="text-xs text-muted-foreground" aria-live="polite">
+                  {editStatus === 'unsaved' && 'Unsaved changes…'}
+                  {editStatus === 'saving' && 'Saving…'}
+                  {editStatus === 'saved' && (
+                    <span className="inline-flex items-center gap-1">
+                      <Check className="size-3" /> Saved
+                    </span>
+                  )}
+                </span>
+                {editStatus === 'error' && (
+                  <span className="text-xs text-destructive">Save failed</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {note.content && (
+                <div className="prose prose-sm dark:prose-invert mt-2 max-w-none break-words">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    {linkifyMentions(note.content, knownHandles)}
+                  </ReactMarkdown>
+                </div>
+              )}
+              {note.images.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {note.images.map((src) =>
+                    isPdfAttachment(src) ? (
+                      <a
+                        key={src}
+                        href={src}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={attachmentDisplayName(src)}
+                        className="flex size-20 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted px-1 text-center transition-opacity hover:opacity-80"
+                      >
+                        <FileText className="size-5 text-muted-foreground" />
+                        <span className="w-full truncate text-[9px] text-muted-foreground">{attachmentDisplayName(src)}</span>
+                      </a>
+                    ) : (
+                      <button
+                        key={src}
+                        type="button"
+                        onClick={() => setLightbox(src)}
+                        className="size-20 overflow-hidden rounded-md border transition-opacity hover:opacity-80"
+                      >
+                        <img src={src} alt="Note attachment" className="size-full object-cover" />
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {note.reactions.map((reaction) => {
+              const mine = reaction.users.includes(currentUser.username)
+              return (
+                <Tooltip key={reaction.emoji}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => handleReaction(note.id, reaction.emoji)}
+                      aria-pressed={mine}
+                      className={[
+                        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors',
+                        mine
+                          ? 'border-primary/50 bg-primary/10 text-foreground'
+                          : 'border-transparent bg-muted text-muted-foreground hover:border-border',
+                      ].join(' ')}
+                    >
+                      <span aria-hidden>{reaction.emoji}</span>
+                      <span className="tabular-nums">{reaction.count}</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{reaction.names.join(', ')}</TooltipContent>
+                </Tooltip>
+              )
+            })}
+            <button
+              type="button"
+              onClick={() => handleReaction(note.id, QUICK_REACTION)}
+              title="React with a thumbs up"
+              className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ThumbsUp className="size-3.5" />
+            </button>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  title="Add a reaction"
+                  className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <SmilePlus className="size-3.5" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-auto p-1.5">
+                <div className="flex flex-wrap gap-0.5" style={{ maxWidth: '13rem' }}>
+                  {REACTION_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => handleReaction(note.id, emoji)}
+                      className="rounded p-1 text-base leading-none transition-colors hover:bg-muted"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+            <button
+              type="button"
+              onClick={() => {
+                setReplyError(null)
+                setReplyTo((prev) => (prev === note.id ? null : note.id))
+                setReplyText('')
+              }}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Reply className="size-3.5" />
+              Reply
+            </button>
+            {replies.length > 0 && (
+              <button
+                type="button"
+                onClick={() => toggleCollapsed(note.id)}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {isCollapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
+              </button>
+            )}
+          </div>
+
+          {replyTo === note.id && (
+            <div className="mt-2 space-y-2 border-t pt-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <CornerDownRight className="size-3.5" />
+                Replying to {note.created_by_name}
+              </div>
+              <MentionTextarea
+                value={replyText}
+                onChange={setReplyText}
+                users={users}
+                rows={2}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    void submitReply(note.id)
+                  }
+                  if (e.key === 'Escape') {
+                    setReplyTo(null)
+                    setReplyText('')
+                  }
+                }}
+                placeholder="Write a reply… (@ to mention, ⌘↵ to send)"
+                className={[
+                  'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
+                  'ring-offset-background placeholder:text-muted-foreground',
+                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                ].join(' ')}
+              />
+              {replyError && <p className="text-xs text-destructive">{replyError}</p>}
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!replyText.trim() || replySubmitting}
+                  onClick={() => submitReply(note.id)}
+                >
+                  {replySubmitting ? 'Sending…' : 'Reply'}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setReplyTo(null)
+                    setReplyText('')
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+        {replies.length > 0 && !isCollapsed && (
+          <div className={['space-y-2 border-l pl-3', depth < 3 ? 'ml-3' : ''].join(' ')}>
+            {replies.map((reply) => renderNote(reply, depth + 1))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4 pt-1">
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
@@ -4592,153 +4894,10 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             <Skeleton key={i} className="h-20 w-full" />
           ))}
         </div>
-      ) : notes.length === 0 ? (
+      ) : roots.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">No notes yet.</p>
       ) : (
-        <div className="space-y-3">
-          {notes.map((note) => {
-            const authorColor = users.find((u) => u.username === note.created_by)?.color ?? '#64748b'
-            const authorInitials = getInitials(note.created_by_name)
-            return (
-            <div
-              key={note.id}
-              ref={(el) => {
-                if (el) noteRefs.current.set(note.id, el)
-                else noteRefs.current.delete(note.id)
-              }}
-              style={{ borderLeftColor: authorColor }}
-              className={[
-                'rounded-lg border border-l-[3px] p-3 transition-colors duration-700',
-                selectedNoteId === note.id ? 'note-linked' : '',
-              ].join(' ')}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span
-                    className="flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
-                    style={{ color: authorColor, backgroundColor: `${authorColor}26` }}
-                    title={note.created_by_name}
-                  >
-                    {authorInitials}
-                  </span>
-                  <span className="font-medium" style={{ color: authorColor }}>{note.created_by_name}</span>
-                  <span className="text-muted-foreground">·</span>
-                  <span className="text-muted-foreground">{formatDate(note.created_at)}</span>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => copyNoteLink(note.id)}
-                    title="Copy link to note"
-                    className="text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {copiedNoteId === note.id ? (
-                      <Check className="size-3.5 text-primary" />
-                    ) : (
-                      <Link2 className="size-3.5" />
-                    )}
-                  </button>
-                  {note.created_by === currentUser.username && editingId !== note.id && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => startEdit(note)}
-                        title="Edit note"
-                        className="text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(note.id)}
-                        title="Delete note"
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-              {editingId === note.id ? (
-                <div className="mt-2 space-y-2">
-                  <MentionTextarea
-                    value={editText}
-                    onChange={setEditText}
-                    users={users}
-                    rows={3}
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) closeEdit()
-                      if (e.key === 'Escape') closeEdit()
-                    }}
-                    className={[
-                      'w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm',
-                      'ring-offset-background placeholder:text-muted-foreground',
-                      'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                    ].join(' ')}
-                  />
-                  <div className="flex items-center gap-2">
-                    <Button type="button" size="sm" onClick={() => closeEdit()}>
-                      Done
-                    </Button>
-                    <span className="text-xs text-muted-foreground" aria-live="polite">
-                      {editStatus === 'unsaved' && 'Unsaved changes…'}
-                      {editStatus === 'saving' && 'Saving…'}
-                      {editStatus === 'saved' && (
-                        <span className="inline-flex items-center gap-1">
-                          <Check className="size-3" /> Saved
-                        </span>
-                      )}
-                    </span>
-                    {editStatus === 'error' && (
-                      <span className="text-xs text-destructive">Save failed</span>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {note.content && (
-                    <div className="prose prose-sm dark:prose-invert mt-2 max-w-none break-words">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                        {linkifyMentions(note.content, knownHandles)}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                  {note.images.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {note.images.map((src) =>
-                        isPdfAttachment(src) ? (
-                          <a
-                            key={src}
-                            href={src}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={attachmentDisplayName(src)}
-                            className="flex size-20 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted px-1 text-center transition-opacity hover:opacity-80"
-                          >
-                            <FileText className="size-5 text-muted-foreground" />
-                            <span className="w-full truncate text-[9px] text-muted-foreground">{attachmentDisplayName(src)}</span>
-                          </a>
-                        ) : (
-                          <button
-                            key={src}
-                            type="button"
-                            onClick={() => setLightbox(src)}
-                            className="size-20 overflow-hidden rounded-md border transition-opacity hover:opacity-80"
-                          >
-                            <img src={src} alt="Note attachment" className="size-full object-cover" />
-                          </button>
-                        )
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            )
-          })}
-        </div>
+        <div className="space-y-3">{roots.map((note) => renderNote(note, 0))}</div>
       )}
 
       {lightbox && (

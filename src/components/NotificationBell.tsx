@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DropdownMenu } from 'radix-ui'
-import { Bell, AtSign, CheckCheck } from 'lucide-react'
+import { Bell, AtSign, CheckCheck, Reply } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   fetchNotifications,
@@ -144,6 +144,8 @@ export default function NotificationBell({ user, onOpenNote }: Props) {
                   <div className="mt-0.5 shrink-0">
                     {!n.read_at ? (
                       <span className="block size-2 rounded-full bg-primary" />
+                    ) : n.type === 'reply' ? (
+                      <Reply className="size-3.5 text-muted-foreground" />
                     ) : (
                       <AtSign className="size-3.5 text-muted-foreground" />
                     )}
@@ -151,7 +153,9 @@ export default function NotificationBell({ user, onOpenNote }: Props) {
                   <div className="min-w-0 flex-1">
                     <p className="leading-snug">
                       <span className="font-medium">{n.actor_name}</span>{' '}
-                      <span className="text-muted-foreground">mentioned you</span>
+                      <span className="text-muted-foreground">
+                        {n.type === 'reply' ? 'replied in a thread' : 'mentioned you'}
+                      </span>
                       {n.applicant_name && (
                         <>
                           {' '}
