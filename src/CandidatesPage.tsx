@@ -25,7 +25,7 @@ import {
   Image01Icon,
   InformationCircleIcon,
   KanbanIcon,
-  Link01Icon,
+  Link04Icon,
   ListViewIcon,
   LinkSquare02Icon,
   Mail01Icon,
@@ -4520,7 +4520,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 {copiedNoteId === note.id ? (
                   <HugeiconsIcon icon={Tick02Icon} className="size-3.5 text-primary" />
                 ) : (
-                  <HugeiconsIcon icon={Link01Icon} className="size-3.5" />
+                  <HugeiconsIcon icon={Link04Icon} className="size-3.5" />
                 )}
               </button>
               {note.created_by === currentUser.username && editingId !== note.id && (
