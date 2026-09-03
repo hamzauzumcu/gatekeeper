@@ -10,6 +10,7 @@ export const CANDIDATE_EVENT_TYPES = [
   'fit_status_changed',
   'pipeline_status_changed',
   'note_added',
+  'note_replied',
   'note_deleted',
   'scorecard_submitted',
   'scorecard_updated',

@@ -1,4 +1,5 @@
-// In-app notifications, currently produced by @mentions in candidate notes.
+// In-app notifications, produced by @mentions in candidate notes and by replies
+// to a note thread.
 // See migrations/0016_notifications.sql.
 
 export type NotificationRow = {
@@ -164,4 +165,61 @@ export async function markAllRead(db: D1Database, recipient: string): Promise<nu
 
 export async function deleteForNote(db: D1Database, noteId: number): Promise<void> {
   await db.prepare(`DELETE FROM notifications WHERE note_id = ?`).bind(noteId).run()
+}
+
+// Notify the people already in a thread that a reply was posted: the author of
+// the note being replied to plus everyone else who has replied under the same
+// root. Mentions inside the reply are handled separately by
+// createMentionNotifications; recipients notified there are skipped so nobody
+// gets two rows for one reply. Returns how many notifications were created.
+export async function createReplyNotifications(
+  db: D1Database,
+  opts: {
+    noteId: number
+    parentId: number
+    applicantId: number
+    actor: string
+    actorName: string
+    content: string
+    skipRecipients?: Iterable<string>
+  },
+): Promise<number> {
+  const { results } = await db
+    .prepare(
+      `SELECT DISTINCT created_by FROM candidate_notes
+        WHERE id = ?1 OR parent_id = ?1`,
+    )
+    .bind(opts.parentId)
+    .all<{ created_by: string }>()
+  const recipients = new Set((results ?? []).map((r) => r.created_by))
+  recipients.delete(opts.actor)
+  for (const r of opts.skipRecipients ?? []) recipients.delete(r)
+  if (recipients.size === 0) return 0
+
+  const applicant = await db
+    .prepare(`SELECT full_name FROM applicants WHERE id = ?`)
+    .bind(opts.applicantId)
+    .first<{ full_name: string | null }>()
+  const excerpt = makeExcerpt(opts.content)
+
+  await db.batch(
+    [...recipients].map((recipient) =>
+      db
+        .prepare(
+          `INSERT INTO notifications
+             (recipient, actor, actor_name, type, note_id, applicant_id, applicant_name, excerpt)
+           VALUES (?, ?, ?, 'reply', ?, ?, ?, ?)`,
+        )
+        .bind(
+          recipient,
+          opts.actor,
+          opts.actorName,
+          opts.noteId,
+          opts.applicantId,
+          applicant?.full_name ?? null,
+          excerpt,
+        ),
+    ),
+  )
+  return recipients.size
 }

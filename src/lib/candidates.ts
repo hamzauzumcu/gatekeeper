@@ -794,6 +794,7 @@ export type CandidateEventType =
   | 'fit_status_changed'
   | 'pipeline_status_changed'
   | 'note_added'
+  | 'note_replied'
   | 'note_deleted'
   | 'scorecard_submitted'
   | 'scorecard_updated'
@@ -823,14 +824,27 @@ export function fitStatusLabel(value: string | null): string {
   return FIT_STATUS_OPTIONS.find((o) => o.value === (value ?? 'none'))?.label ?? (value ?? 'No Status')
 }
 
+// A note's emoji reactions, grouped per emoji. `users` holds the usernames who
+// reacted (so the current user's own reaction can be highlighted) and `names`
+// their display names for the tooltip.
+export type NoteReaction = {
+  emoji: string
+  count: number
+  users: string[]
+  names: string[]
+}
+
 export type CandidateNote = {
   id: number
   applicant_id: number
+  // The note this one replies to; null for a top-level note.
+  parent_id: number | null
   content: string
   created_by: string
   created_by_name: string
   created_at: string
   images: string[]
+  reactions: NoteReaction[]
 }
 
 // Upload an image or PDF attachment for a candidate's notes and return its public URL.
@@ -850,17 +864,25 @@ export async function fetchNotes(applicantId: number): Promise<CandidateNote[]> 
   return data.notes
 }
 
+// Add a note, or a reply to an existing one when `parentId` is given.
 export async function addNote(
   applicantId: number,
   content: string,
   createdBy: string,
   createdByName: string,
-  images: string[] = []
+  images: string[] = [],
+  parentId: number | null = null
 ): Promise<CandidateNote> {
   const res = await apiFetch(`/api/candidates/${applicantId}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, created_by: createdBy, created_by_name: createdByName, images }),
+    body: JSON.stringify({
+      content,
+      created_by: createdBy,
+      created_by_name: createdByName,
+      images,
+      parent_id: parentId,
+    }),
   })
   const data = (await res.json()) as { ok: true; note: CandidateNote } | { ok: false; error: string }
   if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to add note')
@@ -878,11 +900,34 @@ export async function updateNote(noteId: number, content: string): Promise<Candi
   return data.note
 }
 
-export async function deleteNote(noteId: number, actor?: string): Promise<void> {
+// Delete a note along with its replies; returns every id that was removed so
+// the caller can drop them all from the list.
+export async function deleteNote(noteId: number, actor?: string): Promise<number[]> {
   const qs = actor ? `?actor=${encodeURIComponent(actor)}` : ''
   const res = await apiFetch(`/api/notes/${noteId}${qs}`, { method: 'DELETE' })
-  const data = (await res.json()) as { ok: boolean; error?: string }
+  const data = (await res.json()) as { ok: boolean; deleted_ids?: number[]; error?: string }
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to delete note')
+  return data.deleted_ids ?? [noteId]
+}
+
+// Toggle one emoji reaction on a note for the current user and return the
+// note's reactions afterwards.
+export async function toggleNoteReaction(
+  noteId: number,
+  emoji: string,
+  username: string,
+  userName: string
+): Promise<NoteReaction[]> {
+  const res = await apiFetch(`/api/notes/${noteId}/reactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emoji, username, user_name: userName }),
+  })
+  const data = (await res.json()) as
+    | { ok: true; reactions: NoteReaction[] }
+    | { ok: false; error: string }
+  if (!res.ok || !data.ok) throw new Error('error' in data ? data.error : 'failed to react')
+  return data.reactions
 }
 
 // Generate AI interview notes for a candidate and save them as a new note.

@@ -42,6 +42,7 @@ import { handleLeaveTallyWebhook } from './leave-tally'
 import { isLeaveTypeKey } from '../shared/leave-types'
 import {
   createMentionNotifications,
+  createReplyNotifications,
   existingRecipients,
   listNotifications,
   unreadApplicantIds,
@@ -49,6 +50,7 @@ import {
   markAllRead,
   deleteForNote,
 } from './notifications'
+import { fetchReactions, toggleReaction, isValidEmoji, type NoteReaction } from './note-reactions'
 import { SyncJobDO } from './sync-job-do'
 
 export { SyncJobDO }
@@ -132,10 +134,16 @@ function parseNoteImages(raw: unknown): string[] {
   }
 }
 
-// Shape a candidate_notes row for the API: parse images into an array.
-function shapeNote(row: Record<string, unknown> | null) {
+// Columns every note endpoint returns, so replies and reactions are shaped the
+// same way wherever a note is read back.
+const NOTE_COLUMNS =
+  'id, applicant_id, parent_id, content, created_by, created_by_name, created_at, images'
+
+// Shape a candidate_notes row for the API: parse images into an array and
+// attach the note's emoji reactions (empty when none were loaded).
+function shapeNote(row: Record<string, unknown> | null, reactions: NoteReaction[] = []) {
   if (!row) return row
-  return { ...row, images: parseNoteImages(row.images) }
+  return { ...row, images: parseNoteImages(row.images), reactions }
 }
 
 // Short, single-line preview of a note for the candidate timeline. Strips
@@ -498,8 +506,7 @@ app.post('/api/candidates/:id/interview-notes', async (c) => {
       metadata: { note_id: result.meta.last_row_id, excerpt: noteExcerpt(content), generated: true } },
   ])
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
-     FROM candidate_notes WHERE id = ?`
+    `SELECT ${NOTE_COLUMNS} FROM candidate_notes WHERE id = ?`
   ).bind(result.meta.last_row_id).first()
   return c.json({ ok: true, note: shapeNote(note) })
 })
@@ -552,18 +559,32 @@ app.post('/api/candidates/:id/note-images', async (c) => {
 app.get('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  // Replies come back in the same flat list, marked by parent_id; the client
+  // nests them under their parent and flips them to oldest-first so a thread
+  // reads top to bottom.
   const { results } = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
+    `SELECT ${NOTE_COLUMNS}
      FROM candidate_notes WHERE applicant_id = ? ORDER BY created_at DESC`
   ).bind(id).all()
-  return c.json({ ok: true, notes: (results ?? []).map(shapeNote) })
+  const rows = results ?? []
+  const reactions = await fetchReactions(c.env.DB, rows.map((r) => Number(r.id)))
+  return c.json({
+    ok: true,
+    notes: rows.map((r) => shapeNote(r, reactions.get(Number(r.id)) ?? [])),
+  })
 })
 
 // Candidate notes — POST (add new note)
 app.post('/api/candidates/:id/notes', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
-  let body: { content: string; created_by: string; created_by_name: string; images?: unknown }
+  let body: {
+    content: string
+    created_by: string
+    created_by_name: string
+    images?: unknown
+    parent_id?: unknown
+  }
   try {
     body = await c.req.json()
   } catch {
@@ -573,26 +594,55 @@ app.post('/api/candidates/:id/notes', async (c) => {
   const images = Array.isArray(body.images) ? body.images.filter((x): x is string => typeof x === 'string') : []
   if (!content && images.length === 0) return c.json({ ok: false, error: 'note cannot be empty' }, 400)
   if (!body.created_by) return c.json({ ok: false, error: 'user required' }, 400)
+  // A reply must point at a note on the same candidate, so a thread can never
+  // span candidates.
+  let parentId: number | null = null
+  if (body.parent_id != null) {
+    parentId = Number(body.parent_id)
+    if (!Number.isInteger(parentId) || parentId <= 0) {
+      return c.json({ ok: false, error: 'invalid parent_id' }, 400)
+    }
+    const parent = await c.env.DB.prepare(
+      `SELECT applicant_id FROM candidate_notes WHERE id = ?`
+    ).bind(parentId).first<{ applicant_id: number }>()
+    if (!parent) return c.json({ ok: false, error: 'parent note not found' }, 404)
+    if (parent.applicant_id !== id) {
+      return c.json({ ok: false, error: 'parent note belongs to another candidate' }, 400)
+    }
+  }
   const result = await c.env.DB.prepare(
-    `INSERT INTO candidate_notes (applicant_id, content, created_by, created_by_name, images)
-     VALUES (?, ?, ?, ?, ?)`
-  ).bind(id, content, body.created_by, body.created_by_name, images.length ? JSON.stringify(images) : null).run()
+    `INSERT INTO candidate_notes (applicant_id, parent_id, content, created_by, created_by_name, images)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, parentId, content, body.created_by, body.created_by_name, images.length ? JSON.stringify(images) : null).run()
+  const noteId = Number(result.meta.last_row_id)
   await logActivity(c.env.DB, body.created_by, [id], 'note_added')
   await logCandidateEvents(c.env.DB, body.created_by, [
-    { applicant_id: id, event_type: 'note_added', application_id: null,
-      metadata: { note_id: result.meta.last_row_id, excerpt: noteExcerpt(content) } },
+    { applicant_id: id, event_type: parentId ? 'note_replied' : 'note_added', application_id: null,
+      metadata: { note_id: noteId, excerpt: noteExcerpt(content) } },
   ])
   await createMentionNotifications(c.env.DB, {
-    noteId: Number(result.meta.last_row_id),
+    noteId,
     applicantId: id,
     actor: body.created_by,
     actorName: body.created_by_name,
     content,
   })
+  if (parentId) {
+    // Everyone already in the thread hears about the reply, minus the people the
+    // reply's @mentions just notified.
+    await createReplyNotifications(c.env.DB, {
+      noteId,
+      parentId,
+      applicantId: id,
+      actor: body.created_by,
+      actorName: body.created_by_name,
+      content,
+      skipRecipients: await existingRecipients(c.env.DB, noteId),
+    })
+  }
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
-     FROM candidate_notes WHERE id = ?`
-  ).bind(result.meta.last_row_id).first()
+    `SELECT ${NOTE_COLUMNS} FROM candidate_notes WHERE id = ?`
+  ).bind(noteId).first()
   return c.json({ ok: true, note: shapeNote(note) })
 })
 
@@ -612,8 +662,7 @@ app.patch('/api/notes/:id', async (c) => {
   ).bind(body.content.trim(), id).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   const note = await c.env.DB.prepare(
-    `SELECT id, applicant_id, content, created_by, created_by_name, created_at, images
-     FROM candidate_notes WHERE id = ?`
+    `SELECT ${NOTE_COLUMNS} FROM candidate_notes WHERE id = ?`
   ).bind(id).first<{ applicant_id: number; created_by: string; created_by_name: string }>()
   if (note) {
     // Only notify mentions added by this edit, not ones already notified before.
@@ -627,7 +676,8 @@ app.patch('/api/notes/:id', async (c) => {
       skipRecipients: already,
     })
   }
-  return c.json({ ok: true, note: shapeNote(note) })
+  const reactions = await fetchReactions(c.env.DB, [id])
+  return c.json({ ok: true, note: shapeNote(note, reactions.get(id) ?? []) })
 })
 
 // Delete note — DELETE
@@ -638,8 +688,19 @@ app.delete('/api/notes/:id', async (c) => {
   const deletedNote = await c.env.DB.prepare(
     `SELECT applicant_id, content FROM candidate_notes WHERE id = ?`
   ).bind(id).first<{ applicant_id: number; content: string }>()
-  await deleteForNote(c.env.DB, id)
-  const result = await c.env.DB.prepare(`DELETE FROM candidate_notes WHERE id = ?`).bind(id).run()
+  // Deleting a note takes its replies with it. Their notifications and
+  // reactions are cleared explicitly rather than left to the FK cascade, since
+  // notifications.note_id has no foreign key.
+  const { results: replies } = await c.env.DB.prepare(
+    `SELECT id FROM candidate_notes WHERE parent_id = ?`
+  ).bind(id).all<{ id: number }>()
+  const ids = [id, ...(replies ?? []).map((r) => r.id)]
+  for (const noteId of ids) await deleteForNote(c.env.DB, noteId)
+  const placeholders = ids.map(() => '?').join(',')
+  await c.env.DB.prepare(`DELETE FROM note_reactions WHERE note_id IN (${placeholders})`).bind(...ids).run()
+  const result = await c.env.DB.prepare(
+    `DELETE FROM candidate_notes WHERE id IN (${placeholders})`
+  ).bind(...ids).run()
   if ((result.meta?.changes ?? 0) === 0) return c.json({ ok: false, error: 'note not found' }, 404)
   if (deletedNote) {
     await logCandidateEvents(c.env.DB, c.req.query('actor'), [
@@ -647,7 +708,34 @@ app.delete('/api/notes/:id', async (c) => {
         metadata: { note_id: id, excerpt: noteExcerpt(deletedNote.content) } },
     ])
   }
-  return c.json({ ok: true })
+  return c.json({ ok: true, deleted_ids: ids })
+})
+
+// Toggle an emoji reaction on a note for the current user: the first click
+// reacts, a second click with the same emoji takes it back. Returns the note's
+// reactions after the change so the client can drop its optimistic state.
+app.post('/api/notes/:id/reactions', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  let body: { emoji?: unknown; username?: unknown; user_name?: unknown }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  if (!isValidEmoji(body.emoji)) return c.json({ ok: false, error: 'invalid emoji' }, 400)
+  const username = typeof body.username === 'string' ? body.username.trim() : ''
+  if (!username) return c.json({ ok: false, error: 'user required' }, 400)
+  const userName = typeof body.user_name === 'string' && body.user_name.trim() ? body.user_name.trim() : username
+  const exists = await c.env.DB.prepare(`SELECT 1 FROM candidate_notes WHERE id = ?`).bind(id).first()
+  if (!exists) return c.json({ ok: false, error: 'note not found' }, 404)
+  const { reactions, reacted } = await toggleReaction(c.env.DB, {
+    noteId: id,
+    emoji: body.emoji.trim(),
+    username,
+    userName,
+  })
+  return c.json({ ok: true, reactions, reacted })
 })
 
 // AI score history for one application — every past scoring run, newest first,
