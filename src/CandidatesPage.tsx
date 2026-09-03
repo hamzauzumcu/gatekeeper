@@ -4,6 +4,7 @@ import {
   Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
   GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
   Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList, Info,
+  Reply, SmilePlus, CornerDownRight,
 } from 'lucide-react'
 import {
   fetchApplicationScorecard,
@@ -54,6 +55,7 @@ import {
   addNote,
   updateNote,
   deleteNote,
+  toggleNoteReaction,
   uploadNoteImage,
   generateInterviewNotes,
   generateOutreachEmail,
@@ -87,6 +89,7 @@ import {
   type CandidateListItem,
   type CandidateDetail,
   type CandidateNote,
+  type NoteReaction,
   type FilterOptions,
   type ActiveFilters,
   type QuestionColumn,
@@ -110,6 +113,7 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DropdownMenu, Dialog } from 'radix-ui'
 import {
   Table,
@@ -4125,6 +4129,28 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
   const [outreach, setOutreach] = useState<OutreachEmail | null>(null)
   const [outreachOpen, setOutreachOpen] = useState(false)
   const [outreachError, setOutreachError] = useState<string | null>(null)
+  // Note currently being replied to, plus its draft text.
+  const [replyTo, setReplyTo] = useState<number | null>(null)
+  const [replyText, setReplyText] = useState('')
+  const [replySubmitting, setReplySubmitting] = useState(false)
+  const [replyError, setReplyError] = useState<string | null>(null)
+  // Threads the user collapsed; replies are shown expanded by default.
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+
+  // Top-level notes (newest first) and each note's replies (oldest first), so a
+  // thread reads top to bottom under its parent.
+  const roots = useMemo(() => notes.filter((n) => n.parent_id == null), [notes])
+  const repliesByParent = useMemo(() => {
+    const map = new Map<number, CandidateNote[]>()
+    for (const note of notes) {
+      if (note.parent_id == null) continue
+      const list = map.get(note.parent_id)
+      if (list) list.push(note)
+      else map.set(note.parent_id, [note])
+    }
+    for (const list of map.values()) list.sort((a, b) => a.created_at.localeCompare(b.created_at))
+    return map
+  }, [notes])
 
   useEffect(() => {
     let cancelled = false
@@ -4132,6 +4158,10 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     setEditingId(null)
     setGenError(null)
     setSelectedNoteId(null)
+    setReplyTo(null)
+    setReplyText('')
+    setReplyError(null)
+    setCollapsed(new Set())
     // Restore any unsent draft for this candidate (synchronously, before the
     // fetch resolves, so the draft-save effect never writes one candidate's
     // text under another's key).
@@ -4295,10 +4325,68 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
     }
   }
 
+  // Post a reply under `parentId`. Replies are plain notes, so mentions and
+  // markdown work the same; attachments are left to top-level notes.
+  async function submitReply(parentId: number) {
+    const content = replyText.trim()
+    if (!content || replySubmitting) return
+    setReplySubmitting(true)
+    setReplyError(null)
+    try {
+      const reply = await addNote(
+        applicantId,
+        content,
+        currentUser.username,
+        currentUser.fullName,
+        [],
+        parentId,
+      )
+      setNotes((prev) => [...prev, reply])
+      setReplyText('')
+      setReplyTo(null)
+      // A new reply should never land inside a collapsed thread.
+      setCollapsed((prev) => {
+        if (!prev.has(parentId)) return prev
+        const next = new Set(prev)
+        next.delete(parentId)
+        return next
+      })
+      onNoteAdded()
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : 'failed to add reply')
+    } finally {
+      setReplySubmitting(false)
+    }
+  }
+
+  // Add or remove one of the current user's emoji reactions on a note.
+  async function handleReaction(noteId: number, emoji: string) {
+    try {
+      const reactions = await toggleNoteReaction(noteId, emoji, currentUser.username, currentUser.fullName)
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, reactions } : n)))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed to react')
+    }
+  }
+
+  function toggleCollapsed(noteId: number) {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(noteId)) next.delete(noteId)
+      else next.add(noteId)
+      return next
+    })
+  }
+
   async function handleDelete(noteId: number) {
     try {
-      await deleteNote(noteId, currentUser.username)
-      setNotes((prev) => prev.filter((n) => n.id !== noteId))
+      // Deleting a note removes its replies too, so drop every returned id.
+      const removed = new Set(await deleteNote(noteId, currentUser.username))
+      setNotes((prev) => prev.filter((n) => !removed.has(n.id)))
+      if (replyTo != null && removed.has(replyTo)) {
+        setReplyTo(null)
+        setReplyText('')
+      }
     } catch {
       // ignore
     }
