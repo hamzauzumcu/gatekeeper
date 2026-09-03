@@ -15,7 +15,16 @@ import {
   UserMultipleIcon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -254,6 +263,9 @@ export default function LeavePage({ user }: { user: User }) {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [newEmp, setNewEmp] = useState({ name: '', email: '', department: '', startDate: '' })
+  const [addEmpOpen, setAddEmpOpen] = useState(false)
+  // Kept apart from the page-level error, which the open dialog would cover.
+  const [addEmpError, setAddEmpError] = useState<string | null>(null)
   const [addingEmp, setAddingEmp] = useState(false)
 
   // Inline editing of an employee's start date — the constant every entitlement
@@ -470,6 +482,7 @@ export default function LeavePage({ user }: { user: User }) {
   async function onAddEmployee(e: React.FormEvent) {
     e.preventDefault()
     if (!newEmp.name.trim()) return
+    setAddEmpError(null)
     setAddingEmp(true)
     try {
       await createEmployee({
@@ -479,9 +492,10 @@ export default function LeavePage({ user }: { user: User }) {
         startDate: newEmp.startDate || null,
       })
       setNewEmp({ name: '', email: '', department: '', startDate: '' })
+      setAddEmpOpen(false)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add employee')
+      setAddEmpError(err instanceof Error ? err.message : 'Failed to add employee')
     } finally {
       setAddingEmp(false)
     }
@@ -1068,64 +1082,6 @@ export default function LeavePage({ user }: { user: User }) {
             <>
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <HugeiconsIcon icon={UserAdd01Icon} className="h-5 w-5" />
-                    Add employee
-                  </CardTitle>
-                  <CardDescription>
-                    Employees are the people whose leave you track. Map incoming requests to them on
-                    the Requests tab. The start date is what the annual entitlement is calculated
-                    from — days grow with seniority, and a hire year counts only the part worked.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={onAddEmployee} className="flex flex-wrap items-end gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="emp-name">Name</Label>
-                      <Input
-                        id="emp-name"
-                        value={newEmp.name}
-                        onChange={(e) => setNewEmp((s) => ({ ...s, name: e.target.value }))}
-                        placeholder="Full name"
-                        required
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="emp-email">Email (optional)</Label>
-                      <Input
-                        id="emp-email"
-                        type="email"
-                        value={newEmp.email}
-                        onChange={(e) => setNewEmp((s) => ({ ...s, email: e.target.value }))}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="emp-dept">Department (optional)</Label>
-                      <Input
-                        id="emp-dept"
-                        value={newEmp.department}
-                        onChange={(e) => setNewEmp((s) => ({ ...s, department: e.target.value }))}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <Label htmlFor="emp-start">Start date</Label>
-                      <Input
-                        id="emp-start"
-                        type="date"
-                        className="w-40"
-                        value={newEmp.startDate}
-                        onChange={(e) => setNewEmp((s) => ({ ...s, startDate: e.target.value }))}
-                      />
-                    </div>
-                    <Button type="submit" disabled={addingEmp}>
-                      {addingEmp ? 'Adding…' : 'Add'}
-                    </Button>
-                  </form>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
                   <CardTitle>
                     Employees ({employees.length}) ·{' '}
                     <span className="font-normal text-muted-foreground">
@@ -1133,11 +1089,94 @@ export default function LeavePage({ user }: { user: User }) {
                     </span>
                   </CardTitle>
                   <CardDescription>
-                    Click an employee to see their leave for the period. Used counts only the
-                    deductible types — approved sick leave and public holidays are shown
-                    separately and never come off the entitlement. Days are earned in full on each work anniversary and carry
-                    over, so "All years" totals every anniversary reached against everything taken.
+                    Click an employee for their leave in this period. Used counts deductible types
+                    only; days are earned in full on each work anniversary and carry over.
                   </CardDescription>
+                  <CardAction>
+                    <Dialog
+                      open={addEmpOpen}
+                      onOpenChange={(open) => {
+                        setAddEmpOpen(open)
+                        if (!open) setAddEmpError(null)
+                      }}
+                    >
+                      <DialogTrigger asChild>
+                        <Button size="sm">
+                          <HugeiconsIcon icon={UserAdd01Icon} className="size-3.5 shrink-0" />
+                          Add employee
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Add employee</DialogTitle>
+                          <DialogDescription>
+                            The start date drives the annual entitlement — days grow with seniority,
+                            and a hire year counts only the part worked.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form onSubmit={onAddEmployee} className="grid gap-4">
+                          {addEmpError && (
+                            <Alert variant="destructive">
+                              <AlertDescription>{addEmpError}</AlertDescription>
+                            </Alert>
+                          )}
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="emp-name">Name</Label>
+                            <Input
+                              id="emp-name"
+                              value={newEmp.name}
+                              onChange={(e) => setNewEmp((s) => ({ ...s, name: e.target.value }))}
+                              placeholder="Full name"
+                              required
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="emp-email">Email (optional)</Label>
+                            <Input
+                              id="emp-email"
+                              type="email"
+                              value={newEmp.email}
+                              onChange={(e) => setNewEmp((s) => ({ ...s, email: e.target.value }))}
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="emp-dept">Department (optional)</Label>
+                            <Input
+                              id="emp-dept"
+                              value={newEmp.department}
+                              onChange={(e) =>
+                                setNewEmp((s) => ({ ...s, department: e.target.value }))
+                              }
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="emp-start">Start date</Label>
+                            <Input
+                              id="emp-start"
+                              type="date"
+                              value={newEmp.startDate}
+                              onChange={(e) =>
+                                setNewEmp((s) => ({ ...s, startDate: e.target.value }))
+                              }
+                            />
+                          </div>
+                          <DialogFooter>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              onClick={() => setAddEmpOpen(false)}
+                              disabled={addingEmp}
+                            >
+                              Cancel
+                            </Button>
+                            <Button type="submit" disabled={addingEmp}>
+                              {addingEmp ? 'Adding…' : 'Add employee'}
+                            </Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                  </CardAction>
                 </CardHeader>
                 <CardContent>
                   {employees.length === 0 ? (
