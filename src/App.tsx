@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import type { IconSvgElement } from '@hugeicons/react'
+import {
+  Calendar03Icon,
+  Logout03Icon,
+  Moon02Icon,
+  SecurityCheckIcon,
+  Settings01Icon,
+  Sun03Icon,
+  Upload03Icon,
+  UserMultipleIcon,
+  UserSearch01Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import ImportPage from './ImportPage'
 import CandidatesPage from './CandidatesPage'
 import SettingsPage from './SettingsPage'
@@ -69,18 +81,18 @@ export default function App() {
 
   // Which modules/tabs this user may see, in display order.
   const canRecruiting = user ? can(user, 'view_applications') || can(user, 'recruiting_admin') : false
-  const modules: { key: Module; label: string }[] = user
+  const modules: { key: Module; label: string; icon: IconSvgElement }[] = user
     ? [
-        ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting' }] : []),
-        ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave' }] : []),
-        ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin' }] : []),
+        ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting', icon: UserSearch01Icon }] : []),
+        ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave', icon: Calendar03Icon }] : []),
+        ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin', icon: SecurityCheckIcon }] : []),
       ]
     : []
-  const recruitingTabs: { key: RecruitingTab; label: string }[] = user
+  const recruitingTabs: { key: RecruitingTab; label: string; icon: IconSvgElement }[] = user
     ? [
-        ...(can(user, 'view_applications') ? [{ key: 'candidates' as const, label: 'Candidates' }] : []),
-        ...(can(user, 'recruiting_admin') ? [{ key: 'import' as const, label: 'Import CSV' }] : []),
-        ...(can(user, 'recruiting_admin') ? [{ key: 'settings' as const, label: 'Settings' }] : []),
+        ...(can(user, 'view_applications') ? [{ key: 'candidates' as const, label: 'Candidates', icon: UserMultipleIcon }] : []),
+        ...(can(user, 'recruiting_admin') ? [{ key: 'import' as const, label: 'Import CSV', icon: Upload03Icon }] : []),
+        ...(can(user, 'recruiting_admin') ? [{ key: 'settings' as const, label: 'Settings', icon: Settings01Icon }] : []),
       ]
     : []
 
@@ -142,12 +154,13 @@ export default function App() {
                 type="button"
                 onClick={() => navigate(m.key)}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                  'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                   activeModule === m.key
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
+                <HugeiconsIcon icon={m.icon} className="size-4 shrink-0" />
                 {m.label}
               </button>
             ))}
@@ -157,10 +170,11 @@ export default function App() {
           <NotificationBell user={user.username} onOpenNote={handleOpenNote} />
           <span className="hidden max-w-[12rem] truncate text-sm text-muted-foreground sm:inline">{user.fullName}</span>
           <Button variant="ghost" size="sm" onClick={handleLogout}>
+            <HugeiconsIcon icon={Logout03Icon} className="size-3.5 shrink-0" />
             Sign out
           </Button>
           <Button variant="ghost" size="icon" onClick={() => setDark(!dark)} aria-label="Toggle theme">
-            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {dark ? <HugeiconsIcon icon={Sun03Icon} className="h-4 w-4" /> : <HugeiconsIcon icon={Moon02Icon} className="h-4 w-4" />}
           </Button>
         </div>
       </header>
@@ -170,6 +184,7 @@ export default function App() {
           <TabsList className="max-w-full overflow-x-auto">
             {recruitingTabs.map((t) => (
               <TabsTrigger key={t.key} value={t.key}>
+                <HugeiconsIcon icon={t.icon} className="size-3.5 shrink-0" />
                 {t.label}
               </TabsTrigger>
             ))}

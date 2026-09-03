@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Check, Plus, ShieldCheck, UserPlus } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  PlusSignIcon,
+  SecurityCheckIcon,
+  Tick02Icon,
+  UserAdd01Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -87,7 +93,7 @@ function Toggle({
           checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
         )}
       >
-        {checked && <Check className="size-2.5" />}
+        {checked && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
       </span>
       <span className="min-w-0">
         <span className="block text-sm font-medium">{label}</span>
@@ -181,7 +187,7 @@ export default function AdminPage({ user }: { user: User }) {
         <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
           <CardTitle>Users &amp; permissions</CardTitle>
           <Button size="sm" onClick={startCreate}>
-            <UserPlus className="mr-1.5 size-4" /> Add user
+            <HugeiconsIcon icon={UserAdd01Icon} className="mr-1.5 size-4" /> Add user
           </Button>
         </CardHeader>
         <CardContent>
@@ -218,7 +224,7 @@ export default function AdminPage({ user }: { user: User }) {
                           <span className="truncate font-medium">{u.full_name}</span>
                           {u.is_admin === 1 && (
                             <Badge variant="default" className="gap-1">
-                              <ShieldCheck className="size-3" /> Full access
+                              <HugeiconsIcon icon={SecurityCheckIcon} className="size-3" /> Full access
                             </Badge>
                           )}
                           {u.is_active !== 1 && <Badge variant="secondary">Inactive</Badge>}
@@ -373,7 +379,7 @@ export default function AdminPage({ user }: { user: User }) {
         ) : (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center gap-3 py-12 text-center text-sm text-muted-foreground">
-              <Plus className="size-6" />
+              <HugeiconsIcon icon={PlusSignIcon} className="size-6" />
               <p>Select a user to edit, or add a new one.</p>
             </CardContent>
           </Card>

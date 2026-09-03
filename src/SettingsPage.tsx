@@ -2,7 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowDown, ArrowUp, ChevronDown, ClipboardList, Plus, Sparkles, X } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  ClipboardListIcon,
+  MultiplicationSignIcon,
+  PlusSignIcon,
+  SparklesIcon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import {
   fetchScorecards,
   saveScorecard,
@@ -138,7 +146,7 @@ function CollapsibleCard({
             <p className="text-sm text-muted-foreground">{description}</p>
           )}
         </div>
-        <ChevronDown
+        <HugeiconsIcon icon={ArrowDown01Icon}
           className={`mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
@@ -213,7 +221,7 @@ function PromptCard({
             <div className="mt-0.5 text-xs text-amber-600 font-medium">No prompt saved yet</div>
           )}
         </div>
-        <ChevronDown
+        <HugeiconsIcon icon={ArrowDown01Icon}
           className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
@@ -459,7 +467,7 @@ function ScorecardEditor({
             <div className="mt-0.5 text-xs text-muted-foreground">Not configured</div>
           )}
         </div>
-        <ChevronDown
+        <HugeiconsIcon icon={ArrowDown01Icon}
           className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
@@ -511,7 +519,7 @@ function ScorecardEditor({
                         disabled={i === 0}
                         aria-label="Move up"
                       >
-                        <ArrowUp className="h-3.5 w-3.5" />
+                        <HugeiconsIcon icon={ArrowUp01Icon} className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -521,7 +529,7 @@ function ScorecardEditor({
                         disabled={i === rows.length - 1}
                         aria-label="Move down"
                       >
-                        <ArrowDown className="h-3.5 w-3.5" />
+                        <HugeiconsIcon icon={ArrowDown01Icon} className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -530,13 +538,13 @@ function ScorecardEditor({
                         onClick={() => remove(d.key)}
                         aria-label="Remove criterion"
                       >
-                        <X className="h-3.5 w-3.5" />
+                        <HugeiconsIcon icon={MultiplicationSignIcon} className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
                 ))}
                 <Button variant="outline" size="sm" onClick={() => add(cat)}>
-                  <Plus className="h-3.5 w-3.5" />
+                  <HugeiconsIcon icon={PlusSignIcon} className="h-3.5 w-3.5" />
                   Add {cat} skill
                 </Button>
               </div>
@@ -616,7 +624,7 @@ function ScorecardsCard() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-sky-500" />
+          <HugeiconsIcon icon={ClipboardListIcon} className="h-4 w-4 text-sky-500" />
           Interview Scorecards
         </CardTitle>
         <p className="text-sm text-muted-foreground">
@@ -863,7 +871,7 @@ function SyncPanel({
             onClick={() => setErrorsOpen((o) => !o)}
             className="flex items-center gap-1 text-xs font-medium text-destructive hover:text-destructive/80 transition-colors"
           >
-            <ChevronDown
+            <HugeiconsIcon icon={ArrowDown01Icon}
               className={`h-3.5 w-3.5 transition-transform duration-200 ${errorsOpen ? 'rotate-180' : ''}`}
             />
             {errors.length} error{errors.length !== 1 ? 's' : ''}
@@ -1134,7 +1142,7 @@ function InterviewPromptCard() {
     <CollapsibleCard
       title={
         <>
-          <Sparkles className="size-4" />
+          <HugeiconsIcon icon={SparklesIcon} className="size-4" />
           Interview Notes Prompt
         </>
       }
@@ -1237,7 +1245,7 @@ function OutreachPromptCard() {
     <CollapsibleCard
       title={
         <>
-          <Sparkles className="size-4" />
+          <HugeiconsIcon icon={SparklesIcon} className="size-4" />
           Outreach Email Prompt
         </>
       }
@@ -1420,7 +1428,7 @@ export default function SettingsPage() {
       <CollapsibleCard
         title={
           <>
-            <Sparkles className="h-4 w-4 text-violet-500" />
+            <HugeiconsIcon icon={SparklesIcon} className="h-4 w-4 text-violet-500" />
             Candidate Enhancer AI
           </>
         }

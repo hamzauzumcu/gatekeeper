@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { ArrowLeft01Icon, ArrowRight01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { Button } from '@/components/ui/button'
 import {
   addDays,
@@ -116,13 +117,13 @@ export default function LeaveCalendar({ requests }: { requests: LeaveRequest[] }
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" onClick={() => shift(-1)} aria-label="Previous month">
-            <ChevronLeft className="h-4 w-4" />
+            <HugeiconsIcon icon={ArrowLeft01Icon} className="h-4 w-4" />
           </Button>
           <div className="min-w-40 text-center text-lg font-semibold">
             {MONTHS[cursor.month]} {cursor.year}
           </div>
           <Button variant="outline" size="icon" onClick={() => shift(1)} aria-label="Next month">
-            <ChevronRight className="h-4 w-4" />
+            <HugeiconsIcon icon={ArrowRight01Icon} className="h-4 w-4" />
           </Button>
           <Button variant="ghost" size="sm" onClick={goToday}>
             Today

@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Papa from 'papaparse'
-import { Check, X, Upload, UserPlus, ExternalLink, Pencil, ChevronLeft, Trash2 } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  ArrowLeft01Icon,
+  Calendar03Icon,
+  ClipboardListIcon,
+  Delete02Icon,
+  LinkSquare02Icon,
+  MultiplicationSignIcon,
+  PencilEdit02Icon,
+  Tick02Icon,
+  Upload03Icon,
+  UserAdd01Icon,
+  UserMultipleIcon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -506,6 +519,7 @@ export default function LeavePage({ user }: { user: User }) {
     <Tabs defaultValue="requests" className="flex flex-col gap-4">
       <TabsList>
         <TabsTrigger value="requests">
+          <HugeiconsIcon icon={ClipboardListIcon} className="size-3.5 shrink-0" />
           Requests
           {pendingCount > 0 && (
             <Badge variant="secondary" className="ml-2">
@@ -513,8 +527,16 @@ export default function LeavePage({ user }: { user: User }) {
             </Badge>
           )}
         </TabsTrigger>
-        <TabsTrigger value="calendar">Calendar</TabsTrigger>
-        {canManage && <TabsTrigger value="employees">Employees</TabsTrigger>}
+        <TabsTrigger value="calendar">
+          <HugeiconsIcon icon={Calendar03Icon} className="size-3.5 shrink-0" />
+          Calendar
+        </TabsTrigger>
+        {canManage && (
+          <TabsTrigger value="employees">
+            <HugeiconsIcon icon={UserMultipleIcon} className="size-3.5 shrink-0" />
+            Employees
+          </TabsTrigger>
+        )}
       </TabsList>
 
       {error && (
@@ -534,7 +556,7 @@ export default function LeavePage({ user }: { user: User }) {
               className="hidden"
             />
             <Button variant="outline" disabled={importing} onClick={() => fileRef.current?.click()}>
-              <Upload className="h-4 w-4" />
+              <HugeiconsIcon icon={Upload03Icon} className="h-4 w-4" />
               {importing ? 'Importing…' : 'Import CSV'}
             </Button>
             {unmappedCount > 0 && (
@@ -649,7 +671,7 @@ export default function LeavePage({ user }: { user: User }) {
                             disabled={busyId === r.id}
                             onClick={() => saveDates(r.id)}
                           >
-                            <Check className="h-4 w-4" />
+                            <HugeiconsIcon icon={Tick02Icon} className="h-4 w-4" />
                           </Button>
                           <Button
                             size="icon"
@@ -657,7 +679,7 @@ export default function LeavePage({ user }: { user: User }) {
                             className="h-8 w-8"
                             onClick={() => setEditDatesId(null)}
                           >
-                            <X className="h-4 w-4" />
+                            <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : canManage ? (
@@ -668,7 +690,7 @@ export default function LeavePage({ user }: { user: User }) {
                           title="Edit dates"
                         >
                           {formatDates(r.start_date, r.end_date)}
-                          <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                          <HugeiconsIcon icon={PencilEdit02Icon} className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                         </button>
                       ) : (
                         <span>{formatDates(r.start_date, r.end_date)}</span>
@@ -710,7 +732,7 @@ export default function LeavePage({ user }: { user: User }) {
                             disabled={busyId === r.id}
                             onClick={() => saveDuration(r.id)}
                           >
-                            <Check className="h-4 w-4" />
+                            <HugeiconsIcon icon={Tick02Icon} className="h-4 w-4" />
                           </Button>
                           <Button
                             size="icon"
@@ -718,7 +740,7 @@ export default function LeavePage({ user }: { user: User }) {
                             className="h-8 w-8"
                             onClick={() => setEditDurId(null)}
                           >
-                            <X className="h-4 w-4" />
+                            <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : canManage ? (
@@ -729,7 +751,7 @@ export default function LeavePage({ user }: { user: User }) {
                           title="Edit duration"
                         >
                           {formatDuration(r.working_days, r.hours_requested)}
-                          <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                          <HugeiconsIcon icon={PencilEdit02Icon} className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                         </button>
                       ) : (
                         <span>{formatDuration(r.working_days, r.hours_requested)}</span>
@@ -764,7 +786,7 @@ export default function LeavePage({ user }: { user: User }) {
                           rel="noopener noreferrer"
                           className="inline-flex items-center text-primary hover:underline"
                         >
-                          <ExternalLink className="h-4 w-4" />
+                          <HugeiconsIcon icon={LinkSquare02Icon} className="h-4 w-4" />
                         </a>
                       ) : (
                         '—'
@@ -795,7 +817,7 @@ export default function LeavePage({ user }: { user: User }) {
                             className="h-8 w-8"
                             onClick={() => setEditStatusId(null)}
                           >
-                            <X className="h-4 w-4" />
+                            <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : canManage ? (
@@ -806,7 +828,7 @@ export default function LeavePage({ user }: { user: User }) {
                           title="Change status"
                         >
                           <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>{r.status}</Badge>
-                          <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                          <HugeiconsIcon icon={PencilEdit02Icon} className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                         </button>
                       ) : (
                         <Badge className={`capitalize ${STATUS_CLASS[r.status]}`}>{r.status}</Badge>
@@ -826,7 +848,7 @@ export default function LeavePage({ user }: { user: User }) {
                                 disabled={busyId === r.id}
                                 onClick={() => onReview(r.id, 'approved')}
                               >
-                                <Check className="h-4 w-4" />
+                                <HugeiconsIcon icon={Tick02Icon} className="h-4 w-4" />
                                 Approve
                               </Button>
                               <Button
@@ -835,7 +857,7 @@ export default function LeavePage({ user }: { user: User }) {
                                 disabled={busyId === r.id}
                                 onClick={() => onReview(r.id, 'rejected')}
                               >
-                                <X className="h-4 w-4" />
+                                <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                                 Reject
                               </Button>
                             </>
@@ -848,7 +870,7 @@ export default function LeavePage({ user }: { user: User }) {
                             onClick={() => onDelete(r)}
                             title="Delete request"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <HugeiconsIcon icon={Delete02Icon} className="h-4 w-4" />
                           </Button>
                         </div>
                       ) : (
@@ -901,7 +923,7 @@ export default function LeavePage({ user }: { user: User }) {
                 <div className="flex flex-col gap-4">
                   <div>
                     <Button variant="ghost" size="sm" onClick={() => setSelectedEmp(null)}>
-                      <ChevronLeft className="h-4 w-4" />
+                      <HugeiconsIcon icon={ArrowLeft01Icon} className="h-4 w-4" />
                       All employees
                     </Button>
                   </div>
@@ -928,7 +950,7 @@ export default function LeavePage({ user }: { user: User }) {
                               onClick={() => saveEmpStart(emp.id)}
                               title="Save start date"
                             >
-                              <Check className="h-4 w-4" />
+                              <HugeiconsIcon icon={Tick02Icon} className="h-4 w-4" />
                             </Button>
                             <Button
                               size="icon"
@@ -936,7 +958,7 @@ export default function LeavePage({ user }: { user: User }) {
                               className="h-8 w-8"
                               onClick={() => setEditStartEmp(null)}
                             >
-                              <X className="h-4 w-4" />
+                              <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                             </Button>
                           </span>
                         ) : emp && canManage ? (
@@ -947,7 +969,7 @@ export default function LeavePage({ user }: { user: User }) {
                             title="Edit start date"
                           >
                             {emp.start_date ? `started ${formatDate(emp.start_date)}` : 'set start date'}
-                            <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                            <HugeiconsIcon icon={PencilEdit02Icon} className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                           </button>
                         ) : (
                           <span>
@@ -1047,7 +1069,7 @@ export default function LeavePage({ user }: { user: User }) {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <UserPlus className="h-5 w-5" />
+                    <HugeiconsIcon icon={UserAdd01Icon} className="h-5 w-5" />
                     Add employee
                   </CardTitle>
                   <CardDescription>
@@ -1172,7 +1194,7 @@ export default function LeavePage({ user }: { user: User }) {
                                       onClick={() => saveEmpStart(emp.id)}
                                       title="Save start date"
                                     >
-                                      <Check className="h-4 w-4" />
+                                      <HugeiconsIcon icon={Tick02Icon} className="h-4 w-4" />
                                     </Button>
                                     <Button
                                       size="icon"
@@ -1180,7 +1202,7 @@ export default function LeavePage({ user }: { user: User }) {
                                       className="h-8 w-8"
                                       onClick={() => setEditStartEmp(null)}
                                     >
-                                      <X className="h-4 w-4" />
+                                      <HugeiconsIcon icon={MultiplicationSignIcon} className="h-4 w-4" />
                                     </Button>
                                   </div>
                                 ) : canManage ? (
@@ -1195,7 +1217,7 @@ export default function LeavePage({ user }: { user: User }) {
                                     ) : (
                                       <span className="text-muted-foreground">Set date</span>
                                     )}
-                                    <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
+                                    <HugeiconsIcon icon={PencilEdit02Icon} className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-60" />
                                   </button>
                                 ) : (
                                   <span>{emp.start_date ? formatDate(emp.start_date) : '—'}</span>

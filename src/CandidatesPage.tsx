@@ -1,11 +1,44 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { HugeiconsIcon } from '@hugeicons/react'
 import {
-  Search, ExternalLink, FileText, X, SlidersHorizontal, ChevronDown, ChevronLeft, ChevronRight, Check,
-  Mail, Phone, Globe, MessageSquare, Trash2, Pencil, Columns3, Plus, Sparkles, Copy,
-  GitBranch, AtSign, ArrowUp, ArrowDown, ArrowUpDown, Bookmark, MoreVertical, Table2, Kanban,
-  Image as ImageIcon, History, Clock, ArrowRight, Link2, ClipboardList, Info,
-  Reply, SmilePlus, CornerDownRight, ThumbsUp,
-} from 'lucide-react'
+  ArrowDataTransferVerticalIcon,
+  ArrowDown01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  ArrowTurnBackwardIcon,
+  ArrowUp01Icon,
+  AtIcon,
+  Bookmark02Icon,
+  Call02Icon,
+  ClipboardListIcon,
+  Clock01Icon,
+  ColumnsThreeCogIcon,
+  Comment01Icon,
+  Copy01Icon,
+  CornerDownRightIcon,
+  Delete02Icon,
+  File02Icon,
+  FilterIcon,
+  GitBranchIcon,
+  GlobeIcon,
+  HistoryIcon,
+  Image01Icon,
+  InformationCircleIcon,
+  KanbanIcon,
+  Link01Icon,
+  ListViewIcon,
+  LinkSquare02Icon,
+  Mail01Icon,
+  MoreVerticalIcon,
+  MultiplicationSignIcon,
+  PencilEdit02Icon,
+  PlusSignIcon,
+  Search01Icon,
+  SmilePlusIcon,
+  SparklesIcon,
+  ThumbsUpIcon,
+  Tick02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import {
   fetchApplicationScorecard,
   saveInterviewScorecard,
@@ -165,7 +198,7 @@ function ScoreBadge({ score }: { score: number | null | undefined }) {
       title={AI_SCORE_TOOLTIP}
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls}`}
     >
-      <Sparkles className="size-3 opacity-60" />
+      <HugeiconsIcon icon={SparklesIcon} className="size-3 opacity-60" />
       {score}
     </span>
   )
@@ -194,7 +227,7 @@ function InterviewScoreBadge({
       title={partial ? `${INTERVIEW_SCORE_TOOLTIP} Partial — some criteria are not assessed yet.` : INTERVIEW_SCORE_TOOLTIP}
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${cls} ${partial ? 'border-dashed' : ''}`}
     >
-      <ClipboardList className="size-3 opacity-60" />
+      <HugeiconsIcon icon={ClipboardListIcon} className="size-3 opacity-60" />
       {score.toFixed(2)}
       {partial && <span aria-hidden>*</span>}
     </span>
@@ -234,7 +267,7 @@ function ScoreReasoning({ raw }: { raw: string }) {
             onClick={() => setOpen(!open)}
             className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            <ChevronDown className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+            <HugeiconsIcon icon={ArrowDown01Icon} className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
             {open ? 'Hide breakdown' : 'Show breakdown'}
           </button>
           {open && (
@@ -282,9 +315,9 @@ function ScoreHistorySection({ applicationId }: { applicationId: number }) {
         onClick={toggle}
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        <History className="size-3" />
+        <HugeiconsIcon icon={HistoryIcon} className="size-3" />
         Score history
-        <ChevronDown className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        <HugeiconsIcon icon={ArrowDown01Icon} className={`size-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <div className="mt-2 space-y-2">
@@ -374,7 +407,7 @@ function OptionCheckList({
                 checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
               ].join(' ')}
             >
-              {checked && <Check className="size-2.5" />}
+              {checked && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
             </span>
             {o.label}
           </button>
@@ -439,7 +472,7 @@ function FilterChip({
           >
             {summary ?? 'Any'}
           </span>
-          <ChevronDown
+          <HugeiconsIcon icon={ArrowDown01Icon}
             className={`size-3 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
           />
         </button>
@@ -449,7 +482,7 @@ function FilterChip({
           className="flex h-full items-center rounded-r-md pl-1 pr-2 text-muted-foreground hover:text-foreground"
           aria-label={`Remove ${label} filter`}
         >
-          <X className="size-3.5" />
+          <HugeiconsIcon icon={MultiplicationSignIcon} className="size-3.5" />
         </button>
       </div>
 
@@ -484,7 +517,7 @@ function SavedFilterRow({
         onClick={onApply}
         className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
       >
-        <Bookmark className="size-3.5 shrink-0 text-muted-foreground" />
+        <HugeiconsIcon icon={Bookmark02Icon} className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="flex-1 truncate">{filter.name}</span>
       </button>
       <button
@@ -493,7 +526,7 @@ function SavedFilterRow({
         className="mr-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover/saved:opacity-100"
         aria-label="Saved filter actions"
       >
-        <MoreVertical className="size-3.5" />
+        <HugeiconsIcon icon={MoreVerticalIcon} className="size-3.5" />
       </button>
       {menuOpen && (
         <div className="absolute right-1 top-8 z-50 w-44 overflow-hidden rounded-md border bg-popover shadow-md">
@@ -564,7 +597,7 @@ function AddFilterMenu({
         onClick={() => setOpen((o) => !o)}
         className="flex h-8 items-center gap-1.5 rounded-md border border-dashed border-input bg-background px-2.5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
       >
-        <Plus className="size-3.5" />
+        <HugeiconsIcon icon={PlusSignIcon} className="size-3.5" />
         Add filter
       </button>
 
@@ -595,7 +628,7 @@ function AddFilterMenu({
               onClick={() => { onSaveCurrent(); setOpen(false) }}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-primary hover:bg-accent disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-60"
             >
-              <Bookmark className="size-3.5 shrink-0" />
+              <HugeiconsIcon icon={Bookmark02Icon} className="size-3.5 shrink-0" />
               Save current filters…
             </button>
             <div className="my-1 border-t" />
@@ -615,7 +648,7 @@ function AddFilterMenu({
                 {Object.entries(byPosition).map(([posTitle, qs]) => (
                   <div key={posTitle}>
                     <div className="flex items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {posTitle === 'AI Analysis' && <Sparkles className="size-3 text-violet-500" />}
+                      {posTitle === 'AI Analysis' && <HugeiconsIcon icon={SparklesIcon} className="size-3 text-violet-500" />}
                       {posTitle}
                     </div>
                     {qs.map((q) => (
@@ -694,7 +727,7 @@ function ColumnPicker({
             : 'border-input bg-background text-muted-foreground hover:text-foreground',
         ].join(' ')}
       >
-        <Columns3 className="size-3.5 shrink-0" />
+        <HugeiconsIcon icon={ColumnsThreeCogIcon} className="size-3.5 shrink-0" />
         <span className="hidden sm:inline">Columns</span>
         {active && (
           <span className="flex size-4 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
@@ -736,7 +769,7 @@ function ColumnPicker({
                       checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
                     ].join(' ')}
                   >
-                    {checked && <Check className="size-2.5" />}
+                    {checked && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
                   </span>
                   <span className="flex-1 leading-snug">{c.label}</span>
                 </button>
@@ -765,7 +798,7 @@ function ColumnPicker({
               {Object.entries(byPosition).map(([posTitle, qs]) => (
                 <div key={posTitle}>
                   <div className="sticky top-0 bg-muted/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
-                    {posTitle === 'AI Analysis' && <Sparkles className="size-3 text-violet-500" />}
+                    {posTitle === 'AI Analysis' && <HugeiconsIcon icon={SparklesIcon} className="size-3 text-violet-500" />}
                     {posTitle}
                   </div>
                   {qs.map((q) => {
@@ -783,7 +816,7 @@ function ColumnPicker({
                             checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input',
                           ].join(' ')}
                         >
-                          {checked && <Check className="size-2.5" />}
+                          {checked && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
                         </span>
                         <span className="flex-1 leading-snug">{q.label}</span>
                         <span className="shrink-0 text-[10px] text-muted-foreground">{q.type}</span>
@@ -913,9 +946,9 @@ function SortHeader({
       >
         {children ?? label}
         {active ? (
-          sort!.dir === 'desc' ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />
+          sort!.dir === 'desc' ? <HugeiconsIcon icon={ArrowDown01Icon} className="size-3" /> : <HugeiconsIcon icon={ArrowUp01Icon} className="size-3" />
         ) : (
-          <ArrowUpDown className="size-3 opacity-0 transition-opacity group-hover:opacity-40" />
+          <HugeiconsIcon icon={ArrowDataTransferVerticalIcon} className="size-3 opacity-0 transition-opacity group-hover:opacity-40" />
         )}
       </button>
     </TableHead>
@@ -1044,7 +1077,7 @@ function IntakeBanner({
             aria-label="Dismiss intake summary"
             className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <X className="size-4" />
+            <HugeiconsIcon icon={MultiplicationSignIcon} className="size-4" />
           </button>
           {confirmOpen && (
             <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-md border bg-popover p-1 shadow-md">
@@ -1754,7 +1787,7 @@ export default function CandidatesPage({
                 ].join(' ')}
               >
                 Today {dailyProgress.today_count}/{dailyProgress.target}
-                {dailyProgress.today_count >= dailyProgress.target && <Check className="size-3" />}
+                {dailyProgress.today_count >= dailyProgress.target && <HugeiconsIcon icon={Tick02Icon} className="size-3" />}
               </button>
             )}
           </CardTitle>
@@ -1765,7 +1798,7 @@ export default function CandidatesPage({
               onClick={clearFilters}
               className="h-7 gap-1.5 text-xs text-muted-foreground"
             >
-              <X className="size-3" />
+              <HugeiconsIcon icon={MultiplicationSignIcon} className="size-3" />
               Clear {activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''}
             </Button>
           )}
@@ -1793,7 +1826,7 @@ export default function CandidatesPage({
                 : 'border-input bg-background text-muted-foreground hover:text-foreground',
             ].join(' ')}
           >
-            <Search className="size-4" />
+            <HugeiconsIcon icon={Search01Icon} className="size-4" />
           </button>
           <div
             className={[
@@ -1802,7 +1835,7 @@ export default function CandidatesPage({
               'sm:block',
             ].join(' ')}
           >
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <HugeiconsIcon icon={Search01Icon} className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={searchInputRef}
               type="search"
@@ -1818,7 +1851,7 @@ export default function CandidatesPage({
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 aria-label="Clear search"
               >
-                <X className="size-4" />
+                <HugeiconsIcon icon={MultiplicationSignIcon} className="size-4" />
               </button>
             )}
           </div>
@@ -1832,20 +1865,20 @@ export default function CandidatesPage({
               onResetBase={resetBaseColumns}
             />
           )}
-          {/* Table / Board view switch */}
+          {/* List / Board view switch */}
           <div className="inline-flex shrink-0 rounded-md border p-0.5">
             <button
               type="button"
               onClick={() => changeView('table')}
-              aria-label="Table view"
+              aria-label="List view"
               aria-pressed={view === 'table'}
               className={[
                 'inline-flex h-7 items-center gap-1.5 rounded px-2 text-xs font-medium transition-colors',
                 view === 'table' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
               ].join(' ')}
             >
-              <Table2 className="size-3.5" />
-              <span className="hidden sm:inline">Table</span>
+              <HugeiconsIcon icon={ListViewIcon} className="size-3.5" />
+              <span className="hidden sm:inline">List</span>
             </button>
             <button
               type="button"
@@ -1857,7 +1890,7 @@ export default function CandidatesPage({
                 view === 'board' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
               ].join(' ')}
             >
-              <Kanban className="size-3.5" />
+              <HugeiconsIcon icon={KanbanIcon} className="size-3.5" />
               <span className="hidden sm:inline">Board</span>
             </button>
           </div>
@@ -1865,7 +1898,7 @@ export default function CandidatesPage({
 
         {/* Filter chips — collapsed by default, added on demand via "Add filter" */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <SlidersHorizontal className="hidden size-4 shrink-0 text-muted-foreground sm:block" />
+          <HugeiconsIcon icon={FilterIcon} className="hidden size-4 shrink-0 text-muted-foreground sm:block" />
 
           {shownKinds.has('country') && (
             <FilterChip
@@ -2011,7 +2044,7 @@ export default function CandidatesPage({
               onRemove={() => removeFilterKind('score')}
             >
               <div className="flex items-center gap-1.5 p-1.5">
-                <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+                <HugeiconsIcon icon={SparklesIcon} className="size-3.5 shrink-0 text-muted-foreground" />
                 <input
                   type="number"
                   min="0"
@@ -2045,7 +2078,7 @@ export default function CandidatesPage({
               onRemove={() => removeFilterKind('interview_score')}
             >
               <div className="flex items-center gap-1.5 p-1.5">
-                <ClipboardList className="size-3.5 shrink-0 text-muted-foreground" />
+                <HugeiconsIcon icon={ClipboardListIcon} className="size-3.5 shrink-0 text-muted-foreground" />
                 <input
                   type="number"
                   min="0"
@@ -2141,7 +2174,7 @@ export default function CandidatesPage({
                   ].join(' ')}
                   aria-label="Select all"
                 >
-                  {(allSelected || someSelected) && <Check className="size-2.5" />}
+                  {(allSelected || someSelected) && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
                 </button>
               </TableHead>
               <SortHeader label="Name" sortKey="name" numeric={false} sort={sort} onSort={toggleSort} />
@@ -2154,7 +2187,7 @@ export default function CandidatesPage({
               {isBaseVisible('score') && (
                 <SortHeader label="AI Score" sortKey="score" numeric sort={sort} onSort={toggleSort} className="w-20 text-center" tooltip={AI_SCORE_TOOLTIP}>
                   <span className="inline-flex items-center gap-1">
-                    <Sparkles className="size-3 text-muted-foreground" />
+                    <HugeiconsIcon icon={SparklesIcon} className="size-3 text-muted-foreground" />
                     AI Score
                   </span>
                 </SortHeader>
@@ -2162,7 +2195,7 @@ export default function CandidatesPage({
               {isBaseVisible('interview_score') && (
                 <SortHeader label="Scorecard Score" sortKey="interview_score" numeric sort={sort} onSort={toggleSort} className="w-24 text-center" tooltip={INTERVIEW_SCORE_TOOLTIP}>
                   <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                    <ClipboardList className="size-3 text-muted-foreground" />
+                    <HugeiconsIcon icon={ClipboardListIcon} className="size-3 text-muted-foreground" />
                     Scorecard
                   </span>
                 </SortHeader>
@@ -2221,7 +2254,7 @@ export default function CandidatesPage({
                               : 'border-input hover:border-primary/50',
                           ].join(' ')}
                         >
-                          {checked && <Check className="size-2.5" />}
+                          {checked && <HugeiconsIcon icon={Tick02Icon} className="size-2.5" />}
                         </button>
                       </TableCell>
                       <TableCell>
@@ -2316,7 +2349,7 @@ export default function CandidatesPage({
                             (cand.notes_count ?? 0) > 0 ? 'text-primary' : 'text-muted-foreground',
                           ].join(' ')}
                         >
-                          <MessageSquare className="size-3.5" />
+                          <HugeiconsIcon icon={Comment01Icon} className="size-3.5" />
                           {(cand.notes_count ?? 0) > 0 && <span>{cand.notes_count}</span>}
                           {unreadApplicants.has(cand.id) && (
                             <span
@@ -2395,7 +2428,7 @@ export default function CandidatesPage({
                   bulkLoading ? 'opacity-50' : 'hover:opacity-80',
                 ].join(' ')}
               >
-                <Plus className="size-3" />
+                <HugeiconsIcon icon={PlusSignIcon} className="size-3" />
                 Add to Shortlist
               </button>
               <button
@@ -2581,7 +2614,7 @@ function StageSelect({
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-2 size-3 text-muted-foreground" />
+      <HugeiconsIcon icon={ArrowDown01Icon} className="pointer-events-none absolute right-2 size-3 text-muted-foreground" />
     </div>
   )
 }
@@ -2597,7 +2630,7 @@ function StageInfo({ stage }: { stage: PipelineStage }) {
           aria-label={`What "${stage.label}" means`}
           className="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
         >
-          <Info className="size-3.5" />
+          <HugeiconsIcon icon={InformationCircleIcon} className="size-3.5" />
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="start" className="max-w-56 font-normal">
@@ -2756,7 +2789,7 @@ function PipelineBoard({
                     title={`Collapse ${stage.label}`}
                     className="text-muted-foreground hover:text-foreground"
                   >
-                    <ChevronLeft className="size-3.5" />
+                    <HugeiconsIcon icon={ArrowLeft01Icon} className="size-3.5" />
                   </button>
                 </span>
               </div>
@@ -2831,14 +2864,14 @@ function LinkTypeIcon({ type }: { type: string }) {
   const cls = 'size-3'
   switch (type) {
     case 'github':
-      return <GitBranch className={cls} />
+      return <HugeiconsIcon icon={GitBranchIcon} className={cls} />
     case 'twitter':
-      return <AtSign className={cls} />
+      return <HugeiconsIcon icon={AtIcon} className={cls} />
     case 'portfolio':
     case 'website':
-      return <Globe className={cls} />
+      return <HugeiconsIcon icon={GlobeIcon} className={cls} />
     default:
-      return <ExternalLink className={cls} />
+      return <HugeiconsIcon icon={LinkSquare02Icon} className={cls} />
   }
 }
 
@@ -3070,19 +3103,19 @@ function CandidateDetailView({
                     href={`mailto:${applicant.email}`}
                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                   >
-                    <Mail className="size-3" />
+                    <HugeiconsIcon icon={Mail01Icon} className="size-3" />
                     {applicant.email}
                   </a>
                 )}
                 {applicant.phone && (
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Phone className="size-3" />
+                    <HugeiconsIcon icon={Call02Icon} className="size-3" />
                     {applicant.phone}
                   </span>
                 )}
                 {applicant.country && (
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Globe className="size-3" />
+                    <HugeiconsIcon icon={GlobeIcon} className="size-3" />
                     {applicant.country}
                   </span>
                 )}
@@ -3107,7 +3140,7 @@ function CandidateDetailView({
                       onClick={() => setCvOpen(true)}
                       className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
                     >
-                      <FileText className="size-3" />
+                      <HugeiconsIcon icon={File02Icon} className="size-3" />
                       CV
                     </button>
                   )}
@@ -3126,6 +3159,7 @@ function CandidateDetailView({
       >
         <TabsList className="mx-4 my-3 shrink-0 w-fit sm:mx-6">
           <TabsTrigger value="applications">
+            <HugeiconsIcon icon={File02Icon} className="size-3.5" />
             Applications
             {applications.length > 1 && (
               <Badge variant="secondary" className="ml-1.5 px-1.5 text-xs">
@@ -3134,7 +3168,7 @@ function CandidateDetailView({
             )}
           </TabsTrigger>
           <TabsTrigger value="notes">
-            <MessageSquare className="size-3.5" />
+            <HugeiconsIcon icon={Comment01Icon} className="size-3.5" />
             Notes
             {(applicant.notes_count ?? 0) > 0 && (
               <Badge variant="secondary" className="ml-1 px-1.5 text-xs">
@@ -3144,7 +3178,7 @@ function CandidateDetailView({
           </TabsTrigger>
           {scorecardApps.length > 0 && (
             <TabsTrigger value="scorecard">
-              <ClipboardList className="size-3.5" />
+              <HugeiconsIcon icon={ClipboardListIcon} className="size-3.5" />
               Scorecard
               {/* Show the aggregated score right on the tab once submissions
                   exist (asterisk = partial); fall back to the submission count. */}
@@ -3161,7 +3195,7 @@ function CandidateDetailView({
             </TabsTrigger>
           )}
           <TabsTrigger value="history">
-            <History className="size-3.5" />
+            <HugeiconsIcon icon={HistoryIcon} className="size-3.5" />
             History
           </TabsTrigger>
         </TabsList>
@@ -3228,7 +3262,7 @@ function CandidateDetailView({
                     return (
                       <div className="px-4 py-4 sm:px-5">
                         <div className="mb-3 flex items-center gap-1.5">
-                          <Sparkles className="size-3.5 text-violet-500" />
+                          <HugeiconsIcon icon={SparklesIcon} className="size-3.5 text-violet-500" />
                           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI Analysis</span>
                         </div>
                         {summary && (
@@ -3372,7 +3406,7 @@ function CandidateDetailView({
                                       title="Edit salary expectation"
                                       className="text-muted-foreground transition-colors hover:text-foreground"
                                     >
-                                      <Pencil className="size-3.5" />
+                                      <HugeiconsIcon icon={PencilEdit02Icon} className="size-3.5" />
                                     </button>
                                   )}
                                 </dd>
@@ -3401,7 +3435,7 @@ function CandidateDetailView({
                   {app.cover_letter && (
                     <div className="px-4 py-4 sm:px-5">
                       <div className="mb-2 flex items-center gap-1.5">
-                        <FileText className="size-3.5 text-muted-foreground" />
+                        <HugeiconsIcon icon={File02Icon} className="size-3.5 text-muted-foreground" />
                         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Cover Letter
                         </span>
@@ -3471,7 +3505,7 @@ function CandidateDetailView({
             className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30 sm:size-9"
             aria-label="Previous candidate"
           >
-            <ChevronLeft className="size-5 sm:size-4" />
+            <HugeiconsIcon icon={ArrowLeft01Icon} className="size-5 sm:size-4" />
           </button>
 
           <div className="flex flex-1 gap-2 sm:gap-1.5">
@@ -3509,7 +3543,7 @@ function CandidateDetailView({
             className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-30 sm:size-9"
             aria-label="Next candidate"
           >
-            <ChevronRight className="size-5 sm:size-4" />
+            <HugeiconsIcon icon={ArrowRight01Icon} className="size-5 sm:size-4" />
           </button>
         </div>
       </div>
@@ -3530,11 +3564,11 @@ function CandidateDetailView({
                   rel="noreferrer"
                   className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent"
                 >
-                  <ExternalLink className="size-3" />
+                  <HugeiconsIcon icon={LinkSquare02Icon} className="size-3" />
                   <span className="hidden sm:inline">Open in new tab</span>
                 </a>
                 <SheetClose className="inline-flex size-8 items-center justify-center rounded-md border border-input hover:bg-accent">
-                  <X className="size-4" />
+                  <HugeiconsIcon icon={MultiplicationSignIcon} className="size-4" />
                   <span className="sr-only">Close</span>
                 </SheetClose>
               </div>
@@ -3565,7 +3599,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   }
   return (
     <Button type="button" size="sm" variant="outline" onClick={copy} className="gap-1.5">
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? <HugeiconsIcon icon={Tick02Icon} className="size-3.5" /> : <HugeiconsIcon icon={Copy01Icon} className="size-3.5" />}
       {copied ? 'Copied' : label}
     </Button>
   )
@@ -3608,7 +3642,7 @@ function OutreachEmailDialog({
               </Dialog.Description>
             </div>
             <Dialog.Close className="rounded-xs opacity-70 transition-opacity hover:opacity-100">
-              <X className="size-4" />
+              <HugeiconsIcon icon={MultiplicationSignIcon} className="size-4" />
               <span className="sr-only">Close</span>
             </Dialog.Close>
           </div>
@@ -3642,7 +3676,7 @@ function OutreachEmailDialog({
               {mailtoHref && (
                 <Button asChild size="sm" className="gap-1.5">
                   <a href={mailtoHref}>
-                    <Mail className="size-3.5" />
+                    <HugeiconsIcon icon={Mail01Icon} className="size-3.5" />
                     Open in mail
                   </a>
                 </Button>
@@ -3943,7 +3977,7 @@ function HistorySection({ applicantId, refreshKey }: { applicantId: number; refr
   if (events.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-muted-foreground">
-        <Clock className="size-6 opacity-40" />
+        <HugeiconsIcon icon={Clock01Icon} className="size-6 opacity-40" />
         <span>No activity yet. Status changes and notes will show up here.</span>
       </div>
     )
@@ -3971,7 +4005,7 @@ function StateTransition({ from, to }: { from: string; to: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">{from}</span>
-      <ArrowRight className="size-3 text-muted-foreground" />
+      <HugeiconsIcon icon={ArrowRight01Icon} className="size-3 text-muted-foreground" />
       <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">{to}</span>
     </span>
   )
@@ -4484,9 +4518,9 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 className="text-muted-foreground transition-colors hover:text-foreground"
               >
                 {copiedNoteId === note.id ? (
-                  <Check className="size-3.5 text-primary" />
+                  <HugeiconsIcon icon={Tick02Icon} className="size-3.5 text-primary" />
                 ) : (
-                  <Link2 className="size-3.5" />
+                  <HugeiconsIcon icon={Link01Icon} className="size-3.5" />
                 )}
               </button>
               {note.created_by === currentUser.username && editingId !== note.id && (
@@ -4497,7 +4531,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                     title="Edit note"
                     className="text-muted-foreground transition-colors hover:text-foreground"
                   >
-                    <Pencil className="size-3.5" />
+                    <HugeiconsIcon icon={PencilEdit02Icon} className="size-3.5" />
                   </button>
                   <button
                     type="button"
@@ -4505,7 +4539,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                     title="Delete note"
                     className="text-muted-foreground transition-colors hover:text-destructive"
                   >
-                    <Trash2 className="size-3.5" />
+                    <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
                   </button>
                 </>
               )}
@@ -4538,7 +4572,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   {editStatus === 'saving' && 'Saving…'}
                   {editStatus === 'saved' && (
                     <span className="inline-flex items-center gap-1">
-                      <Check className="size-3" /> Saved
+                      <HugeiconsIcon icon={Tick02Icon} className="size-3" /> Saved
                     </span>
                   )}
                 </span>
@@ -4568,7 +4602,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                         title={attachmentDisplayName(src)}
                         className="flex size-20 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted px-1 text-center transition-opacity hover:opacity-80"
                       >
-                        <FileText className="size-5 text-muted-foreground" />
+                        <HugeiconsIcon icon={File02Icon} className="size-5 text-muted-foreground" />
                         <span className="w-full truncate text-[9px] text-muted-foreground">{attachmentDisplayName(src)}</span>
                       </a>
                     ) : (
@@ -4618,7 +4652,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               title="React with a thumbs up"
               className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <ThumbsUp className="size-3.5" />
+              <HugeiconsIcon icon={ThumbsUpIcon} className="size-3.5" />
             </button>
             <Popover>
               <PopoverTrigger asChild>
@@ -4627,7 +4661,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   title="Add a reaction"
                   className="inline-flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  <SmilePlus className="size-3.5" />
+                  <HugeiconsIcon icon={SmilePlusIcon} className="size-3.5" />
                 </button>
               </PopoverTrigger>
               <PopoverContent align="start" className="w-auto p-1.5">
@@ -4654,7 +4688,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
               }}
               className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <Reply className="size-3.5" />
+              <HugeiconsIcon icon={ArrowTurnBackwardIcon} className="size-3.5" />
               Reply
             </button>
             {replies.length > 0 && (
@@ -4663,7 +4697,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 onClick={() => toggleCollapsed(note.id)}
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
-                {isCollapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                {isCollapsed ? <HugeiconsIcon icon={ArrowRight01Icon} className="size-3.5" /> : <HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5" />}
                 {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
               </button>
             )}
@@ -4672,7 +4706,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
           {replyTo === note.id && (
             <div className="mt-2 space-y-2 border-t pt-2">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <CornerDownRight className="size-3.5" />
+                <HugeiconsIcon icon={CornerDownRightIcon} className="size-3.5" />
                 Replying to {note.created_by_name}
               </div>
               <MentionTextarea
@@ -4745,9 +4779,9 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <Button type="button" size="sm" disabled={generating} className="shrink-0 gap-1.5">
-                <Sparkles className="size-3.5" />
+                <HugeiconsIcon icon={SparklesIcon} className="size-3.5" />
                 {generating ? 'Generating…' : 'Generate'}
-                <ChevronDown className="size-3.5 opacity-70" />
+                <HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5 opacity-70" />
               </Button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
@@ -4760,14 +4794,14 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                   onSelect={handleGenerate}
                   className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
                 >
-                  <MessageSquare className="size-3.5 text-muted-foreground" />
+                  <HugeiconsIcon icon={Comment01Icon} className="size-3.5 text-muted-foreground" />
                   <span>Interview Notes</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
                   onSelect={handleGenerateOutreach}
                   className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
                 >
-                  <Mail className="size-3.5 text-muted-foreground" />
+                  <HugeiconsIcon icon={Mail01Icon} className="size-3.5 text-muted-foreground" />
                   <span>Outreach Email</span>
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
@@ -4830,7 +4864,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                 <div key={i} className="relative size-16 overflow-hidden rounded-md border">
                   {isPdf ? (
                     <div title={file.name} className="flex size-full flex-col items-center justify-center gap-1 bg-muted px-1 text-center">
-                      <FileText className="size-5 text-muted-foreground" />
+                      <HugeiconsIcon icon={File02Icon} className="size-5 text-muted-foreground" />
                       <span className="w-full truncate text-[9px] text-muted-foreground">{file.name}</span>
                     </div>
                   ) : (
@@ -4847,7 +4881,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
                     title="Remove attachment"
                     className="absolute right-0.5 top-0.5 inline-flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground shadow-sm hover:bg-background"
                   >
-                    <X className="size-3" />
+                    <HugeiconsIcon icon={MultiplicationSignIcon} className="size-3" />
                   </button>
                 </div>
               )
@@ -4875,12 +4909,12 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             onClick={() => fileInputRef.current?.click()}
             className="gap-1.5"
           >
-            <ImageIcon className="size-3.5" />
+            <HugeiconsIcon icon={Image01Icon} className="size-3.5" />
             Attach File
           </Button>
           {draftSaved && text.trim() && !submitting && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite">
-              <Check className="size-3" /> Draft saved
+              <HugeiconsIcon icon={Tick02Icon} className="size-3" /> Draft saved
             </span>
           )}
         </div>
@@ -4911,7 +4945,7 @@ function NotesSection({ applicantId, candidateName, candidateEmail, currentUser,
             title="Close"
             className="absolute right-4 top-4 inline-flex size-9 items-center justify-center rounded-md bg-background/90 text-foreground hover:bg-background"
           >
-            <X className="size-5" />
+            <HugeiconsIcon icon={MultiplicationSignIcon} className="size-5" />
           </button>
           <img
             src={lightbox}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Papa from 'papaparse'
-import { CheckCircle2, AlertCircle, Upload } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { AlertCircleIcon, CheckmarkCircle02Icon, Upload03Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { apiFetch } from '@/lib/api'
 import {
   classify,
@@ -174,7 +175,7 @@ export default function ImportPage() {
 
           {parseError && (
             <Alert variant="destructive">
-              <AlertCircle />
+              <HugeiconsIcon icon={AlertCircleIcon} />
               <AlertTitle>Failed to read CSV</AlertTitle>
               <AlertDescription>{parseError}</AlertDescription>
             </Alert>
@@ -262,7 +263,7 @@ export default function ImportPage() {
 
           <div className="space-y-3">
             <Button onClick={runImport} disabled={busy}>
-              <Upload />
+              <HugeiconsIcon icon={Upload03Icon} />
               {busy ? `Importing… (${Math.min(progress.done, progress.total)}/${progress.total})` : 'Import'}
             </Button>
             {busy && (
@@ -279,7 +280,7 @@ export default function ImportPage() {
 
       {importError && (
         <Alert variant="destructive">
-          <AlertCircle />
+          <HugeiconsIcon icon={AlertCircleIcon} />
           <AlertTitle>Import failed</AlertTitle>
           <AlertDescription>{importError}</AlertDescription>
         </Alert>
@@ -287,7 +288,7 @@ export default function ImportPage() {
 
       {result && (
         <Alert>
-          <CheckCircle2 />
+          <HugeiconsIcon icon={CheckmarkCircle02Icon} />
           <AlertTitle>Import complete</AlertTitle>
           <AlertDescription>
             <ul className="list-inside list-disc">

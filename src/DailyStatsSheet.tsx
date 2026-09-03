@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, TrendingUp, Target, Flame, CalendarDays } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  Calendar03Icon,
+  ChartUpIcon,
+  FireIcon,
+  Target02Icon,
+  Tick02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import {
   Sheet,
   SheetContent,
@@ -127,7 +134,7 @@ export function DailyStatsSheet({
       <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
         <SheetHeader className="border-b p-4 sm:p-6">
           <SheetTitle className="flex items-center gap-2">
-            <TrendingUp className="size-4" />
+            <HugeiconsIcon icon={ChartUpIcon} className="size-4" />
             CV Review Stats
           </SheetTitle>
           <SheetDescription>
@@ -165,19 +172,19 @@ export function DailyStatsSheet({
             <>
               <div className="grid grid-cols-3 gap-2">
                 <StatCard
-                  icon={<TrendingUp className="size-3.5" />}
+                  icon={<HugeiconsIcon icon={ChartUpIcon} className="size-3.5" />}
                   label="Avg / day"
                   value={stats.avg.toFixed(1)}
                   sub={`${stats.total} total`}
                 />
                 <StatCard
-                  icon={<Flame className="size-3.5" />}
+                  icon={<HugeiconsIcon icon={FireIcon} className="size-3.5" />}
                   label="Best day"
                   value={String(stats.best)}
                   sub={`${stats.activeDays}/${days.length} active`}
                 />
                 <StatCard
-                  icon={<Target className="size-3.5" />}
+                  icon={<HugeiconsIcon icon={Target02Icon} className="size-3.5" />}
                   label="Target hit"
                   value={target > 0 ? `${stats.hitTarget}` : '—'}
                   sub={target > 0 ? `of ${days.length} days` : 'no target set'}
@@ -252,7 +259,7 @@ export function DailyStatsSheet({
                         className="flex items-center justify-between px-3 py-2 text-sm"
                       >
                         <div className="flex items-center gap-2">
-                          <CalendarDays className="size-3.5 text-muted-foreground" />
+                          <HugeiconsIcon icon={Calendar03Icon} className="size-3.5 text-muted-foreground" />
                           <span className={cn(isToday(d.date) && 'font-medium')}>
                             {dayLabel(d.date)}
                             {isToday(d.date) && (
@@ -267,7 +274,7 @@ export function DailyStatsSheet({
                               <span className="text-muted-foreground"> / {target}</span>
                             )}
                           </span>
-                          {hit && <Check className="size-3.5 text-emerald-600" />}
+                          {hit && <HugeiconsIcon icon={Tick02Icon} className="size-3.5 text-emerald-600" />}
                         </div>
                       </div>
                     )

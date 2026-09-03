@@ -3,7 +3,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Sun, Moon } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Moon02Icon, Sun03Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { login, type User } from '@/lib/auth'
 import { useDarkMode } from '@/lib/theme'
 
@@ -40,7 +41,7 @@ export default function LoginPage({ onLogin }: Props) {
         onClick={() => setDark(!dark)}
         aria-label="Toggle theme"
       >
-        {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        {dark ? <HugeiconsIcon icon={Sun03Icon} className="h-4 w-4" /> : <HugeiconsIcon icon={Moon02Icon} className="h-4 w-4" />}
       </Button>
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DropdownMenu } from 'radix-ui'
-import { Bell, AtSign, CheckCheck, Reply } from 'lucide-react'
+import { HugeiconsIcon } from '@hugeicons/react'
+import {
+  ArrowTurnBackwardIcon,
+  AtIcon,
+  Notification03Icon,
+  TickDouble02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { Button } from '@/components/ui/button'
 import {
   fetchNotifications,
@@ -96,7 +102,7 @@ export default function NotificationBell({ user, onOpenNote }: Props) {
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         <Button variant="ghost" size="icon" className="relative" aria-label="Notifications">
-          <Bell className="h-4 w-4" />
+          <HugeiconsIcon icon={Notification03Icon} className="h-4 w-4" />
           {unread > 0 && (
             <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground">
               {unread > 9 ? '9+' : unread}
@@ -118,7 +124,7 @@ export default function NotificationBell({ user, onOpenNote }: Props) {
                 onClick={handleMarkAll}
                 className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                <CheckCheck className="size-3.5" />
+                <HugeiconsIcon icon={TickDouble02Icon} className="size-3.5" />
                 Mark all read
               </button>
             )}
@@ -145,9 +151,9 @@ export default function NotificationBell({ user, onOpenNote }: Props) {
                     {!n.read_at ? (
                       <span className="block size-2 rounded-full bg-primary" />
                     ) : n.type === 'reply' ? (
-                      <Reply className="size-3.5 text-muted-foreground" />
+                      <HugeiconsIcon icon={ArrowTurnBackwardIcon} className="size-3.5 text-muted-foreground" />
                     ) : (
-                      <AtSign className="size-3.5 text-muted-foreground" />
+                      <HugeiconsIcon icon={AtIcon} className="size-3.5 text-muted-foreground" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
