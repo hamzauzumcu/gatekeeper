@@ -193,6 +193,21 @@ export async function updateLeaveDates(
   return { ok: true }
 }
 
+// Manually set (or clear) a request's reason, for Tally submissions where the
+// field was left blank or filled in badly. Empty text clears it.
+export async function updateLeaveReason(
+  db: D1Database,
+  id: number,
+  reason: string | null,
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
+  const res = await db
+    .prepare(`UPDATE leave_requests SET reason = ? WHERE id = ?`)
+    .bind(clean(reason), id)
+    .run()
+  if ((res.meta?.changes ?? 0) === 0) return { ok: false, error: 'request not found', status: 404 }
+  return { ok: true }
+}
+
 // Load one request with its employee name joined in (the shape the UI expects).
 async function getLeaveRequest(db: D1Database, id: number): Promise<LeaveRequestRow | null> {
   const row = await db

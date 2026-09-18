@@ -65,6 +65,7 @@ import {
   reviewLeaveRequest,
   updateLeaveDuration,
   updateLeaveDates,
+  updateLeaveReason,
   setLeaveStatus,
   deleteLeaveRequest,
   updateLeaveType,
@@ -284,6 +285,10 @@ export default function LeavePage({ user }: { user: User }) {
   const [editStart, setEditStart] = useState('')
   const [editEnd, setEditEnd] = useState('')
 
+  // Reason editing (Tally submissions sometimes arrive with no reason).
+  const [editReasonId, setEditReasonId] = useState<number | null>(null)
+  const [editReason, setEditReason] = useState('')
+
   // Inline status editing (to correct a decision or revert it to pending).
   const [editStatusId, setEditStatusId] = useState<number | null>(null)
 
@@ -435,6 +440,24 @@ export default function LeavePage({ user }: { user: User }) {
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update dates')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function startEditReason(r: LeaveRequest) {
+    setEditReasonId(r.id)
+    setEditReason(r.reason ?? '')
+  }
+
+  async function saveReason(id: number) {
+    setBusyId(id)
+    try {
+      await updateLeaveReason(id, editReason.trim() || null)
+      setEditReasonId(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update reason')
     } finally {
       setBusyId(null)
     }
@@ -772,7 +795,48 @@ export default function LeavePage({ user }: { user: User }) {
                       )}
                     </TableCell>
                     <TableCell className="max-w-[18rem] text-muted-foreground">
-                      {r.reason ? (
+                      {canManage ? (
+                        <Popover
+                          open={editReasonId === r.id}
+                          onOpenChange={(open) => (open ? startEditReason(r) : setEditReasonId(null))}
+                        >
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="group flex w-full items-center gap-1 text-left hover:text-foreground"
+                              title={r.reason ? 'Edit reason' : 'Add reason'}
+                            >
+                              <span className="truncate">{r.reason || '—'}</span>
+                              <HugeiconsIcon
+                                icon={PencilEdit02Icon}
+                                className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60"
+                              />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="start" className="w-80 space-y-2">
+                            <textarea
+                              value={editReason}
+                              onChange={(e) => setEditReason(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveReason(r.id)
+                              }}
+                              rows={5}
+                              autoFocus
+                              placeholder="Reason for leave…"
+                              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="ghost" onClick={() => setEditReasonId(null)}>
+                                Cancel
+                              </Button>
+                              <Button size="sm" disabled={busyId === r.id} onClick={() => saveReason(r.id)}>
+                                <HugeiconsIcon icon={Tick02Icon} className="size-4" />
+                                Save
+                              </Button>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      ) : r.reason ? (
                         <Popover>
                           <PopoverTrigger asChild>
                             <button

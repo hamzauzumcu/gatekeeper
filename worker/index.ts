@@ -33,6 +33,7 @@ import {
   assignEmployee,
   updateLeaveDuration,
   updateLeaveDates,
+  updateLeaveReason,
   updateLeaveKind,
   setLeaveStatus,
   deleteLeaveRequest,
@@ -1015,6 +1016,24 @@ app.post('/api/leave/:id/dates', async (c) => {
     return c.json({ ok: false, error: 'dates must be YYYY-MM-DD' }, 400)
   }
   const result = await updateLeaveDates(c.env.DB, id, startDate, endDate)
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
+  }
+  return c.json({ ok: true })
+})
+
+// Manually set (or clear) a request's reason. Body: { reason?: string | null }.
+app.post('/api/leave/:id/reason', async (c) => {
+  const denied = requirePerm(c, 'manage_leave'); if (denied) return denied
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: 'invalid id' }, 400)
+  const body: { reason?: unknown } = await c.req.json().catch(() => ({}))
+  if (body.reason !== undefined && body.reason !== null && typeof body.reason !== 'string') {
+    return c.json({ ok: false, error: 'reason must be a string' }, 400)
+  }
+  const reason = typeof body.reason === 'string' ? body.reason : null
+  if (reason && reason.length > 5000) return c.json({ ok: false, error: 'reason too long' }, 400)
+  const result = await updateLeaveReason(c.env.DB, id, reason)
   if (!result.ok) {
     return c.json({ ok: false, error: result.error }, (result.status ?? 400) as ContentfulStatusCode)
   }

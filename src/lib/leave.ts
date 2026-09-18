@@ -136,6 +136,17 @@ export async function updateLeaveDates(
   if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to update dates')
 }
 
+// Set (or clear, with null/empty) a request's reason.
+export async function updateLeaveReason(id: number, reason: string | null): Promise<void> {
+  const res = await apiFetch(`/api/leave/${id}/reason`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  const data = (await res.json()) as { ok: boolean; error?: string }
+  if (!res.ok || !data.ok) throw new Error(data.error ?? 'failed to update reason')
+}
+
 // Parse a raw duration string into a number. Handles comma decimals ("2,5"),
 // Turkish half-words ("buçuk"/"yarım" → +0.5), and free text with a number
 // embedded ("5 hours" → 5, "1 buçuk saat" → 1.5). Returns null if no amount.
