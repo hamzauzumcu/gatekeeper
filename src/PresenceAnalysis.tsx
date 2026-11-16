@@ -20,7 +20,7 @@ import {
   displayName,
   fetchPresenceOverview,
   fmtDuration,
-  renderEmoji,
+  emojiText,
   saveWorkHours,
   type PresenceOverview,
   type PresenceSession,
@@ -39,6 +39,7 @@ import {
   type WorkHours,
 } from '@/lib/presence-analysis'
 import { cn } from '@/lib/utils'
+import SlackEmoji from '@/components/SlackEmoji'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -183,7 +184,7 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         a.leaveDays,
         fmtClock(a.avgFirstMin),
         fmtClock(a.avgLastMin),
-        statuses.map((st) => `${statusLabel(st)}: ${(st.ms / 3600000).toFixed(2)}h`).join('; '),
+        statuses.map((st) => `${statusLabel(st, data?.customEmoji)}: ${(st.ms / 3600000).toFixed(2)}h`).join('; '),
       ]
         .map((v) => {
           // A cell starting with = + - @ is read as a formula by spreadsheets;
@@ -304,7 +305,7 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         </CardContent>
       </Card>
 
-      {rows.length > 0 && <StatusCard rows={rows} teamStatuses={team.statuses} />}
+      {rows.length > 0 && <StatusCard rows={rows} teamStatuses={team.statuses} custom={data?.customEmoji} />}
 
       {editing && data && (
         <WorkHoursDialog
@@ -320,15 +321,16 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
   )
 }
 
-function statusLabel(st: StatusTotal): string {
-  return `${renderEmoji(st.emoji)} ${st.text ?? ''}`.trim()
+function statusLabel(st: StatusTotal, custom?: Record<string, string>): string {
+  return `${emojiText(st.emoji, custom)} ${st.text ?? ''}`.trim()
 }
 
-function StatusChip({ st }: { st: StatusTotal }) {
+function StatusChip({ st, custom }: { st: StatusTotal; custom?: Record<string, string> }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs">
-      <span className="max-w-[180px] truncate" title={statusLabel(st)}>
-        {statusLabel(st) || '—'}
+      <SlackEmoji code={st.emoji} custom={custom} />
+      <span className="max-w-[180px] truncate" title={statusLabel(st, custom)}>
+        {st.text || (st.emoji ? '' : '—')}
       </span>
       <span className="font-medium tabular-nums">{fmtDuration(st.ms)}</span>
     </span>
@@ -340,9 +342,11 @@ function StatusChip({ st }: { st: StatusTotal }) {
 function StatusCard({
   rows,
   teamStatuses,
+  custom,
 }: {
   rows: { user: Parameters<typeof displayName>[0]; statuses: StatusTotal[] }[]
   teamStatuses: StatusTotal[]
+  custom?: Record<string, string>
 }) {
   const withStatus = rows.filter((r) => r.statuses.length > 0)
   return (
@@ -363,7 +367,7 @@ function StatusCard({
               <div className="text-xs text-muted-foreground">Whole team</div>
               <div className="flex flex-wrap gap-1.5">
                 {teamStatuses.slice(0, 12).map((st, i) => (
-                  <StatusChip key={i} st={st} />
+                  <StatusChip key={i} st={st} custom={custom} />
                 ))}
               </div>
             </div>
@@ -381,7 +385,7 @@ function StatusCard({
                     <TableCell>
                       <div className="flex flex-wrap gap-1.5">
                         {statuses.map((st, i) => (
-                          <StatusChip key={i} st={st} />
+                          <StatusChip key={i} st={st} custom={custom} />
                         ))}
                       </div>
                     </TableCell>
