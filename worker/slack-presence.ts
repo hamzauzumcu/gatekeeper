@@ -20,8 +20,8 @@ const MAX_PRESENCE_CALLS_PER_TICK = 45
 // interrupted (missed ticks) and closed at that last observation.
 const STALE_AFTER_MS = 5 * 60 * 1000
 
-// Presence history older than this is deleted.
-const RETENTION_DAYS = 180
+// Presence history is kept for two years, then deleted.
+const RETENTION_DAYS = 730
 
 type SlackMember = {
   id: string
@@ -313,13 +313,66 @@ export async function pollSlackPresence(db: D1Database, token: string | undefine
 
 // ── Read side ──────────────────────────────────────────────────────────────
 
+// Working hours the analysis measures against. Hours are wall-clock times,
+// applied in each member's own Slack time zone when perMemberTz is on (a team
+// spread over several zones), otherwise in the viewer's zone.
+export type WorkHours = {
+  start: string // "HH:MM"
+  end: string // "HH:MM"
+  days: number[] // 0 = Sunday … 6 = Saturday
+  perMemberTz: boolean
+}
+
+export const DEFAULT_WORK_HOURS: WorkHours = { start: '09:00', end: '18:00', days: [1, 2, 3, 4, 5], perMemberTz: true }
+
+function isHHMM(v: unknown): v is string {
+  return typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
+}
+
+export function parseWorkHours(raw: unknown): WorkHours | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (!isHHMM(o.start) || !isHHMM(o.end) || o.start >= o.end) return null
+  if (!Array.isArray(o.days) || !o.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) return null
+  return {
+    start: o.start,
+    end: o.end,
+    days: [...new Set(o.days as number[])].sort(),
+    perMemberTz: o.perMemberTz !== false,
+  }
+}
+
+function readWorkHours(meta: Record<string, string | null>): WorkHours {
+  try {
+    return parseWorkHours(JSON.parse(meta.work_hours ?? 'null')) ?? DEFAULT_WORK_HOURS
+  } catch {
+    return DEFAULT_WORK_HOURS
+  }
+}
+
+export async function saveWorkHours(db: D1Database, hours: WorkHours): Promise<void> {
+  await setMeta(db, 'work_hours', JSON.stringify(hours))
+}
+
+// Approved leave of linked employees, so the analysis can leave those days out
+// of the expected working time.
+export type PresenceLeave = {
+  employee_id: number
+  start_date: string
+  end_date: string
+  working_days: string | null
+  hours_requested: string | null
+}
+
 export type PresenceOverview = {
   configured: boolean
   lastPollAt: string | null
   lastError: string | null
+  workHours: WorkHours
   users: SlackUserRow[]
   sessions: PresenceSession[]
   statusEvents: StatusEvent[]
+  leaves: PresenceLeave[]
 }
 
 // Everything the Presence screen needs for [from, to): members (including
@@ -331,7 +384,7 @@ export async function getPresenceOverview(
   from: string,
   to: string,
 ): Promise<PresenceOverview> {
-  const [meta, users, sessions, events] = await Promise.all([
+  const [meta, users, sessions, events, leaves] = await Promise.all([
     getMeta(db),
     db
       .prepare(
@@ -364,14 +417,29 @@ export async function getPresenceOverview(
       )
       .bind(from, to)
       .all<StatusEvent>(),
+    db
+      .prepare(
+        `SELECT lr.employee_id, lr.start_date, COALESCE(lr.end_date, lr.start_date) AS end_date,
+                lr.working_days, lr.hours_requested
+           FROM leave_requests lr
+          WHERE lr.status = 'approved'
+            AND lr.employee_id IN (SELECT employee_id FROM slack_users WHERE employee_id IS NOT NULL)
+            AND lr.start_date IS NOT NULL
+            AND lr.start_date <= substr(?, 1, 10)
+            AND COALESCE(lr.end_date, lr.start_date) >= substr(?, 1, 10)`,
+      )
+      .bind(to, from)
+      .all<PresenceLeave>(),
   ])
   return {
     configured,
     lastPollAt: meta.last_poll_at ?? null,
     lastError: meta.last_error ?? null,
+    workHours: readWorkHours(meta),
     users: users.results ?? [],
     sessions: (sessions.results ?? []).map((s) => ({ ...s, open: s.open === 1 })),
     statusEvents: events.results ?? [],
+    leaves: leaves.results ?? [],
   }
 }
 

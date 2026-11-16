@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import type { PresenceLeave, WorkHours } from './presence-analysis'
 // Client API for Slack presence tracking (Employees → Presence). See
 // worker/slack-presence.ts for how the data is collected.
 
@@ -39,9 +40,11 @@ export type PresenceOverview = {
   configured: boolean
   lastPollAt: string | null
   lastError: string | null
+  workHours: WorkHours
   users: SlackUser[]
   sessions: PresenceSession[]
   statusEvents: StatusEvent[]
+  leaves: PresenceLeave[]
 }
 
 async function json<T>(res: Response, fallback: string): Promise<T> {
@@ -57,6 +60,18 @@ export async function fetchPresenceOverview(from: Date, to: Date): Promise<Prese
 
 export async function syncPresenceNow(): Promise<{ members: number; checked: number }> {
   return json(await apiFetch('/api/presence/sync', { method: 'POST' }), 'sync failed')
+}
+
+export async function saveWorkHours(hours: WorkHours): Promise<WorkHours> {
+  const data = await json<{ workHours: WorkHours }>(
+    await apiFetch('/api/presence/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(hours),
+    }),
+    'failed to save working hours',
+  )
+  return data.workHours
 }
 
 export async function setTracked(id: string, tracked: boolean): Promise<void> {

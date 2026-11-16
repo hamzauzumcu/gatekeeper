@@ -3,6 +3,8 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import {
   Alert02Icon,
   ArrowLeft01Icon,
+  Calendar01Icon,
+  ChartBarLineIcon,
   ArrowRight01Icon,
   RefreshIcon,
   ViewIcon,
@@ -11,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   activeMs,
@@ -26,6 +29,8 @@ import {
   type StatusEvent,
 } from '@/lib/presence'
 import { cn } from '@/lib/utils'
+import type { User } from '@/lib/auth'
+import PresenceAnalysis from './PresenceAnalysis'
 
 const DAY_MS = 24 * 3600 * 1000
 const WEEK_DAYS = 7
@@ -67,7 +72,31 @@ function localTimeIn(tz: string | null): string | null {
   }
 }
 
-export default function PresencePage() {
+// Two views: the day-by-day timeline and the working-hours analysis.
+export default function PresencePage({ user }: { user: User }) {
+  return (
+    <Tabs defaultValue="analysis" className="flex flex-col gap-4">
+      <TabsList>
+        <TabsTrigger value="analysis">
+          <HugeiconsIcon icon={ChartBarLineIcon} className="size-3.5 shrink-0" />
+          Analysis
+        </TabsTrigger>
+        <TabsTrigger value="daily">
+          <HugeiconsIcon icon={Calendar01Icon} className="size-3.5 shrink-0" />
+          Daily timeline
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="analysis">
+        <PresenceAnalysis isAdmin={user.isAdmin} />
+      </TabsContent>
+      <TabsContent value="daily">
+        <DailyPresence />
+      </TabsContent>
+    </Tabs>
+  )
+}
+
+function DailyPresence() {
   const [day, setDay] = useState(() => startOfDay(new Date()))
   const [data, setData] = useState<PresenceOverview | null>(null)
   const [error, setError] = useState<string | null>(null)

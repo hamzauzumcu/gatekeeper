@@ -53,7 +53,7 @@ import {
 } from './notifications'
 import { fetchReactions, toggleReaction, isValidEmoji, type NoteReaction } from './note-reactions'
 import { SyncJobDO } from './sync-job-do'
-import { pollSlackPresence, getPresenceOverview, setSlackUserTracked } from './slack-presence'
+import { pollSlackPresence, getPresenceOverview, setSlackUserTracked, parseWorkHours, saveWorkHours } from './slack-presence'
 
 export { SyncJobDO }
 
@@ -1546,7 +1546,7 @@ app.get('/api/presence/overview', async (c) => {
   const to = isoParam(c.req.query('to'))
   if (!from || !to || from >= to) return c.json({ ok: false, error: 'invalid range' }, 400)
   // Cap the range so a stray request can't pull the whole history.
-  if (Date.parse(to) - Date.parse(from) > 62 * 24 * 3600 * 1000) {
+  if (Date.parse(to) - Date.parse(from) > 70 * 24 * 3600 * 1000) {
     return c.json({ ok: false, error: 'range too long' }, 400)
   }
   const overview = await getPresenceOverview(c.env.DB, Boolean(c.env.SLACK_BOT_TOKEN), from, to)
@@ -1557,6 +1557,17 @@ app.get('/api/presence/overview', async (c) => {
 app.post('/api/presence/sync', async (c) => {
   const result = await pollSlackPresence(c.env.DB, c.env.SLACK_BOT_TOKEN)
   return c.json(result, result.ok ? 200 : 502)
+})
+
+// Working hours the analysis measures against. Changes the numbers everyone
+// sees, so only full-access admins may edit them.
+app.put('/api/presence/settings', async (c) => {
+  const denied = requireAdmin(c)
+  if (denied) return denied
+  const hours = parseWorkHours(await c.req.json().catch(() => null))
+  if (!hours) return c.json({ ok: false, error: 'invalid working hours' }, 400)
+  await saveWorkHours(c.env.DB, hours)
+  return c.json({ ok: true, workHours: hours })
 })
 
 // Start or stop tracking a member.

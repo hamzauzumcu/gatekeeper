@@ -4,7 +4,8 @@
 -- Slack member list and each tracked member's presence. Presence is stored as
 -- intervals: one row per continuous stretch of "active", so online time for any
 -- day is the sum of the intervals overlapping it. Status messages (text + emoji)
--- are stored as a change log.
+-- are stored as a change log. History is kept for two years
+-- (RETENTION_DAYS in worker/slack-presence.ts).
 
 -- New capability, granted separately from leave management. Full-access admins
 -- get it implicitly (worker/permissions.ts); everyone else starts without it.

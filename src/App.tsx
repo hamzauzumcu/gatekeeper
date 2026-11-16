@@ -256,7 +256,7 @@ export default function App() {
 
           {can(user, 'view_presence') && (
             <TabsContent value="presence" className="mt-4">
-              <PresencePage />
+              <PresencePage user={user} />
             </TabsContent>
           )}
         </Tabs>
