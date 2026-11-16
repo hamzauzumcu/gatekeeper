@@ -278,6 +278,12 @@ export async function pollSlackPresence(db: D1Database, token: string | undefine
           rateLimited = true
           break
         }
+        // One member Slack no longer knows (removed from the workspace) must not
+        // stop everyone else's check: mark them deleted and carry on.
+        if (err instanceof SlackError && err.message.includes('user_not_found')) {
+          stmts.push(db.prepare(`UPDATE slack_users SET is_deleted = 1 WHERE id = ?`).bind(id))
+          continue
+        }
         throw err
       }
     }
