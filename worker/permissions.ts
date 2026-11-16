@@ -13,6 +13,7 @@ export const PERMISSIONS = [
   'view_salary',
   'manage_leave',
   'recruiting_admin',
+  'view_presence',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -30,6 +31,7 @@ export type UserAuthRow = {
   perm_view_salary: number
   perm_manage_leave: number
   perm_recruiting_admin: number
+  perm_view_presence: number
 }
 
 // Resolved identity + capabilities attached to the request context.
@@ -42,7 +44,7 @@ export type Auth = {
 
 const SELECT_AUTH_COLUMNS =
   `id, username, full_name, color, is_admin,
-   perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin`
+   perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin, perm_view_presence`
 
 // Turn a users row into the boolean permission map. Admins get everything.
 export function resolvePermissions(row: UserAuthRow): PermissionMap {
@@ -52,6 +54,7 @@ export function resolvePermissions(row: UserAuthRow): PermissionMap {
     view_salary: admin || row.perm_view_salary === 1,
     manage_leave: admin || row.perm_manage_leave === 1,
     recruiting_admin: admin || row.perm_recruiting_admin === 1,
+    view_presence: admin || row.perm_view_presence === 1,
   }
 }
 
@@ -85,7 +88,8 @@ export async function resolveSession(db: D1Database, token: string): Promise<Aut
       // Columns qualified with the `u.` alias — `username` also exists on
       // user_sessions, so an unqualified list is ambiguous under the join.
       `SELECT u.id, u.username, u.full_name, u.color, u.is_admin,
-              u.perm_view_applications, u.perm_view_salary, u.perm_manage_leave, u.perm_recruiting_admin
+              u.perm_view_applications, u.perm_view_salary, u.perm_manage_leave, u.perm_recruiting_admin,
+              u.perm_view_presence
          FROM users u
          JOIN user_sessions s ON s.username = u.username
         WHERE s.token = ? AND u.is_active = 1`,

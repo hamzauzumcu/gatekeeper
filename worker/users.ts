@@ -60,7 +60,7 @@ export async function verifyLogin(
   const row = await db
     .prepare(
       `SELECT id, username, full_name, color, is_admin,
-              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin
+              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin, perm_view_presence
          FROM users
         WHERE username = ? AND password = ? AND is_active = 1`,
     )
@@ -76,7 +76,7 @@ export async function listAllUsers(db: D1Database): Promise<AdminUserRow[]> {
   const { results } = await db
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
-              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
+              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin, perm_view_presence,
               created_at, activated_at, last_active_at
          FROM users
         ORDER BY is_active DESC, full_name`,
@@ -89,7 +89,7 @@ async function getAdminUser(db: D1Database, id: number): Promise<AdminUserRow | 
   const row = await db
     .prepare(
       `SELECT id, username, full_name, color, is_active, is_admin,
-              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
+              perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin, perm_view_presence,
               created_at, activated_at, last_active_at
          FROM users WHERE id = ?`,
     )
@@ -155,9 +155,9 @@ export async function createUser(
     .prepare(
       `INSERT INTO users
          (username, full_name, password, color, is_active, is_admin,
-          perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin,
+          perm_view_applications, perm_view_salary, perm_manage_leave, perm_recruiting_admin, perm_view_presence,
           activated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                CASE WHEN ? = 1 THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') END)`,
     )
     .bind(
@@ -171,6 +171,7 @@ export async function createUser(
       p.view_salary ? 1 : 0,
       p.manage_leave ? 1 : 0,
       p.recruiting_admin ? 1 : 0,
+      p.view_presence ? 1 : 0,
       input.is_active === false ? 0 : 1,
     )
     .run()

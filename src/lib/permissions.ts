@@ -6,6 +6,7 @@ export const PERMISSIONS = [
   'view_salary',
   'manage_leave',
   'recruiting_admin',
+  'view_presence',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -30,6 +31,10 @@ export const PERMISSION_META: Record<Permission, { label: string; description: s
     label: 'Recruiting admin',
     description: 'Import CSVs, edit AI scoring prompts, run syncs, and the danger zone.',
   },
+  view_presence: {
+    label: 'View Slack presence',
+    description: "See teammates' Slack online/away history and status messages.",
+  },
 }
 
 export function emptyPermissions(): PermissionMap {
@@ -38,5 +43,6 @@ export function emptyPermissions(): PermissionMap {
     view_salary: false,
     manage_leave: false,
     recruiting_admin: false,
+    view_presence: false,
   }
 }

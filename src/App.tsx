@@ -11,13 +11,16 @@ import {
   Settings01Icon,
   Sun03Icon,
   Upload03Icon,
+  UserGroupIcon,
   UserMultipleIcon,
   UserSearch01Icon,
+  UserStatusIcon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import ImportPage from './ImportPage'
 import CandidatesPage from './CandidatesPage'
 import SettingsPage from './SettingsPage'
 import LeavePage from './LeavePage'
+import PresencePage from './PresencePage'
 import AdminPage from './AdminPage'
 import LoginPage from './LoginPage'
 import NotificationBell from './components/NotificationBell'
@@ -27,27 +30,36 @@ import { useDarkMode } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 // Top-level modules of the tool. Recruiting is the original applicant workflow;
-// leave is HR time-off management; admin is user & permission management. Which
-// modules a user sees depends on their permissions.
-type Module = 'recruiting' | 'leave' | 'admin'
+// employees groups the people-facing HR screens (leave, Slack presence); admin
+// is user & permission management. Which modules a user sees depends on their
+// permissions.
+type Module = 'recruiting' | 'employees' | 'admin'
 
-// Recruiting sub-tabs, each gated by a permission.
+// Sub-tabs of the modules that have them, each gated by a permission.
 type RecruitingTab = 'candidates' | 'import' | 'settings'
+type EmployeesTab = 'leave' | 'presence'
 
-type Route = { module: Module; tab: RecruitingTab }
+type Route = { module: Module; tab: RecruitingTab; employeesTab: EmployeesTab }
 
-// Every screen has its own URL: /leave, /admin, and /recruiting/<tab>.
-function pathFor(module: Module, tab: RecruitingTab): string {
-  return module === 'recruiting' ? `/recruiting/${tab}` : `/${module}`
+// Every screen has its own URL: /admin, /recruiting/<tab> and /employees/<tab>.
+function pathFor(route: Route): string {
+  if (route.module === 'recruiting') return `/recruiting/${route.tab}`
+  if (route.module === 'employees') return `/employees/${route.employeesTab}`
+  return `/${route.module}`
 }
 
 // Unknown or partial paths fall back to recruiting/candidates so stale or
-// mistyped links still land somewhere sensible.
+// mistyped links still land somewhere sensible. The old /leave URL still works.
 function parsePath(pathname: string): Route {
   const [first, second] = pathname.split('/').filter(Boolean)
-  if (first === 'leave' || first === 'admin') return { module: first, tab: 'candidates' }
+  const base = { tab: 'candidates' as RecruitingTab, employeesTab: 'leave' as EmployeesTab }
+  if (first === 'admin') return { ...base, module: 'admin' }
+  if (first === 'leave') return { ...base, module: 'employees' }
+  if (first === 'employees') {
+    return { ...base, module: 'employees', employeesTab: second === 'presence' ? 'presence' : 'leave' }
+  }
   const tab = second === 'import' || second === 'settings' ? second : 'candidates'
-  return { module: 'recruiting', tab }
+  return { ...base, module: 'recruiting', tab }
 }
 
 export default function App() {
@@ -80,11 +92,17 @@ export default function App() {
   }, [])
 
   // Which modules/tabs this user may see, in display order.
+  const employeesTabs: { key: EmployeesTab; label: string; icon: IconSvgElement }[] = user
+    ? [
+        ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave', icon: Calendar03Icon }] : []),
+        ...(can(user, 'view_presence') ? [{ key: 'presence' as const, label: 'Slack presence', icon: UserStatusIcon }] : []),
+      ]
+    : []
   const canRecruiting = user ? can(user, 'view_applications') || can(user, 'recruiting_admin') : false
   const modules: { key: Module; label: string; icon: IconSvgElement }[] = user
     ? [
         ...(canRecruiting ? [{ key: 'recruiting' as const, label: 'Recruiting', icon: UserSearch01Icon }] : []),
-        ...(can(user, 'manage_leave') ? [{ key: 'leave' as const, label: 'Leave', icon: Calendar03Icon }] : []),
+        ...(employeesTabs.length > 0 ? [{ key: 'employees' as const, label: 'Employees', icon: UserGroupIcon }] : []),
         ...(user.isAdmin ? [{ key: 'admin' as const, label: 'Admin', icon: SecurityCheckIcon }] : []),
       ]
     : []
@@ -103,14 +121,17 @@ export default function App() {
   const activeTab: RecruitingTab = recruitingTabs.some((t) => t.key === route.tab)
     ? route.tab
     : (recruitingTabs[0]?.key ?? 'candidates')
+  const activeEmployeesTab: EmployeesTab = employeesTabs.some((t) => t.key === route.employeesTab)
+    ? route.employeesTab
+    : (employeesTabs[0]?.key ?? 'leave')
 
   // If permissions forced a fallback away from the requested path, rewrite the
   // address bar so the URL always matches what's on screen.
   useEffect(() => {
     if (!user || !activeModule) return
-    const path = pathFor(activeModule, activeTab)
+    const path = pathFor({ module: activeModule, tab: activeTab, employeesTab: activeEmployeesTab })
     if (window.location.pathname !== path) window.history.replaceState(null, '', path)
-  }, [user, activeModule, activeTab])
+  }, [user, activeModule, activeTab, activeEmployeesTab])
 
   if (!user) {
     return <LoginPage onLogin={setUser} />
@@ -121,9 +142,9 @@ export default function App() {
     setUser(null)
   }
 
-  function navigate(module: Module, tab?: RecruitingTab) {
-    const next = { module, tab: tab ?? route.tab }
-    const path = pathFor(next.module, next.tab)
+  function navigate(module: Module, tab?: RecruitingTab, employeesTab?: EmployeesTab) {
+    const next: Route = { module, tab: tab ?? route.tab, employeesTab: employeesTab ?? route.employeesTab }
+    const path = pathFor(next)
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setRoute(next)
   }
@@ -212,10 +233,33 @@ export default function App() {
         <div className="mt-6">
           <AdminPage user={user} />
         </div>
-      ) : activeModule === 'leave' ? (
-        <div className="mt-6">
-          <LeavePage user={user} />
-        </div>
+      ) : activeModule === 'employees' && employeesTabs.length > 0 ? (
+        <Tabs
+          value={activeEmployeesTab}
+          onValueChange={(v) => navigate('employees', undefined, v as EmployeesTab)}
+          className="mt-6"
+        >
+          <TabsList className="max-w-full overflow-x-auto">
+            {employeesTabs.map((t) => (
+              <TabsTrigger key={t.key} value={t.key}>
+                <HugeiconsIcon icon={t.icon} className="size-3.5 shrink-0" />
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {can(user, 'manage_leave') && (
+            <TabsContent value="leave" className="mt-4">
+              <LeavePage user={user} />
+            </TabsContent>
+          )}
+
+          {can(user, 'view_presence') && (
+            <TabsContent value="presence" className="mt-4">
+              <PresencePage />
+            </TabsContent>
+          )}
+        </Tabs>
       ) : (
         <p className="mt-6 text-sm text-muted-foreground">
           You don't have access to any modules yet. Ask an admin to grant you permissions.
