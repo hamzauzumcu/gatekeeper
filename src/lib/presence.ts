@@ -131,6 +131,12 @@ export function emojiName(code: string | null): string | null {
   return m ? m[1] : null
 }
 
+// Own keys only: emoji names like "constructor" or "__proto__" must not pick up
+// Object.prototype members from these lookup maps.
+function lookup(map: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined
+}
+
 // The emoji to draw: a character, an image URL, or null when unknown.
 export function resolveEmoji(
   code: string | null,
@@ -138,12 +144,12 @@ export function resolveEmoji(
 ): { char: string } | { url: string } | null {
   const name = emojiName(code)
   if (!name) return null
-  const std = (slackEmoji as Record<string, string>)[name]
+  const std = lookup(slackEmoji as Record<string, string>, name)
   if (std) return { char: std }
-  const value = custom[name]
+  const value = lookup(custom, name)
   if (!value) return null
   if (value.startsWith('alias:')) {
-    const target = (slackEmoji as Record<string, string>)[value.slice(6)]
+    const target = lookup(slackEmoji as Record<string, string>, value.slice(6))
     return target ? { char: target } : null
   }
   return { url: value }
