@@ -45,7 +45,9 @@ CREATE TABLE slack_presence_sessions (
 );
 CREATE INDEX idx_presence_sessions_user ON slack_presence_sessions (slack_user_id, started_at);
 CREATE INDEX idx_presence_sessions_started ON slack_presence_sessions (started_at);
-CREATE INDEX idx_presence_sessions_open ON slack_presence_sessions (slack_user_id) WHERE ended_at IS NULL;
+-- At most one open interval per member: two overlapping polls (cron + a manual
+-- "Check now") cannot both open one and double-count the time.
+CREATE UNIQUE INDEX idx_presence_sessions_open ON slack_presence_sessions (slack_user_id) WHERE ended_at IS NULL;
 
 -- Status message history: one row whenever a member's status text/emoji changes.
 CREATE TABLE slack_status_events (

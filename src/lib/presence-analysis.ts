@@ -118,24 +118,50 @@ function parseNum(raw: string | null): number {
 }
 
 // Leave per day key: 'full', or hours of partial leave.
-function leaveByDay(leaves: PresenceLeave[], workDayMs: number): Map<string, 'full' | number> {
+// Leave per day key: 'full', or hours of partial leave. Requests are messy
+// (see migrations/0018_leave_requests.sql), so the day count wins where the dates
+// can't say it:
+//   - under one day (0.5) or an hours-only request shorter than a working day:
+//     partial leave on the start date;
+//   - a day count with no usable end date (missing, or the same day): that many
+//     working days from the start, the fraction landing on the last one;
+//   - otherwise: every day from start to end.
+function leaveByDay(leaves: PresenceLeave[], workDayMs: number, workdays: number[]): Map<string, 'full' | number> {
   const out = new Map<string, 'full' | number>()
+  const workDayHours = workDayMs / 3600000
+  const addPartial = (key: string, hours: number) => {
+    const prev = out.get(key)
+    if (prev === 'full') return
+    const total = (prev ?? 0) + hours
+    out.set(key, total >= workDayHours ? 'full' : total)
+  }
+  const dayKey = (t: number) => new Date(t).toISOString().slice(0, 10)
+
   for (const l of leaves) {
     const days = parseNum(l.working_days)
     const hours = parseNum(l.hours_requested)
-    // An hours-only request shorter than a working day is partial leave on its
-    // first day; anything else blocks every day it covers.
-    if (!days && hours > 0 && hours * 3600 * 1000 < workDayMs) {
-      const prev = out.get(l.start_date)
-      if (prev !== 'full') out.set(l.start_date, (prev ?? 0) + hours)
+    if (days > 0 && days < 1) {
+      addPartial(l.start_date, days * workDayHours)
+      continue
+    }
+    if (!days && hours > 0 && hours < workDayHours) {
+      addPartial(l.start_date, hours)
       continue
     }
     const [a, b] = l.start_date <= l.end_date ? [l.start_date, l.end_date] : [l.end_date, l.start_date]
-    const start = new Date(`${a}T00:00:00Z`)
-    const end = new Date(`${b}T00:00:00Z`)
-    for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
-      out.set(new Date(t).toISOString().slice(0, 10), 'full')
+    const start = Date.parse(`${a}T00:00:00Z`)
+    if (days >= 1 && a === b) {
+      // Walk forward over working days until the count is used up.
+      let left = days
+      for (let t = start, guard = 0; left > 0 && guard < 366; t += DAY_MS, guard++) {
+        if (!workdays.includes(new Date(t).getUTCDay())) continue
+        if (left >= 1) out.set(dayKey(t), 'full')
+        else addPartial(dayKey(t), left * workDayHours)
+        left -= 1
+      }
+      continue
     }
+    for (let t = start; t <= Date.parse(`${b}T00:00:00Z`); t += DAY_MS) out.set(dayKey(t), 'full')
   }
   return out
 }
@@ -160,6 +186,7 @@ export function analyzeMember(
   const leave = leaveByDay(
     leaves.filter((l) => l.employee_id === user.employee_id),
     workDayMs,
+    hours.days,
   )
   const spans = sessions.map((s) => {
     const a = Date.parse(s.started_at)

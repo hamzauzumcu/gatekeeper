@@ -232,7 +232,9 @@ function presenceStatements(
     } else {
       stmts.push(
         db
-          .prepare(`INSERT INTO slack_presence_sessions (slack_user_id, started_at, last_seen_at) VALUES (?, ?, ?)`)
+          // OR IGNORE + the unique open-interval index: if an overlapping poll
+          // already opened one, this one keeps theirs instead of adding a second.
+          .prepare(`INSERT OR IGNORE INTO slack_presence_sessions (slack_user_id, started_at, last_seen_at) VALUES (?, ?, ?)`)
           .bind(userId, at, at),
       )
     }
@@ -303,7 +305,15 @@ export async function pollSlackPresence(db: D1Database, token: string | undefine
     if (new Date().getUTCMinutes() === 0) {
       await db.batch([
         db.prepare(`DELETE FROM slack_presence_sessions WHERE ended_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`).bind(`-${RETENTION_DAYS} days`),
-        db.prepare(`DELETE FROM slack_status_events WHERE at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)`).bind(`-${RETENTION_DAYS} days`),
+        // Keep each member's latest change even when it is older: it is what
+        // explains a status that is still set today.
+        db
+          .prepare(
+            `DELETE FROM slack_status_events
+              WHERE at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)
+                AND id NOT IN (SELECT MAX(id) FROM slack_status_events GROUP BY slack_user_id)`,
+          )
+          .bind(`-${RETENTION_DAYS} days`),
       ])
     }
 
@@ -436,9 +446,13 @@ export async function getPresenceOverview(
             AND lr.employee_id IN (SELECT employee_id FROM slack_users WHERE employee_id IS NOT NULL)
             AND lr.start_date IS NOT NULL
             AND lr.start_date <= substr(?, 1, 10)
-            AND COALESCE(lr.end_date, lr.start_date) >= substr(?, 1, 10)`,
+            -- Overlaps the range by its dates, or starts shortly before it: a
+            -- request with a day count but no real end date spans more days than
+            -- its dates say (the client derives the span from the count).
+            AND (COALESCE(lr.end_date, lr.start_date) >= substr(?, 1, 10)
+                 OR lr.start_date >= date(substr(?, 1, 10), '-31 days'))`,
       )
-      .bind(to, from)
+      .bind(to, from, from)
       .all<PresenceLeave>(),
   ])
   return {

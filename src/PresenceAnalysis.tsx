@@ -67,7 +67,13 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState(false)
 
-  const range = useMemo(() => periodRange(period), [period])
+  // Ticks every minute so an open view keeps counting; the range follows the
+  // calendar too, so "this week" moves on at midnight.
+  const [now, setNow] = useState(() => Date.now())
+  const today = new Date(now).toDateString()
+  // `today` is a dependency on purpose: it recomputes the range after midnight.
+  const range = useMemo(() => periodRange(period), [period, today])
+  const isCurrent = range.from.getTime() <= now && now < range.to.getTime()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -84,6 +90,16 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
       setLoading(false)
     }
   }, [range])
+
+  // The current period refreshes with the poll; past periods don't change.
+  useEffect(() => {
+    if (!isCurrent) return
+    const t = window.setInterval(() => {
+      setNow(Date.now())
+      void load()
+    }, 60_000)
+    return () => window.clearInterval(t)
+  }, [isCurrent, load])
 
   useEffect(() => {
     void load()
@@ -104,7 +120,6 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
       if (list) list.push(e)
       else eventsByUser.set(e.slack_user_id, [e])
     }
-    const now = Date.now()
     return data.users
       .filter((u) => u.is_tracked === 1)
       .map((u) => ({
@@ -113,7 +128,7 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         statuses: statusTotals(eventsByUser.get(u.id) ?? [], range.from.getTime(), range.to.getTime(), now),
       }))
       .sort((x, y) => (pct(y.a.inHoursMs, y.a.expectedMs) ?? -1) - (pct(x.a.inHoursMs, x.a.expectedMs) ?? -1))
-  }, [data, range])
+  }, [data, range, now])
 
   const team = useMemo(() => {
     const expected = rows.reduce((s, r) => s + r.a.expectedMs, 0)
@@ -170,7 +185,13 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         fmtClock(a.avgLastMin),
         statuses.map((st) => `${statusLabel(st)}: ${(st.ms / 3600000).toFixed(2)}h`).join('; '),
       ]
-        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .map((v) => {
+          // A cell starting with = + - @ is read as a formula by spreadsheets;
+          // a leading apostrophe keeps it text (Slack names are user-controlled).
+          const text = String(v)
+          const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+          return `"${safe.replace(/"/g, '""')}"`
+        })
         .join(','),
     )
     const blob = new Blob([[head.join(','), ...lines].join('\n')], { type: 'text/csv' })

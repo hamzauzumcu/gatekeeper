@@ -32,7 +32,6 @@ import { cn } from '@/lib/utils'
 import type { User } from '@/lib/auth'
 import PresenceAnalysis from './PresenceAnalysis'
 
-const DAY_MS = 24 * 3600 * 1000
 const WEEK_DAYS = 7
 
 // Local midnight of the day containing `d`.
@@ -159,11 +158,12 @@ function DailyPresence() {
 
   const users = (data?.users ?? []).filter((u) => showHidden || u.is_tracked === 1)
   const hiddenCount = (data?.users ?? []).filter((u) => u.is_tracked !== 1).length
-  const activeNow = (data?.users ?? []).filter((u) => u.is_tracked === 1 && u.presence === 'active').length
+  const activeNow = (data?.users ?? []).filter((u) => u.is_tracked === 1 && isActiveNow(u)).length
   const trackedCount = (data?.users ?? []).filter((u) => u.is_tracked === 1).length
 
   const dayFrom = day.getTime()
-  const dayTo = dayFrom + DAY_MS
+  // Next local midnight, not +24h: days with a clock change last 23 or 25 hours.
+  const dayTo = addDays(day, 1).getTime()
   const weekDays = Array.from({ length: WEEK_DAYS }, (_, i) => addDays(rangeFrom, i))
 
   return (
@@ -327,8 +327,31 @@ function MemberCell({ user }: { user: SlackUser }) {
   )
 }
 
+// A presence reading older than this is no longer shown as current: if polling
+// stops (token revoked, Slack outage) nobody should keep looking "active".
+const PRESENCE_FRESH_MS = 10 * 60 * 1000
+
+function isFresh(u: SlackUser): boolean {
+  return !!u.presence_checked_at && Date.now() - Date.parse(u.presence_checked_at) < PRESENCE_FRESH_MS
+}
+
+function isActiveNow(u: SlackUser): boolean {
+  return u.presence === 'active' && isFresh(u)
+}
+
 function PresenceCell({ user }: { user: SlackUser }) {
   if (!user.presence) return <span className="text-xs text-muted-foreground">Not checked</span>
+  if (!isFresh(user)) {
+    return (
+      <div className="flex flex-col">
+        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          <span className="size-2 rounded-full border border-dashed border-muted-foreground/60" />
+          Unknown
+        </span>
+        <span className="text-xs text-muted-foreground">last checked {fmtAgo(user.presence_checked_at)}</span>
+      </div>
+    )
+  }
   const active = user.presence === 'active'
   return (
     <div className="flex flex-col">
@@ -435,7 +458,7 @@ function Timeline({
 
 // Seven small bars, one per day, scaled to a 10-hour day.
 function WeekBars({ sessions, days }: { sessions: PresenceSession[]; days: Date[] }) {
-  const totals = days.map((d) => activeMs(sessions, d.getTime(), d.getTime() + DAY_MS))
+  const totals = days.map((d) => activeMs(sessions, d.getTime(), addDays(d, 1).getTime()))
   const sum = totals.reduce((a, b) => a + b, 0)
   const scale = 10 * 3600 * 1000
   return (
