@@ -53,6 +53,7 @@ import {
 } from './notifications'
 import { fetchReactions, toggleReaction, isValidEmoji, type NoteReaction } from './note-reactions'
 import { SyncJobDO } from './sync-job-do'
+import { pollSlackPresence, getPresenceOverview, setSlackUserTracked, parseWorkHours, saveWorkHours } from './slack-presence'
 
 export { SyncJobDO }
 
@@ -64,6 +65,7 @@ type Env = {
     RESUMES: R2Bucket
     R2_PUBLIC_URL: string
     TALLY_WEBHOOK_SECRET?: string
+    SLACK_BOT_TOKEN?: string
     SYNC_JOB: DurableObjectNamespace<SyncJobDO>
   }
   Variables: {
@@ -92,6 +94,7 @@ app.use('/api/admin/users', adminGate)
 app.use('/api/admin/users/*', adminGate)
 app.use('/api/admin/*', permGate('recruiting_admin'))
 app.use('/api/import', permGate('recruiting_admin'))
+app.use('/api/presence/*', permGate('view_presence'))
 
 // Validate a serialized ActiveFilters blob before persisting it. We store the
 // JSON verbatim, so we only check it parses and looks like the expected shape —
@@ -1527,13 +1530,69 @@ app.post('/api/webhook/tally/leave', async (c) => {
   return c.json(result.body, result.status as 200 | 400 | 401 | 500)
 })
 
+// ── Slack presence (Employees → Presence) ──────────────────────────────────
+// Gated by view_presence (see the prefix guard above).
+
+// Normalize an ISO timestamp query param to the stored second-precision form
+// ("YYYY-MM-DDTHH:MM:SSZ") so string comparison in SQL is exact.
+function isoParam(raw: string | undefined): string | null {
+  if (!raw) return null
+  const t = Date.parse(raw)
+  return Number.isNaN(t) ? null : new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+app.get('/api/presence/overview', async (c) => {
+  const from = isoParam(c.req.query('from'))
+  const to = isoParam(c.req.query('to'))
+  if (!from || !to || from >= to) return c.json({ ok: false, error: 'invalid range' }, 400)
+  // Cap the range so a stray request can't pull the whole history.
+  if (Date.parse(to) - Date.parse(from) > 70 * 24 * 3600 * 1000) {
+    return c.json({ ok: false, error: 'range too long' }, 400)
+  }
+  const overview = await getPresenceOverview(c.env.DB, Boolean(c.env.SLACK_BOT_TOKEN), from, to)
+  return c.json({ ok: true, ...overview })
+})
+
+// Run a poll now instead of waiting for the next cron tick.
+app.post('/api/presence/sync', async (c) => {
+  const result = await pollSlackPresence(c.env.DB, c.env.SLACK_BOT_TOKEN)
+  return c.json(result, result.ok ? 200 : 502)
+})
+
+// Working hours the analysis measures against. Changes the numbers everyone
+// sees, so only full-access admins may edit them.
+app.put('/api/presence/settings', async (c) => {
+  const denied = requireAdmin(c)
+  if (denied) return denied
+  const hours = parseWorkHours(await c.req.json().catch(() => null))
+  if (!hours) return c.json({ ok: false, error: 'invalid working hours' }, 400)
+  await saveWorkHours(c.env.DB, hours)
+  return c.json({ ok: true, workHours: hours })
+})
+
+// Start or stop tracking a member.
+app.patch('/api/presence/users/:id', async (c) => {
+  const body: Record<string, unknown> = await c.req.json().catch(() => ({}))
+  if (typeof body.is_tracked !== 'boolean') return c.json({ ok: false, error: 'is_tracked required' }, 400)
+  const found = await setSlackUserTracked(c.env.DB, c.req.param('id'), body.is_tracked)
+  if (!found) return c.json({ ok: false, error: 'not found' }, 404)
+  return c.json({ ok: true })
+})
+
 // ── Cron: auto-start sync jobs ─────────────────────────────────────────────
 // Fires on the schedule in wrangler.jsonc ("triggers.crons") and starts the same
 // server-side jobs as the Settings page's "Start Sync" buttons: CV parsing first,
 // then AI scoring, so scoring is more likely to find cached CV text instead of
 // re-running OCR. SyncJobDO.start() no-ops while a job is in flight and finishes
 // immediately when nothing is pending, so firing every tick is safe and cheap.
-const scheduled: ExportedHandlerScheduledHandler<Env['Bindings']> = async (_controller, env) => {
+// The every-minute schedule polls Slack presence; the 15-minute one runs the jobs.
+const PRESENCE_CRON = '* * * * *'
+
+const scheduled: ExportedHandlerScheduledHandler<Env['Bindings']> = async (controller, env) => {
+  if (controller.cron === PRESENCE_CRON) {
+    if (env.SLACK_BOT_TOKEN) await pollSlackPresence(env.DB, env.SLACK_BOT_TOKEN)
+    return
+  }
   if (!env.DEEPSEEK_API_KEY) return
   for (const kind of ['cv', 'scores'] as const) {
     await env.SYNC_JOB.get(env.SYNC_JOB.idFromName(kind)).start(kind, 5)
