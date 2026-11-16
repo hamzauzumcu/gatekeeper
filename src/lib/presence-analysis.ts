@@ -264,3 +264,39 @@ export function periodRange(key: PeriodKey, today = new Date()): { from: Date; t
       return { from: new Date(y, m - 1, 1), to: new Date(y, m, 1) }
   }
 }
+
+// ── Time per status ────────────────────────────────────────────────────────
+
+export type StatusChange = {
+  at: string
+  status_text: string | null
+  status_emoji: string | null
+}
+
+export type StatusTotal = {
+  emoji: string | null
+  text: string | null
+  ms: number
+}
+
+// How long a member spent in each Slack status during [from, to), from the log
+// of status changes. Each change holds until the next one (or until `now`); the
+// latest change before `from` supplies the status already set when the period
+// opened. Statuses are grouped by text and emoji; "no status" is left out.
+export function statusTotals(changes: StatusChange[], from: number, to: number, now: number): StatusTotal[] {
+  const end = Math.min(to, now)
+  const sorted = [...changes].sort((a, b) => a.at.localeCompare(b.at))
+  const totals = new Map<string, StatusTotal>()
+  for (let i = 0; i < sorted.length; i++) {
+    const c = sorted[i]
+    if (!c.status_text && !c.status_emoji) continue
+    const a = Math.max(Date.parse(c.at), from)
+    const b = Math.min(i + 1 < sorted.length ? Date.parse(sorted[i + 1].at) : end, end)
+    if (b <= a) continue
+    const key = `${c.status_emoji ?? ''}\u0000${(c.status_text ?? '').trim().toLowerCase()}`
+    const t = totals.get(key)
+    if (t) t.ms += b - a
+    else totals.set(key, { emoji: c.status_emoji, text: c.status_text, ms: b - a })
+  }
+  return [...totals.values()].sort((x, y) => y.ms - x.ms)
+}

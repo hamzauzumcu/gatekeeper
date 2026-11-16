@@ -416,12 +416,16 @@ export async function getPresenceOverview(
       .all<{ slack_user_id: string; started_at: string; ended_at: string; open: number }>(),
     db
       .prepare(
+        // Changes inside the range, plus each member's last change before it:
+        // that one is the status they already had when the range began, which
+        // time-per-status needs to count the opening stretch.
         `SELECT slack_user_id, at, status_text, status_emoji
            FROM slack_status_events
-          WHERE at >= ? AND at < ?
+          WHERE (at >= ? AND at < ?)
+             OR id IN (SELECT MAX(id) FROM slack_status_events WHERE at < ? GROUP BY slack_user_id)
           ORDER BY at`,
       )
-      .bind(from, to)
+      .bind(from, to, from)
       .all<StatusEvent>(),
     db
       .prepare(

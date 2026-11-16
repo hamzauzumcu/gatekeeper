@@ -20,6 +20,7 @@ import {
   displayName,
   fetchPresenceOverview,
   fmtDuration,
+  renderEmoji,
   saveWorkHours,
   type PresenceOverview,
   type PresenceSession,
@@ -30,9 +31,11 @@ import {
   calendarDays,
   fmtClock,
   periodRange,
+  statusTotals,
   viewerTz,
   type MemberAnalysis,
   type PeriodKey,
+  type StatusTotal,
   type WorkHours,
 } from '@/lib/presence-analysis'
 import { cn } from '@/lib/utils'
@@ -95,12 +98,19 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
       if (list) list.push(s)
       else byUser.set(s.slack_user_id, [s])
     }
+    const eventsByUser = new Map<string, typeof data.statusEvents>()
+    for (const e of data.statusEvents) {
+      const list = eventsByUser.get(e.slack_user_id)
+      if (list) list.push(e)
+      else eventsByUser.set(e.slack_user_id, [e])
+    }
     const now = Date.now()
     return data.users
       .filter((u) => u.is_tracked === 1)
       .map((u) => ({
         user: u,
         a: analyzeMember(u, byUser.get(u.id) ?? [], data.leaves, days, data.workHours, now),
+        statuses: statusTotals(eventsByUser.get(u.id) ?? [], range.from.getTime(), range.to.getTime(), now),
       }))
       .sort((x, y) => (pct(y.a.inHoursMs, y.a.expectedMs) ?? -1) - (pct(x.a.inHoursMs, x.a.expectedMs) ?? -1))
   }, [data, range])
@@ -109,7 +119,18 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
     const expected = rows.reduce((s, r) => s + r.a.expectedMs, 0)
     const inHours = rows.reduce((s, r) => s + r.a.inHoursMs, 0)
     const outside = rows.reduce((s, r) => s + r.a.outsideMs, 0)
-    return { expected, inHours, outside, pct: pct(inHours, expected) }
+    // Team-wide time per status, merged across members by text + emoji.
+    const statusMap = new Map<string, StatusTotal>()
+    for (const r of rows) {
+      for (const st of r.statuses) {
+        const key = `${st.emoji ?? ''}\u0000${(st.text ?? '').trim().toLowerCase()}`
+        const t = statusMap.get(key)
+        if (t) t.ms += st.ms
+        else statusMap.set(key, { ...st })
+      }
+    }
+    const statuses = [...statusMap.values()].sort((x, y) => y.ms - x.ms)
+    return { expected, inHours, outside, pct: pct(inHours, expected), statuses }
   }, [rows])
 
   const periodLabel = `${range.from.toLocaleDateString([], { day: 'numeric', month: 'short' })} – ${new Date(
@@ -130,9 +151,10 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
       'Leave days',
       'Avg first active',
       'Avg last active',
+      'Time in statuses',
     ]
     const h = (ms: number) => (ms / 3600000).toFixed(2)
-    const lines = rows.map(({ user, a }) =>
+    const lines = rows.map(({ user, a, statuses }) =>
       [
         displayName(user),
         user.email ?? '',
@@ -146,6 +168,7 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         a.leaveDays,
         fmtClock(a.avgFirstMin),
         fmtClock(a.avgLastMin),
+        statuses.map((st) => `${statusLabel(st)}: ${(st.ms / 3600000).toFixed(2)}h`).join('; '),
       ]
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
         .join(','),
@@ -260,6 +283,8 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         </CardContent>
       </Card>
 
+      {rows.length > 0 && <StatusCard rows={rows} teamStatuses={team.statuses} />}
+
       {editing && data && (
         <WorkHoursDialog
           initial={data.workHours}
@@ -271,6 +296,82 @@ export default function PresenceAnalysis({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
     </div>
+  )
+}
+
+function statusLabel(st: StatusTotal): string {
+  return `${renderEmoji(st.emoji)} ${st.text ?? ''}`.trim()
+}
+
+function StatusChip({ st }: { st: StatusTotal }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs">
+      <span className="max-w-[180px] truncate" title={statusLabel(st)}>
+        {statusLabel(st) || '—'}
+      </span>
+      <span className="font-medium tabular-nums">{fmtDuration(st.ms)}</span>
+    </span>
+  )
+}
+
+// Time each member spent in each Slack status during the period, e.g. lunch,
+// meetings, sick or vacation statuses.
+function StatusCard({
+  rows,
+  teamStatuses,
+}: {
+  rows: { user: Parameters<typeof displayName>[0]; statuses: StatusTotal[] }[]
+  teamStatuses: StatusTotal[]
+}) {
+  const withStatus = rows.filter((r) => r.statuses.length > 0)
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Time in Slack statuses</CardTitle>
+        <CardDescription>
+          How long each status (text + emoji) was set during the period. Counted from when tracking started; a status
+          holds until it is changed or cleared.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {teamStatuses.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nobody had a status set in this period.</p>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs text-muted-foreground">Whole team</div>
+              <div className="flex flex-wrap gap-1.5">
+                {teamStatuses.slice(0, 12).map((st, i) => (
+                  <StatusChip key={i} st={st} />
+                ))}
+              </div>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[220px]">Member</TableHead>
+                  <TableHead>Statuses, longest first</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {withStatus.map(({ user, statuses }) => (
+                  <TableRow key={user.id}>
+                    <TableCell className="font-medium">{displayName(user)}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1.5">
+                        {statuses.map((st, i) => (
+                          <StatusChip key={i} st={st} />
+                        ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
