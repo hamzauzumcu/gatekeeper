@@ -195,6 +195,54 @@ async function syncMembers(db: D1Database, members: SlackMember[], at: string): 
   for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50))
 }
 
+// ── Custom emoji ───────────────────────────────────────────────────────────
+
+// Workspace custom emoji change rarely; refresh the list once an hour.
+const EMOJI_REFRESH_MS = 60 * 60 * 1000
+
+// Refresh the workspace's custom emoji (name → image URL) into meta. Needs the
+// emoji:read scope; without it the error is recorded and statuses keep showing
+// custom emoji as :shortcodes:. Never throws: emoji are cosmetic and must not
+// stop the presence poll.
+async function syncCustomEmoji(db: D1Database, token: string, meta: Record<string, string | null>): Promise<void> {
+  const last = Date.parse(meta.custom_emoji_synced_at ?? '')
+  if (!Number.isNaN(last) && Date.now() - last < EMOJI_REFRESH_MS) return
+  try {
+    const data = await slackGet<{ emoji: Record<string, string> }>(token, 'emoji.list', {})
+    await setMeta(db, 'custom_emoji', JSON.stringify(data.emoji))
+    await setMeta(db, 'custom_emoji_error', null)
+  } catch (err) {
+    await setMeta(db, 'custom_emoji_error', err instanceof Error ? err.message : String(err))
+  }
+  await setMeta(db, 'custom_emoji_synced_at', nowIso())
+}
+
+// Image URLs for the custom emoji named in `codes` (":name:" form). Aliases are
+// followed; an alias of a standard emoji comes back as "alias:<name>" so the
+// client can draw the standard character.
+function customEmojiFor(raw: string | null, codes: Iterable<string | null>): Record<string, string> {
+  let all: Record<string, string>
+  try {
+    all = JSON.parse(raw ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+  const out: Record<string, string> = {}
+  for (const code of codes) {
+    const name = code?.replace(/^:|:$/g, '')
+    if (!name || out[name] || !all[name]) continue
+    let value = all[name]
+    // Follow alias chains (a few hops at most).
+    for (let hops = 0; value.startsWith('alias:') && hops < 5; hops++) {
+      const target = value.slice(6)
+      if (!all[target]) break
+      value = all[target]
+    }
+    out[name] = value
+  }
+  return out
+}
+
 // ── Presence ───────────────────────────────────────────────────────────────
 
 type OpenSession = { id: number; slack_user_id: string; last_seen_at: string }
@@ -249,6 +297,7 @@ export async function pollSlackPresence(db: D1Database, token: string | undefine
   if (!token) return { ok: false, error: 'SLACK_BOT_TOKEN is not configured' }
   const at = nowIso()
   try {
+    await syncCustomEmoji(db, token, await getMeta(db))
     const members = await fetchMembers(token)
     await syncMembers(db, members, at)
 
@@ -389,6 +438,8 @@ export type PresenceOverview = {
   sessions: PresenceSession[]
   statusEvents: StatusEvent[]
   leaves: PresenceLeave[]
+  customEmoji: Record<string, string> // name → image URL (or "alias:<standard name>")
+  emojiError: string | null // e.g. "emoji.list: missing_scope" until emoji:read is granted
 }
 
 // Everything the Presence screen needs for [from, to): members (including
@@ -464,6 +515,12 @@ export async function getPresenceOverview(
     sessions: (sessions.results ?? []).map((s) => ({ ...s, open: s.open === 1 })),
     statusEvents: events.results ?? [],
     leaves: leaves.results ?? [],
+    // Only the custom emoji these statuses use, not the workspace's whole set.
+    customEmoji: customEmojiFor(meta.custom_emoji ?? null, [
+      ...(users.results ?? []).map((u) => u.status_emoji),
+      ...(events.results ?? []).map((e) => e.status_emoji),
+    ]),
+    emojiError: meta.custom_emoji_error ?? null,
   }
 }
 

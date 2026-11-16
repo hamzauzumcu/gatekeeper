@@ -20,7 +20,7 @@ import {
   displayName,
   fetchPresenceOverview,
   fmtDuration,
-  renderEmoji,
+  emojiText,
   setTracked,
   syncPresenceNow,
   type PresenceOverview,
@@ -29,6 +29,7 @@ import {
   type StatusEvent,
 } from '@/lib/presence'
 import { cn } from '@/lib/utils'
+import SlackEmoji from '@/components/SlackEmoji'
 import type { User } from '@/lib/auth'
 import PresenceAnalysis from './PresenceAnalysis'
 
@@ -178,6 +179,15 @@ function DailyPresence() {
           </AlertDescription>
         </Alert>
       )}
+      {data?.configured && data.emojiError?.includes('missing_scope') && (
+        <Alert>
+          <HugeiconsIcon icon={Alert02Icon} className="size-4" />
+          <AlertDescription>
+            Custom workspace emoji in statuses show as <code>:codes:</code>. Add the <code>emoji:read</code> bot scope
+            to the Slack app and reinstall it; the images appear within an hour.
+          </AlertDescription>
+        </Alert>
+      )}
       {(error || data?.lastError) && (
         <Alert variant="destructive">
           <HugeiconsIcon icon={Alert02Icon} className="size-4" />
@@ -259,13 +269,13 @@ function DailyPresence() {
                         <PresenceCell user={u} />
                       </TableCell>
                       <TableCell className="max-w-[220px]">
-                        <StatusCell user={u} />
+                        <StatusCell user={u} custom={data?.customEmoji} />
                       </TableCell>
                       <TableCell className="text-right tabular-nums font-medium">
                         {fmtDuration(activeMs(sessions, dayFrom, dayTo))}
                       </TableCell>
                       <TableCell>
-                        <Timeline sessions={sessions} events={events} from={dayFrom} to={dayTo} />
+                        <Timeline sessions={sessions} events={events} from={dayFrom} to={dayTo} custom={data?.customEmoji} />
                       </TableCell>
                       <TableCell className="text-right">
                         <WeekBars sessions={sessions} days={weekDays} />
@@ -366,13 +376,13 @@ function PresenceCell({ user }: { user: SlackUser }) {
   )
 }
 
-function StatusCell({ user }: { user: SlackUser }) {
+function StatusCell({ user, custom }: { user: SlackUser; custom?: Record<string, string> }) {
   if (!user.status_text && !user.status_emoji) return <span className="text-xs text-muted-foreground">—</span>
   const until = user.status_expiration ? new Date(user.status_expiration * 1000) : null
   return (
     <div className="min-w-0">
       <div className="truncate text-sm" title={user.status_text ?? undefined}>
-        <span className="mr-1">{renderEmoji(user.status_emoji)}</span>
+        <SlackEmoji code={user.status_emoji} custom={custom} className="mr-1" />
         {user.status_text}
       </div>
       {until && (
@@ -409,11 +419,13 @@ function Timeline({
   events,
   from,
   to,
+  custom,
 }: {
   sessions: PresenceSession[]
   events: StatusEvent[]
   from: number
   to: number
+  custom?: Record<string, string>
 }) {
   const span = to - from
   const pct = (t: number) => `${((Math.min(Math.max(t, from), to) - from) / span) * 100}%`
@@ -442,7 +454,7 @@ function Timeline({
       {events.map((e, i) => {
         const t = Date.parse(e.at)
         if (t < from || t >= to) return null
-        const label = e.status_text || e.status_emoji ? `${renderEmoji(e.status_emoji)} ${e.status_text ?? ''}`.trim() : 'cleared'
+        const label = e.status_text || e.status_emoji ? `${emojiText(e.status_emoji, custom)} ${e.status_text ?? ''}`.trim() : 'cleared'
         return (
           <div
             key={`e${i}`}
