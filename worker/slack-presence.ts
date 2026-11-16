@@ -227,15 +227,16 @@ function customEmojiFor(raw: string | null, codes: Iterable<string | null>): Rec
   } catch {
     return {}
   }
-  const out: Record<string, string> = {}
+  const out: Record<string, string> = Object.create(null)
   for (const code of codes) {
     const name = code?.replace(/^:|:$/g, '')
-    if (!name || out[name] || !all[name]) continue
+    // Own keys only, so names like "constructor" don't hit Object.prototype.
+    if (!name || Object.hasOwn(out, name) || !Object.hasOwn(all, name)) continue
     let value = all[name]
     // Follow alias chains (a few hops at most).
     for (let hops = 0; value.startsWith('alias:') && hops < 5; hops++) {
       const target = value.slice(6)
-      if (!all[target]) break
+      if (!Object.hasOwn(all, target)) break
       value = all[target]
     }
     out[name] = value
